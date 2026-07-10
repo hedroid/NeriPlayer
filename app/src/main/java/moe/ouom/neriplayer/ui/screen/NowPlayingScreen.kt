@@ -1283,6 +1283,9 @@ fun NowPlayingScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     ) {
+                        val playbackModeActiveColor = Color(0xFF64B5F6)
+                        val playbackModeInactiveColor = LocalContentColor.current.copy(alpha = 0.5f)
+
                         HapticIconButton(onClick = { PlayerManager.setShuffle(!shuffleEnabled) },
                             modifier = Modifier
                                 .size(secondaryControlButtonSize)
@@ -1290,7 +1293,11 @@ fun NowPlayingScreen(
                             Icon(
                                 Icons.Outlined.Shuffle,
                                 contentDescription = stringResource(R.string.player_shuffle),
-                                tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                                tint = if (shuffleEnabled) {
+                                    playbackModeActiveColor
+                                } else {
+                                    playbackModeInactiveColor
+                                }
                             )
                         }
 
@@ -1342,7 +1349,11 @@ fun NowPlayingScreen(
                             Icon(
                                 imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Filled.RepeatOne else Icons.Outlined.Repeat,
                                 contentDescription = stringResource(R.string.player_repeat),
-                                tint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                                tint = if (repeatMode != Player.REPEAT_MODE_OFF) {
+                                    playbackModeActiveColor
+                                } else {
+                                    playbackModeInactiveColor
+                                }
                             )
                         }
                     }

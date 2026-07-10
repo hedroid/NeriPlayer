@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">NeriPlayer</string>
+    <string name="app_name">Neri Player</string>
 
     <!-- Common Actions -->
     <string name="action_confirm">Confirm</string>
@@ -609,9 +609,9 @@
     <string name="home_favorite_playlist">Favorite Playlist</string>
     <string name="home_unfavorited">Unfavorited</string>
     <string name="continue_playing_remove">Remove</string>
-    <string name="home_title_brand_loud">NeriPlayer!</string>
-    <string name="home_title_brand_wave">NeriPlayer~</string>
-    <string name="home_title_brand_call">Hey, NeriPlayer</string>
+    <string name="home_title_brand_loud">Home</string>
+    <string name="home_title_brand_wave">Home</string>
+    <string name="home_title_brand_call">Home</string>
     <string name="home_all_cards_hidden">All home cards are hidden. Re-enable them in Settings.</string>
     <string name="home_offline_no_continue">Offline mode only shows Continue Playing. Nothing is available yet.</string>
     <string name="offline_mode_title">Offline Mode</string>
@@ -932,7 +932,7 @@
     <string name="settings_android13_required">Android 13+ required</string>
     <string name="settings_build_uuid">Build UUID</string>
     <string name="settings_version_debug_suffix">DEBUG MODE</string>
-    <string name="settings_github_repo_url">github.com/cwuom/NeriPlayer</string>
+    <string name="settings_github_repo_url">github.com/hedroid/NeriPlayer</string>
 
     <!-- Settings / Theme & Appearance -->
     <string name="settings_theme">Theme</string>

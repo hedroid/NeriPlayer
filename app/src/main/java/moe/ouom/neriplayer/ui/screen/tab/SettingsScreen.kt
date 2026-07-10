@@ -1514,7 +1514,7 @@ fun SettingsScreen(
                             onOpenGitHubRepo = {
                                 val intent = Intent(
                                     Intent.ACTION_VIEW,
-                                    "https://github.com/cwuom/NeriPlayer".toUri()
+                                    "https://github.com/hedroid/NeriPlayer".toUri()
                                 )
                                 context.startActivity(intent)
                             }
@@ -2804,6 +2804,7 @@ private fun SettingsLoginExpandedContent(
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
 
+        /*
         ListItem(
             leadingContent = {
                 Icon(
@@ -2818,5 +2819,6 @@ private fun SettingsLoginExpandedContent(
             modifier = Modifier.settingsItemClickable { },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
+        */
     }
 }

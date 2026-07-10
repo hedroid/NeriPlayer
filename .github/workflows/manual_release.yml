@@ -8,6 +8,11 @@ on:
         required: true
         default: master
         type: string
+      release_tag:
+        description: Optional Git tag for this release
+        required: false
+        default: ""
+        type: string
 
 jobs:
   release:
@@ -44,14 +49,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          short_sha="$(git rev-parse --short HEAD)"
           target_sha="$(git rev-parse HEAD)"
-          release_time="$(TZ=Asia/Taipei date +'%m%d%H%M')"
-          tag_name="NeriPlayer-${short_sha}.${release_time}"
-          previous_tag="$(git for-each-ref --merged HEAD --sort=-creatordate --format='%(refname:short)' 'refs/tags/NeriPlayer-*' | head -n 1 || true)"
+          version_name="$(sed -n 's/.*RELEASE_VERSION_NAME = "\(.*\)".*/\1/p' build-logic/convention/src/main/kotlin/Common.kt | head -n 1)"
+          if [ -z "${version_name}" ]; then
+            echo "Failed to determine version name from Common.kt"
+            exit 1
+          fi
 
+          tag_name="${{ inputs.release_tag }}"
+          if [ -z "${tag_name}" ]; then
+            tag_name="v${version_name}"
+          fi
+          previous_tag="$(git for-each-ref --merged HEAD --sort=-creatordate --format='%(refname:short)' 'refs/tags/v*' | head -n 1 || true)"
+
+          echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-          echo "release_time=${release_time}" >> "$GITHUB_OUTPUT"
           echo "target_sha=${target_sha}" >> "$GITHUB_OUTPUT"
           echo "previous_tag=${previous_tag}" >> "$GITHUB_OUTPUT"
 
@@ -59,10 +71,9 @@ jobs:
         run: |
           ./gradlew clean assembleRelease \
             -PbuildAllReleaseAbis=true \
-            -PbuildVersionTimestamp=${{ steps.meta.outputs.release_time }} \
             -PKEYSTORE_FILE=neri.jks \
             -PKEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} \
-            -PKEY_ALIAS=key0 \
+            -PKEY_ALIAS=neriplayer \
             -PKEY_PASSWORD=${{ secrets.KEY_PASSWORD }} \
             --warning-mode all --stacktrace
 
@@ -119,6 +130,6 @@ jobs:
           gh release create "${TAG_NAME}" "${apk_files[@]}" \
             --repo "${REPO}" \
             --target "${TARGET_SHA}" \
-            --title "${TAG_NAME}" \
+            --title "Neri Player ${TAG_NAME}" \
             --notes-file release-notes.md \
             --latest

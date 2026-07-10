@@ -174,8 +174,8 @@ private fun libraryTabDisplayOrder(isInternational: Boolean): List<LibraryTab> {
             LibraryTab.FAVORITE,
             LibraryTab.YTMUSIC,
             LibraryTab.NETEASE,
-            LibraryTab.BILI,
-            LibraryTab.QQMUSIC
+            LibraryTab.BILI
+            // LibraryTab.QQMUSIC is temporarily hidden.
         )
     } else {
         listOf(
@@ -183,8 +183,8 @@ private fun libraryTabDisplayOrder(isInternational: Boolean): List<LibraryTab> {
             LibraryTab.FAVORITE,
             LibraryTab.NETEASE,
             LibraryTab.YTMUSIC,
-            LibraryTab.BILI,
-            LibraryTab.QQMUSIC
+            LibraryTab.BILI
+            // LibraryTab.QQMUSIC is temporarily hidden.
         )
     }
 }

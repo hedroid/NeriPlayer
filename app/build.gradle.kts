@@ -47,7 +47,7 @@ android {
     println("buildUUID: $buildUUID")
 
     defaultConfig {
-        applicationId = "moe.ouom.neriplayer"
+        applicationId = "moe.ouom.neriplayer.plus"
 
         buildConfigField("String", "BUILD_UUID", "\"${buildUUID}\"")
         buildConfigField("String", "TAG", "\"[NeriPlayer]\"")

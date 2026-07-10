@@ -143,7 +143,6 @@ import moe.ouom.neriplayer.util.NPLogger
 import moe.ouom.neriplayer.util.NightModeHelper
 import moe.ouom.neriplayer.util.SafeModeManager
 import moe.ouom.neriplayer.util.lockPortraitIfPhone
-
 private enum class AppStage { Loading, Disclaimer, Onboarding, Main }
 
 private data class GitHubSyncWarningState(
@@ -467,15 +466,18 @@ class MainActivity : ComponentActivity() {
                                     .navigationBarsPadding()
                             )
                         }
+
                         AppStage.Disclaimer -> {
                             val scope = rememberCoroutineScope()
                             DisclaimerScreen(
                                 onAgree = { scope.launch { settingsRepository.setDisclaimerAccepted(true) } }
                             )
                         }
+
                         AppStage.Onboarding -> {
                             StartupOnboardingScreen()
                         }
+
                         AppStage.Main -> {
                             // 弹窗状态管理和事件监听
                             var showDialog by remember { mutableStateOf(false) }
