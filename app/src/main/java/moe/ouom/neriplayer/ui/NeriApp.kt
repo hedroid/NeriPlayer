@@ -153,7 +153,9 @@ import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
 import moe.ouom.neriplayer.core.player.AudioPlayerService
 import moe.ouom.neriplayer.core.player.AudioReactive
 import moe.ouom.neriplayer.core.player.PlayerManager
+import moe.ouom.neriplayer.core.player.recoverUsbExclusivePlaybackOnForeground
 import moe.ouom.neriplayer.core.player.StartupAudioFocusController
+import moe.ouom.neriplayer.core.player.updateUsbExclusiveForegroundState
 import moe.ouom.neriplayer.core.player.preloadRestoredStateSnapshot
 import moe.ouom.neriplayer.core.player.shouldSkipLocalPlaybackSyncServiceStart
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
@@ -191,6 +193,7 @@ import moe.ouom.neriplayer.ui.screen.debug.ListenTogetherDebugScreen
 import moe.ouom.neriplayer.ui.screen.debug.LogListScreen
 import moe.ouom.neriplayer.ui.screen.debug.NeteaseApiProbeScreen
 import moe.ouom.neriplayer.ui.screen.debug.SearchApiProbeScreen
+import moe.ouom.neriplayer.ui.screen.debug.UsbExclusiveDebugScreen
 import moe.ouom.neriplayer.ui.screen.debug.YouTubeApiProbeScreen
 import moe.ouom.neriplayer.ui.screen.artist.NeteaseArtistDetailScreen
 import moe.ouom.neriplayer.ui.screen.host.ExploreHostScreen
@@ -219,6 +222,9 @@ import moe.ouom.neriplayer.util.NativeCrashHandler
 import moe.ouom.neriplayer.util.NPLogger
 import moe.ouom.neriplayer.util.adjustedAccentColorArgb
 import moe.ouom.neriplayer.util.HapticTextButton
+import moe.ouom.neriplayer.util.openAppBackgroundSettings
+import moe.ouom.neriplayer.util.readBackgroundBehaviorAllowance
+import moe.ouom.neriplayer.util.requestIgnoreBatteryOptimizationsCompat
 import moe.ouom.neriplayer.util.formatFileSize
 import moe.ouom.neriplayer.util.isRemoteImageSource
 import moe.ouom.neriplayer.util.offlineCachedImageRequest
@@ -368,6 +374,54 @@ internal fun MobileDataDownloadInterruptionDialog(
                             stringResource(R.string.mobile_data_download_cancel_all),
                             color = MaterialTheme.colorScheme.error
                         )
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun UsbExclusiveBackgroundPermissionDialog(
+    batteryOptimizationAllowed: Boolean,
+    onRequestBatteryOptimization: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onNeverShowAgain: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(stringResource(R.string.settings_usb_exclusive_background_permission_title))
+        },
+        confirmButton = {},
+        dismissButton = {},
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.settings_usb_exclusive_background_permission_desc))
+                if (!batteryOptimizationAllowed) {
+                    HapticTextButton(
+                        onClick = onRequestBatteryOptimization,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.settings_usb_exclusive_background_permission_battery))
+                    }
+                }
+                HapticTextButton(
+                    onClick = onOpenAppSettings,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.settings_usb_exclusive_background_permission_app_settings))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    HapticTextButton(onClick = onNeverShowAgain) {
+                        Text(stringResource(R.string.settings_usb_exclusive_background_permission_never))
+                    }
+                    HapticTextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.settings_usb_exclusive_background_permission_later))
                     }
                 }
             }
@@ -762,6 +816,9 @@ private fun NeriAppContent(
     val usbExclusivePlayback by repo.usbExclusivePlaybackFlow.collectAsState(
         initial = startupPlaybackPreferences.usbExclusivePlayback
     )
+    val usbExclusiveBackgroundPermissionPromptSuppressed by repo
+        .usbExclusiveBackgroundPermissionPromptSuppressedFlow
+        .collectAsState(initial = false)
     val allowMixedPlayback by repo.allowMixedPlaybackFlow.collectAsState(initial = false)
     val preemptAudioFocus by repo.preemptAudioFocusFlow.collectAsState(
         initial = startupPlaybackPreferences.preemptAudioFocus
@@ -781,6 +838,7 @@ private fun NeriAppContent(
     var themeRevealCaptureToken by remember { mutableIntStateOf(0) }
     var pendingBackgroundImageAlpha by remember { mutableStateOf<Float?>(null) }
     var coverArtRefreshToken by remember { mutableIntStateOf(0) }
+    var showUsbExclusiveBackgroundPermissionDialog by rememberSaveable { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val followSystemDark = pendingFollowSystemDark ?: storedFollowSystemDark
@@ -841,12 +899,18 @@ private fun NeriAppContent(
                     hasItems = PlayerManager.hasItems(),
                     hasLocalCurrentSong = PlayerManager.currentSongFlow.value?.let {
                         LocalSongSupport.isLocalSong(it, context)
-                    } == true
+                    } == true,
+                    usbExclusivePlaybackActive = PlayerManager
+                        .isUsbExclusivePlaybackActiveForForegroundService()
                 )
             ) {
                 NPLogger.d(
                     "NERI-App",
-                    "Skipping audio service sync because active playback service is already tracking source=$source"
+                    "Skipping audio service sync because active playback service is already tracking " +
+                        "source=$source serviceInstance=" +
+                        AudioPlayerService.isInstanceActiveForDiagnostics() +
+                        " serviceForeground=" +
+                        AudioPlayerService.isForegroundActiveForDiagnostics()
                 )
                 return@launch
             }
@@ -862,12 +926,25 @@ private fun NeriAppContent(
     fun updateStartupAudioFocus(reason: String) {
         if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
         if (!PlayerManager.isPlayerInitialized()) return
+        if (
+            reason == "lifecycle_resume" &&
+            PlayerManager.isUsbExclusiveNativePlaybackStable()
+        ) {
+            NPLogger.d(
+                "NERI-App",
+                "Skipping startup audio focus refresh during stable USB native playback"
+            )
+            return
+        }
         val transportActive = runCatching { PlayerManager.isTransportActive() }
             .getOrDefault(false)
+        val usbExclusiveNativeActive = PlayerManager.shouldUseUsbExclusiveFocusGuard()
         StartupAudioFocusController.updateForForeground(
             context = context,
-            enabled = preemptAudioFocus,
+            enabled = preemptAudioFocus || usbExclusiveNativeActive,
             allowMixedPlayback = allowMixedPlayback,
+            usbExclusivePlayback = usbExclusivePlayback,
+            usbExclusiveNativeActive = usbExclusiveNativeActive,
             transportActive = transportActive,
             reason = reason
         )
@@ -904,8 +981,11 @@ private fun NeriAppContent(
                 PlayerManager.hasItems()
         StartupAudioFocusController.updateForForeground(
             context = context,
-            enabled = exactStartupPlaybackPreferences.preemptAudioFocus,
+            enabled = exactStartupPlaybackPreferences.preemptAudioFocus ||
+                PlayerManager.shouldUseUsbExclusiveFocusGuard(),
             allowMixedPlayback = exactStartupPlaybackPreferences.allowMixedPlayback,
+            usbExclusivePlayback = exactStartupPlaybackPreferences.usbExclusivePlayback,
+            usbExclusiveNativeActive = PlayerManager.shouldUseUsbExclusiveFocusGuard(),
             transportActive = PlayerManager.isTransportActive() || shouldBootstrapPlaybackService,
             reason = "app_bootstrap"
         )
@@ -964,10 +1044,10 @@ private fun NeriAppContent(
 
     }
 
-    LaunchedEffect(preemptAudioFocus, allowMixedPlayback) {
+    LaunchedEffect(preemptAudioFocus, allowMixedPlayback, usbExclusivePlayback) {
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             updateStartupAudioFocus("settings_changed")
-        } else if (!preemptAudioFocus || allowMixedPlayback) {
+        } else if ((!preemptAudioFocus && !usbExclusivePlayback) || allowMixedPlayback) {
             StartupAudioFocusController.release("settings_changed_inactive")
         }
     }
@@ -1159,15 +1239,36 @@ private fun NeriAppContent(
         )
     }
 
-    DisposableEffect(lifecycleOwner, preemptAudioFocus, allowMixedPlayback) {
+    DisposableEffect(lifecycleOwner, preemptAudioFocus, allowMixedPlayback, usbExclusivePlayback) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
+                    PlayerManager.updateUsbExclusiveForegroundState(
+                        foreground = true,
+                        reason = "lifecycle_resume"
+                    )
                     coverArtRefreshToken += 1
-                    updateStartupAudioFocus("lifecycle_resume")
+                    if (!PlayerManager.isUsbExclusiveNativePlaybackStable()) {
+                        updateStartupAudioFocus("lifecycle_resume")
+                        PlayerManager.recoverUsbExclusivePlaybackOnForeground("lifecycle_resume")
+                    }
                 }
                 Lifecycle.Event.ON_PAUSE,
-                Lifecycle.Event.ON_STOP,
+                Lifecycle.Event.ON_STOP -> {
+                    PlayerManager.updateUsbExclusiveForegroundState(
+                        foreground = false,
+                        reason = "lifecycle_${event.name.lowercase()}"
+                    )
+                    clearThemeRevealState()
+                    val keepUsbExclusiveFocus = PlayerManager.isPlayerInitialized() &&
+                        PlayerManager.usbExclusivePlaybackEnabled &&
+                        PlayerManager.shouldUseUsbExclusiveFocusGuard()
+                    if (keepUsbExclusiveFocus) {
+                        updateStartupAudioFocus("lifecycle_${event.name.lowercase()}_keep_usb")
+                    } else {
+                        StartupAudioFocusController.release("lifecycle_${event.name.lowercase()}")
+                    }
+                }
                 Lifecycle.Event.ON_DESTROY -> {
                     clearThemeRevealState()
                     StartupAudioFocusController.release("lifecycle_${event.name.lowercase()}")
@@ -1400,6 +1501,8 @@ private fun NeriAppContent(
                 val currentSong by PlayerManager.currentSongFlow.collectAsState()
                 val isMiniPlayerVisible = currentSong != null && !showNowPlaying
                 val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsState()
+                val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow
+                    .collectAsState()
                 val reservedMiniPlayerHeightDp = if (isMiniPlayerVisible) {
                     moe.ouom.neriplayer.ui.component.NeriMiniPlayerDefaults.Height
                 } else {
@@ -2078,7 +2181,17 @@ private fun NeriAppContent(
                                         },
                                         usbExclusivePlayback = usbExclusivePlayback,
                                         onUsbExclusivePlaybackChange = { enabled ->
-                                            scope.launch { repo.setUsbExclusivePlayback(enabled) }
+                                            if (PlayerManager.beginUsbExclusiveToggleTransitionFromUi(enabled)) {
+                                                scope.launch { repo.setUsbExclusivePlayback(enabled) }
+                                                if (
+                                                    enabled &&
+                                                    !usbExclusivePlayback &&
+                                                    !usbExclusiveBackgroundPermissionPromptSuppressed &&
+                                                    !context.readBackgroundBehaviorAllowance().fullyAllowed
+                                                ) {
+                                                    showUsbExclusiveBackgroundPermissionDialog = true
+                                                }
+                                            }
                                         },
                                         allowMixedPlayback = allowMixedPlayback,
                                         onAllowMixedPlaybackChange = { enabled ->
@@ -2197,6 +2310,9 @@ private fun NeriAppContent(
                                         onOpenListenTogetherDebug = {
                                             navController.navigate(Destinations.DebugListenTogether.route)
                                         },
+                                        onOpenUsbExclusiveDebug = {
+                                            navController.navigate(Destinations.DebugUsbExclusive.route)
+                                        },
                                         onOpenYouTubeDebug = {
                                             navController.navigate(Destinations.DebugYouTube.route)
                                         },
@@ -2259,6 +2375,7 @@ private fun NeriAppContent(
                                     )
                                 }
                                 composable(Destinations.DebugListenTogether.route) { ListenTogetherDebugScreen() }
+                                composable(Destinations.DebugUsbExclusive.route) { UsbExclusiveDebugScreen() }
                                 composable(Destinations.DebugYouTube.route) { YouTubeApiProbeScreen() }
                                 composable(Destinations.DebugBili.route) { BiliApiProbeScreen() }
                                 composable(Destinations.DebugNetease.route) { NeteaseApiProbeScreen() }
@@ -2315,6 +2432,7 @@ private fun NeriAppContent(
                                     artist = currentSong?.displayArtist() ?: "",
                                     coverUrl = displayCoverUrl,
                                     isPlaying = isPlaybackControlPlaying,
+                                    playPauseEnabled = !usbPlaybackPreparing,
                                     modifier = Modifier,
                                     onPlayPause = { PlayerManager.togglePlayPause() },
                                     onPrevious = { PlayerManager.previous() },
@@ -2646,6 +2764,31 @@ private fun NeriAppContent(
                         },
                         onDismiss = {
                             pendingTrafficRiskDownloadRequest = null
+                        }
+                    )
+                }
+
+                if (showUsbExclusiveBackgroundPermissionDialog) {
+                    UsbExclusiveBackgroundPermissionDialog(
+                        batteryOptimizationAllowed = context
+                            .readBackgroundBehaviorAllowance()
+                            .ignoringBatteryOptimizations,
+                        onRequestBatteryOptimization = {
+                            showUsbExclusiveBackgroundPermissionDialog = false
+                            context.requestIgnoreBatteryOptimizationsCompat()
+                        },
+                        onOpenAppSettings = {
+                            showUsbExclusiveBackgroundPermissionDialog = false
+                            context.openAppBackgroundSettings()
+                        },
+                        onNeverShowAgain = {
+                            showUsbExclusiveBackgroundPermissionDialog = false
+                            scope.launch {
+                                repo.setUsbExclusiveBackgroundPermissionPromptSuppressed(true)
+                            }
+                        },
+                        onDismiss = {
+                            showUsbExclusiveBackgroundPermissionDialog = false
                         }
                     )
                 }

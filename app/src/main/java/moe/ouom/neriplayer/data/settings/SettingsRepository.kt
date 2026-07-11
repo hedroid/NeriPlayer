@@ -25,6 +25,7 @@ package moe.ouom.neriplayer.data.settings
 
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -45,9 +46,13 @@ import moe.ouom.neriplayer.data.settings.generated.AutoSettingsRepository
 import moe.ouom.neriplayer.ksp.annotations.AutoSettingSpec
 import java.util.Locale
 
+private val USB_EXCLUSIVE_BACKGROUND_PERMISSION_PROMPT_SUPPRESSED =
+    booleanPreferencesKey("usb_exclusive_background_permission_prompt_suppressed")
+
 class SettingsRepository(private val context: Context) {
     private val autoSettingsRepository = AutoSettingsRepository(context)
     private val autoSettingSpecRepository = AutoSettingSpecRepository(context)
+    private val usbExclusiveSettingsStore = UsbExclusiveSettingsStore(context)
 
     fun <T> settingFlow(setting: AutoSettingSpec<T>): Flow<T> {
         return autoSettingSpecRepository.flow(setting)
@@ -394,6 +399,44 @@ class SettingsRepository(private val context: Context) {
 
     val usbExclusivePlaybackFlow: Flow<Boolean> =
         context.dataStore.data.map { it[SettingsKeys.USB_EXCLUSIVE_PLAYBACK] ?: false }
+
+    val usbExclusiveBackgroundPermissionPromptSuppressedFlow: Flow<Boolean> =
+        context.dataStore.data.map {
+            it[USB_EXCLUSIVE_BACKGROUND_PERMISSION_PROMPT_SUPPRESSED] ?: false
+        }
+
+    val usbExclusivePreferencesFlow: Flow<UsbExclusivePreferences> =
+        usbExclusiveSettingsStore.preferencesFlow
+
+    val usbExclusiveSampleRateModeFlow: Flow<UsbExclusiveSampleRateMode> =
+        usbExclusiveSettingsStore.sampleRateModeFlow
+
+    val usbExclusiveDeviceKeyFlow: Flow<String> =
+        usbExclusiveSettingsStore.selectedDeviceKeyFlow
+
+    val usbExclusiveBitDepthModeFlow: Flow<UsbExclusiveBitDepthMode> =
+        usbExclusiveSettingsStore.bitDepthModeFlow
+
+    val usbExclusiveBufferProfileFlow: Flow<UsbExclusiveBufferProfile> =
+        usbExclusiveSettingsStore.bufferProfileFlow
+
+    val usbExclusiveUnsupportedFormatPolicyFlow: Flow<UsbExclusiveUnsupportedFormatPolicy> =
+        usbExclusiveSettingsStore.unsupportedFormatPolicyFlow
+
+    val usbExclusiveSampleRateCompatibilityFlow: Flow<Boolean> =
+        usbExclusiveSettingsStore.sampleRateCompatibilityFlow
+
+    val usbExclusiveBitDepthCompatibilityFlow: Flow<Boolean> =
+        usbExclusiveSettingsStore.bitDepthCompatibilityFlow
+
+    val usbExclusiveChannelCompatibilityFlow: Flow<Boolean> =
+        usbExclusiveSettingsStore.channelCompatibilityFlow
+
+    val usbExclusiveForegroundBufferMsFlow: Flow<Int> =
+        usbExclusiveSettingsStore.foregroundBufferMsFlow
+
+    val usbExclusiveBackgroundBufferMsFlow: Flow<Int> =
+        usbExclusiveSettingsStore.backgroundBufferMsFlow
 
     val allowMixedPlaybackFlow: Flow<Boolean> =
         context.dataStore.data.map { it[SettingsKeys.ALLOW_MIXED_PLAYBACK] ?: false }
@@ -951,6 +994,58 @@ class SettingsRepository(private val context: Context) {
         updatePlaybackPreferenceSnapshot(context) {
             it.copy(usbExclusivePlayback = enabled)
         }
+    }
+
+    suspend fun setUsbExclusiveBackgroundPermissionPromptSuppressed(suppressed: Boolean) {
+        context.dataStore.edit {
+            it[USB_EXCLUSIVE_BACKGROUND_PERMISSION_PROMPT_SUPPRESSED] = suppressed
+        }
+    }
+
+    suspend fun setUsbExclusiveSampleRateMode(mode: UsbExclusiveSampleRateMode) {
+        usbExclusiveSettingsStore.setSampleRateMode(mode)
+    }
+
+    suspend fun setUsbExclusiveDeviceKey(deviceKey: String) {
+        usbExclusiveSettingsStore.setSelectedDeviceKey(deviceKey)
+    }
+
+    suspend fun setUsbExclusiveBitDepthMode(mode: UsbExclusiveBitDepthMode) {
+        usbExclusiveSettingsStore.setBitDepthMode(mode)
+    }
+
+    suspend fun setUsbExclusiveBufferProfile(profile: UsbExclusiveBufferProfile) {
+        usbExclusiveSettingsStore.setBufferProfile(profile)
+    }
+
+    suspend fun setUsbExclusiveUnsupportedFormatPolicy(
+        policy: UsbExclusiveUnsupportedFormatPolicy
+    ) {
+        usbExclusiveSettingsStore.setUnsupportedFormatPolicy(policy)
+    }
+
+    suspend fun setUsbExclusiveSampleRateCompatibility(enabled: Boolean) {
+        usbExclusiveSettingsStore.setSampleRateCompatibilityEnabled(enabled)
+    }
+
+    suspend fun setUsbExclusiveBitDepthCompatibility(enabled: Boolean) {
+        usbExclusiveSettingsStore.setBitDepthCompatibilityEnabled(enabled)
+    }
+
+    suspend fun setUsbExclusiveChannelCompatibility(enabled: Boolean) {
+        usbExclusiveSettingsStore.setChannelCompatibilityEnabled(enabled)
+    }
+
+    suspend fun setUsbExclusiveForegroundBufferMs(bufferMs: Int) {
+        usbExclusiveSettingsStore.setForegroundBufferMs(bufferMs)
+    }
+
+    suspend fun setUsbExclusiveBackgroundBufferMs(bufferMs: Int) {
+        usbExclusiveSettingsStore.setBackgroundBufferMs(bufferMs)
+    }
+
+    suspend fun setUsbExclusivePreferences(preferences: UsbExclusivePreferences) {
+        usbExclusiveSettingsStore.setPreferences(preferences)
     }
 
     suspend fun setAllowMixedPlayback(enabled: Boolean) {

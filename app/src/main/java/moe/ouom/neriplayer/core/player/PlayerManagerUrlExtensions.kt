@@ -133,6 +133,53 @@ internal suspend fun PlayerManager.resolveSongUrl(
     }
 }
 
+internal suspend fun PlayerManager.resolveShareableListenTogetherStreamUrl(
+    song: SongItem
+): SongUrlResult {
+    NPLogger.d(
+        "NERI-PlayerManager",
+        "resolveShareableListenTogetherStreamUrl: song=${song.name}, source=${song.album}, streamUrl=${song.streamUrl}, currentUrl=${_currentMediaUrl.value}, stack=[${debugStackHint()}]"
+    )
+    if (isDirectStreamUrl(song.streamUrl)) {
+        return SongUrlResult.Success(song.streamUrl.orEmpty())
+    }
+    if (isLocalSong(song)) {
+        NPLogger.w(
+            "NERI-PlayerManager",
+            "resolveShareableListenTogetherStreamUrl: skip local-only song=${song.name}"
+        )
+        return SongUrlResult.Failure
+    }
+
+    val sideEffects = RefreshResolverSideEffects(RefreshSideEffectGate { false })
+    val result = when {
+        isYouTubeMusicTrack(song) -> getYouTubeMusicAudioUrl(
+            song = song,
+            suppressError = true,
+            forceRefresh = true,
+            sideEffects = sideEffects
+        )
+        isBiliTrack(song) -> getBiliAudioUrl(
+            song = song,
+            suppressError = true,
+            sideEffects = sideEffects
+        )
+        else -> getNeteaseSongUrl(
+            song = song,
+            suppressError = true,
+            sideEffects = sideEffects
+        )
+    }
+    if (result is SongUrlResult.Success && !isDirectStreamUrl(result.url)) {
+        NPLogger.w(
+            "NERI-PlayerManager",
+            "resolveShareableListenTogetherStreamUrl: rejected non-http result song=${song.name}, url=${result.url}"
+        )
+        return SongUrlResult.Failure
+    }
+    return result
+}
+
 private fun String.toLocalPlaybackUri(): Uri? {
     return if (startsWith("/")) {
         Uri.fromFile(File(this))
@@ -166,6 +213,7 @@ private fun PlayerManager.resumePlaybackFallback(
         if (resumePlaybackAfterRefresh) {
             applyAudioFocusPolicyOnMainThread()
             player.play()
+            schedulePlaybackStartupWatchdog(reason = "refresh_fallback")
         } else {
             player.pause()
         }
@@ -347,7 +395,7 @@ private suspend fun PlayerManager.handleRefreshResult(
                     gate = gate,
                     semantics = semantics,
                     song = _currentSongFlow.value ?: song,
-                    url = result.url,
+                    result = result,
                     mimeType = result.mimeType,
                     expectedContentLength = result.expectedContentLength,
                     audioInfo = result.audioInfo,
@@ -463,7 +511,7 @@ private suspend fun PlayerManager.applyResolvedMediaItem(
     gate: RefreshSideEffectGate,
     semantics: RefreshRequestSemantics,
     song: SongItem,
-    url: String,
+    result: SongUrlResult.Success,
     mimeType: String?,
     expectedContentLength: Long?,
     audioInfo: PlaybackAudioInfo?,
@@ -474,14 +522,22 @@ private suspend fun PlayerManager.applyResolvedMediaItem(
     if (!gate.runMutation {}) return false
 
     val cacheKey = cacheKeyOverride ?: computeCacheKey(song)
+    configureActivePlaybackCandidates(
+        result = result,
+        resumePositionMs = resumePositionMs,
+        commandSource = semantics.resumedPlaybackCommandSource ?: PlaybackCommandSource.LOCAL,
+        resetRecoveryAttempts = !semantics.reason.startsWith("startup_stall_")
+    )
+    val selectedCandidate = currentPlaybackCandidate()
+    val selectedUrl = selectedCandidate?.url ?: result.url
     invalidateMismatchedCachedResource(
         cacheKey = cacheKey,
         expectedContentLength = expectedContentLength,
         shouldApplyMutation = { gate.runMutation {} }
     )
-    val mediaItem = buildMediaItem(song, url, cacheKey, mimeType)
+    val mediaItem = buildMediaItem(song, selectedUrl, cacheKey, mimeType)
 
-    if (!gate.runMutation { _currentMediaUrl.value = url }) return false
+    if (!gate.runMutation { _currentMediaUrl.value = selectedUrl }) return false
     if (!gate.runMutation { _currentPlaybackAudioInfo.value = audioInfo }) return false
     if (!gate.runMutation { currentMediaUrlResolvedAtMs = SystemClock.elapsedRealtime() }) return false
     if (!gate.runSuspendingMutation { persistState() }) return false
@@ -508,6 +564,7 @@ private suspend fun PlayerManager.applyResolvedMediaItem(
                 }
             ) return@withContext
         }
+        if (!gate.runMutation { resetPlaybackProgressAdvanceBaseline(startPositionMs) }) return@withContext
         if (!gate.runMutation { clearPendingSeekPosition() }) return@withContext
         if (!gate.runMutation { player.prepare() }) return@withContext
         if (!gate.runMutation { player.playWhenReady = resumePlaybackAfterRefresh }) return@withContext
@@ -515,6 +572,7 @@ private suspend fun PlayerManager.applyResolvedMediaItem(
                 if (resumePlaybackAfterRefresh) {
                     applyAudioFocusPolicyOnMainThread()
                     player.play()
+                    schedulePlaybackStartupWatchdog(reason = "refresh_applied")
                 } else {
                     player.pause()
                 }
@@ -795,6 +853,7 @@ private suspend fun PlayerManager.getBiliAudioUrl(
             NPLogger.d("NERI-PlayerManager-BiliAudioUrl", audioStream.url)
             SongUrlResult.Success(
                 url = audioStream.url,
+                candidateUrls = audioStream.candidateUrls,
                 mimeType = audioStream.mimeType,
                 audioInfo = buildBiliPlaybackAudioInfo(audioStream, availableStreams) {
                     getLocalizedString(it)

@@ -72,12 +72,14 @@ import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
 import moe.ouom.neriplayer.core.player.model.PlaybackEqualizerPresetId
 import moe.ouom.neriplayer.core.player.model.PlaybackSoundConfig
 import moe.ouom.neriplayer.core.player.model.PlaybackSoundState
+import moe.ouom.neriplayer.core.player.model.PlaybackUrlCandidate
 import moe.ouom.neriplayer.core.player.model.PlayerEvent
 import moe.ouom.neriplayer.core.player.model.SongUrlResult
 import moe.ouom.neriplayer.core.player.metadata.NeteaseLyricsCacheEntry
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackSpeed
+import moe.ouom.neriplayer.core.player.debug.UsbExclusiveDebugLogger
 import moe.ouom.neriplayer.core.player.policy.PlaybackCommand
 import moe.ouom.neriplayer.core.player.policy.PlaybackCommandSource
 import moe.ouom.neriplayer.core.player.policy.RefreshInFlightController
@@ -88,6 +90,9 @@ import moe.ouom.neriplayer.core.player.policy.resolveExoRepeatMode
 import moe.ouom.neriplayer.core.player.policy.shouldShowPauseButtonForPlaybackControls
 import moe.ouom.neriplayer.core.player.policy.shouldBootstrapPlaybackServiceOnAppLaunch
 import moe.ouom.neriplayer.core.player.policy.shouldRunPlaybackServiceInForeground
+import moe.ouom.neriplayer.core.player.usb.UsbExclusiveAudioPathState
+import moe.ouom.neriplayer.core.player.usb.UsbExclusiveAudioPathTracker
+import moe.ouom.neriplayer.core.player.usb.UsbExclusiveSessionController
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.media.preferredLocalMediaReference
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
@@ -99,6 +104,7 @@ import moe.ouom.neriplayer.data.platform.youtube.isYouTubeMusicSong
 import moe.ouom.neriplayer.data.settings.DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS
 import moe.ouom.neriplayer.data.settings.DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS
 import moe.ouom.neriplayer.data.settings.PlaybackPreferenceSnapshot
+import moe.ouom.neriplayer.data.settings.UsbExclusivePreferences
 import moe.ouom.neriplayer.listentogether.ListenTogetherChannels
 import moe.ouom.neriplayer.listentogether.buildStableTrackKey
 import moe.ouom.neriplayer.listentogether.resolvedAudioId
@@ -121,7 +127,12 @@ object PlayerManager {
     const val BILI_SOURCE_TAG = "Bilibili"
     const val NETEASE_SOURCE_TAG = "Netease"
 
+    @Volatile
     internal var initialized = false
+
+    @Volatile
+    internal var initializationInProgress = false
+    internal val initializationLock = Any()
     internal lateinit var application: Application
     internal lateinit var player: ExoPlayer
 
@@ -161,10 +172,35 @@ object PlayerManager {
             field = value
             syncPlaybackControlPlayingState()
         }
+    internal var playbackStartupWatchdogJob: Job? = null
+    @Volatile
+    internal var playbackStartupWatchdogToken = 0L
     internal var bluetoothDisconnectPauseJob: Job? = null
     internal var audioRouteMuteRestoreVolume: Float? = null
     internal var playbackSoundPersistJob: Job? = null
     internal var playbackSoundApplyJob: Job? = null
+    internal var usbAudioSinkReconfigureJob: Job? = null
+    internal var usbExclusiveSystemAudioReleaseJob: Job? = null
+    internal var usbExclusiveSystemAudioResumeJob: Job? = null
+    internal var usbExclusiveSystemAudioWatchdogJob: Job? = null
+    internal var usbExclusiveToggleTransitionJob: Job? = null
+    @Volatile
+    internal var usbExclusiveSystemAudioReleaseInProgress = false
+    @Volatile
+    internal var usbExclusiveToggleTransitionActive = false
+    @Volatile
+    internal var usbExclusiveToggleTransitionReason = ""
+    internal var usbExclusiveRecoveryJob: Job? = null
+    internal var usbExclusiveOpenGatePlaybackJob: Job? = null
+    internal var usbExclusiveForegroundRecoveryJob: Job? = null
+    internal var usbExclusiveBackgroundAuditJob: Job? = null
+    internal var usbExclusiveRecoveryAttempts = 0
+    internal var usbExclusiveInterruptedPlaybackIntent: UsbExclusiveInterruptedPlaybackIntent? = null
+    @Volatile
+    internal var usbExclusiveRouteGeneration = 0L
+    @Volatile
+    internal var pendingUsbExclusivePreferenceReconfigure = false
+    internal var lastUsbExclusiveAudioSinkReconfigureAtMs = 0L
     internal var pendingPlaybackSoundConfig: PlaybackSoundConfig? = null
     internal var neteaseQualityRefreshJob: Job? = null
     internal var youtubeQualityRefreshJob: Job? = null
@@ -191,6 +227,7 @@ object PlayerManager {
     internal var playbackFadeOutDurationMs = DEFAULT_FADE_DURATION_MS
     internal var playbackCrossfadeInDurationMs = DEFAULT_FADE_DURATION_MS
     internal var playbackCrossfadeOutDurationMs = DEFAULT_FADE_DURATION_MS
+    @Volatile
     internal var playbackSoundConfig = PlaybackSoundConfig()
     internal var lyriconEnabled = false
     internal var statusBarLyricsEnable = false
@@ -203,8 +240,21 @@ object PlayerManager {
     internal var keepPlaybackModeStateEnabled = true
     internal var neteaseAutoSourceSwitchEnabled = true
     internal var stopOnBluetoothDisconnectEnabled = true
+    @Volatile
     internal var usbExclusivePlaybackEnabled = false
+    @Volatile
+    internal var usbExclusiveAppInForeground = true
+    @Volatile
+    internal var usbExclusivePreferences = UsbExclusivePreferences()
     internal var allowMixedPlaybackEnabled = false
+
+    internal data class UsbExclusiveInterruptedPlaybackIntent(
+        val mediaItemIndex: Int,
+        val positionMs: Long,
+        val requestToken: Long,
+        val reason: String,
+        val recordedAtMs: Long = SystemClock.elapsedRealtime()
+    )
 
     @Volatile
     internal var currentPlaylist: List<SongItem> = emptyList()
@@ -227,8 +277,14 @@ object PlayerManager {
     internal const val BLUETOOTH_DISCONNECT_CONFIRM_DELAY_MS = 1200L
     internal const val AUTO_TRANSITION_EXTERNAL_PAUSE_GUARD_MS = 2_000L
     internal const val AUTO_TRANSITION_BUFFER_POSITION_GUARD_MS = 1_500L
+    internal const val USB_EXCLUSIVE_FOCUS_PAUSE_GUARD_MS = 3_000L
     internal const val PENDING_SEEK_POSITION_TOLERANCE_MS = 1_500L
-    internal const val QUALITY_CHANGE_REFRESH_DEBOUNCE_MS = 300L
+    internal const val STARTUP_STALL_POSITION_TOLERANCE_MS = 500L
+    internal const val STARTUP_STALL_LOCAL_TIMEOUT_MS = 5_000L
+    internal const val STARTUP_STALL_REMOTE_TIMEOUT_MS = 12_000L
+    internal const val STARTUP_STALL_YOUTUBE_TIMEOUT_MS = 25_000L
+    internal const val STARTUP_STALL_MAX_RECOVERY_ATTEMPTS = 3
+    internal const val QUALITY_CHANGE_REFRESH_DEBOUNCE_MS = 0L
     internal const val MIN_FADE_STEPS = 4
     internal const val MAX_FADE_STEPS = 30
     @Volatile
@@ -251,6 +307,8 @@ object PlayerManager {
     internal var lastPersistedPlaybackState: PersistedPlaybackState? = null
     internal var scheduledStatePersistJob: Job? = null
     internal var lastAutoTrackAdvanceAtMs: Long = 0L
+    @Volatile
+    internal var lastUsbExclusiveFocusDisruptionAtMs: Long = 0L
     internal val statePersistMutex = Mutex()
     @Volatile
     internal var resumePlaybackRequested = false
@@ -287,6 +345,13 @@ object PlayerManager {
 
     internal val _playbackPositionMs = MutableStateFlow(0L)
     val playbackPositionFlow: StateFlow<Long> = _playbackPositionMs
+
+    internal val _playbackDurationMs = MutableStateFlow(0L)
+    val playbackDurationFlow: StateFlow<Long> = _playbackDurationMs
+
+    internal val _usbExclusivePlaybackPreparingFlow = MutableStateFlow(false)
+    val usbExclusivePlaybackPreparingFlow: StateFlow<Boolean> =
+        _usbExclusivePlaybackPreparingFlow
 
     internal val _shuffleModeFlow = MutableStateFlow(false)
     val shuffleModeFlow: StateFlow<Boolean> = _shuffleModeFlow
@@ -344,6 +409,13 @@ object PlayerManager {
     internal var pendingMediaLoadActive = false
     @Volatile
     internal var pendingMediaLoadPositionMs = 0L
+    internal var activePlaybackCandidates: List<PlaybackUrlCandidate> = emptyList()
+    internal var activePlaybackUrlIndex = 0
+    internal var activePlaybackResumePositionMs = 0L
+    internal var activePlaybackCommandSource: PlaybackCommandSource = PlaybackCommandSource.LOCAL
+    internal var startupStallRecoveryAttempts = 0
+    internal var playbackProgressBaselinePositionMs = 0L
+    internal var playbackProgressAdvanceReported = false
     internal var lastHandledTrackEndKey: String? = null
     internal var lastTrackEndHandledAtMs = 0L
     val audioLevelFlow get() = AudioReactive.level
@@ -388,6 +460,7 @@ object PlayerManager {
     internal fun setCurrentSongForPlayback(song: SongItem?, syncLyricon: Boolean = true) {
         val previousSong = _currentSongFlow.value
         _currentSongFlow.value = song
+        _playbackDurationMs.value = song?.durationMs?.coerceAtLeast(0L) ?: 0L
         if (previousSong === song) return
         if (syncLyricon) {
             syncLyriconSong(song)
@@ -442,6 +515,10 @@ object PlayerManager {
 
     fun isTransportActive(): Boolean {
         ensureInitialized()
+        return isTransportActiveWithoutInitialization()
+    }
+
+    internal fun isTransportActiveWithoutInitialization(): Boolean {
         if (!initialized || _currentSongFlow.value == null) return false
         return resumePlaybackRequested ||
             playJob?.isActive == true ||
@@ -489,9 +566,11 @@ object PlayerManager {
         return playJob?.isActive == true || _playerPlaybackStateFlow.value == Player.STATE_BUFFERING
     }
 
-    fun shouldIgnoreExternalPauseCommand(): Boolean {
+    fun shouldIgnoreExternalPauseCommand(source: String): Boolean {
         ensureInitialized()
         if (!initialized || _currentSongFlow.value == null) return false
+        if (source.isUserInitiatedExternalPlaybackCommand()) return false
+        if (shouldIgnoreUsbExclusiveFocusPause(source)) return true
         if (!resumePlaybackRequested) return false
 
         val autoAdvanceAgeMs = SystemClock.elapsedRealtime() - lastAutoTrackAdvanceAtMs
@@ -515,6 +594,45 @@ object PlayerManager {
             Player.STATE_READY -> currentPositionMs <= AUTO_TRANSITION_BUFFER_POSITION_GUARD_MS
             else -> false
         }
+    }
+
+    private fun String.isUserInitiatedExternalPlaybackCommand(): Boolean {
+        return equals("intent_pause", ignoreCase = true) ||
+            equals("intent_stop", ignoreCase = true) ||
+            startsWith("media_session_", ignoreCase = true)
+    }
+
+    internal fun markUsbExclusiveFocusDisrupted(change: Int) {
+        markUsbExclusiveShortDisruption("audio_focus:$change")
+    }
+
+    fun markUsbExclusiveShortDisruption(reason: String) {
+        if (!usbExclusivePlaybackEnabled) return
+        lastUsbExclusiveFocusDisruptionAtMs = SystemClock.elapsedRealtime()
+        val nativeState = UsbExclusiveSessionController.state.value
+        val openGate = UsbExclusiveSessionController.playerPcmOpenGateReason() ?: "open"
+        NPLogger.d(
+            "NERI-PlayerManager",
+            "USB exclusive short disruption noted: reason=$reason " +
+                "enabled=$usbExclusivePlaybackEnabled allowMixed=$allowMixedPlaybackEnabled " +
+                "resumeRequested=$resumePlaybackRequested playWhenReady=${_playWhenReadyFlow.value} " +
+                "isPlaying=${_isPlayingFlow.value} nativeSource=${nativeState.source} " +
+                "nativeOpened=${nativeState.opened} nativeStreaming=${nativeState.streaming} " +
+                "openGate=$openGate"
+        )
+    }
+
+    internal fun isRecentUsbExclusiveFocusDisruption(): Boolean {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
+        val ageMs = SystemClock.elapsedRealtime() - lastUsbExclusiveFocusDisruptionAtMs
+        return ageMs in 0L..USB_EXCLUSIVE_FOCUS_PAUSE_GUARD_MS
+    }
+
+    private fun shouldIgnoreUsbExclusiveFocusPause(source: String): Boolean {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
+        if (source.contains("stop", ignoreCase = true)) return false
+        if (!resumePlaybackRequested && !_playWhenReadyFlow.value && !_isPlayingFlow.value) return false
+        return isRecentUsbExclusiveFocusDisruption()
     }
 
     internal fun markAutoTrackAdvance() {
@@ -547,19 +665,88 @@ object PlayerManager {
 
     internal fun applyAudioFocusPolicyOnMainThread() {
         if (!::player.isInitialized) return
-        val handleFocus = !allowMixedPlaybackEnabled
+        val useUsbExclusiveFocusGuard = shouldUseUsbExclusiveFocusGuard()
+        val bypassPlatformFocus = shouldBypassPlatformAudioFocusForUsbExclusive()
+        val handleFocus = !allowMixedPlaybackEnabled && !bypassPlatformFocus
+        UsbExclusiveDebugLogger.logFocusPolicy(
+            usbExclusivePlayback = usbExclusivePlaybackEnabled,
+            allowMixedPlayback = allowMixedPlaybackEnabled,
+            handleFocus = handleFocus
+        )
         val attributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
         player.setAudioAttributes(attributes, handleFocus)
+        StartupAudioFocusController.updateForForeground(
+            context = application,
+            enabled = useUsbExclusiveFocusGuard,
+            allowMixedPlayback = allowMixedPlaybackEnabled,
+            usbExclusivePlayback = usbExclusivePlaybackEnabled,
+            usbExclusiveNativeActive = useUsbExclusiveFocusGuard,
+            transportActive = isTransportActiveWithoutInitialization(),
+            reason = "apply_audio_focus_policy"
+        )
+    }
+
+    internal fun shouldUseUsbExclusiveFocusGuard(): Boolean {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
+        val pathState = UsbExclusiveAudioPathTracker.state.value
+        val nativeState = UsbExclusiveSessionController.state.value
+        return pathState.effectivePath == UsbExclusiveAudioPathState.EFFECTIVE_NATIVE_USB &&
+            pathState.sinkPlaying &&
+            nativeState.source == "player_pcm" &&
+            nativeState.streaming
+    }
+
+    internal fun shouldBypassPlatformAudioFocusForUsbExclusive(): Boolean {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
+        val pathState = UsbExclusiveAudioPathTracker.state.value
+        val nativeState = UsbExclusiveSessionController.state.value
+        if (
+            nativeState.transitioning ||
+            (nativeState.opened && nativeState.source == "player_pcm") ||
+            pathState.effectivePath == UsbExclusiveAudioPathState.EFFECTIVE_NATIVE_USB
+        ) {
+            return true
+        }
+        val fallbackReason = pathState.fallbackReason ?: return true
+        return fallbackReason.startsWith("native_open_deferred") ||
+            fallbackReason.startsWith("native_reopen_cooling_down") ||
+            fallbackReason.contains("transport", ignoreCase = true) ||
+            fallbackReason.contains("start", ignoreCase = true) ||
+            fallbackReason.contains("play", ignoreCase = true)
+    }
+
+    internal fun isUsbExclusiveNativePlaybackStable(): Boolean {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
+        val pathState = UsbExclusiveAudioPathTracker.state.value
+        val nativeState = UsbExclusiveSessionController.state.value
+        return pathState.effectivePath == UsbExclusiveAudioPathState.EFFECTIVE_NATIVE_USB &&
+            pathState.sinkPlaying &&
+            pathState.fallbackReason == null &&
+            nativeState.source == "player_pcm" &&
+            nativeState.opened &&
+            nativeState.streaming &&
+            !nativeState.transitioning
+    }
+
+    internal fun isUsbExclusivePlaybackActiveForForegroundService(): Boolean {
+        if (!isPlayerInitialized()) return false
+        if (!usbExclusivePlaybackEnabled) return false
+        if (!isTransportActiveWithoutInitialization()) return false
+        val nativeState = UsbExclusiveSessionController.state.value
+        val pathState = UsbExclusiveAudioPathTracker.state.value
+        return nativeState.streaming ||
+            nativeState.opened ||
+            pathState.effectivePath == UsbExclusiveAudioPathState.EFFECTIVE_NATIVE_USB ||
+            pathState.requestedPath == UsbExclusiveAudioPathState.REQUESTED_NATIVE_USB
     }
 
     internal fun isPreparedInPlayer(): Boolean =
-        player.currentMediaItem != null && (
-            player.playbackState == Player.STATE_READY ||
-                player.playbackState == Player.STATE_BUFFERING
-            )
+        player.currentMediaItem != null &&
+            player.playbackState == Player.STATE_READY &&
+            !shouldTreatReadyAtStartAsUnhealthyPrepared()
 
     fun setListenTogetherSyncPlaybackRate(rate: Float) {
         ensureInitialized()
@@ -590,6 +777,8 @@ object PlayerManager {
         )
         cancelPendingPauseRequest(resetVolumeToFull = true)
         playbackRequestToken += 1
+        cancelPlaybackStartupWatchdog(reason = "listen_together_reset")
+        clearActivePlaybackCandidates()
         playJob?.cancel()
         playJob = null
         pendingMediaLoadActive = false
@@ -716,6 +905,8 @@ object PlayerManager {
             "stopCurrentPlaybackForListenTogetherAwaitingStream(): currentSong=${_currentSongFlow.value?.name}, mediaUrl=${_currentMediaUrl.value}, targetStableKey=${currentListenTogetherTargetStableKey()}, stack=[${debugStackHint()}]"
         )
         cancelPendingPauseRequest(resetVolumeToFull = true)
+        cancelPlaybackStartupWatchdog(reason = "listen_together_awaiting_stream")
+        clearActivePlaybackCandidates()
         stopProgressUpdates()
         cancelVolumeFade(resetToFull = true)
         runCatching { player.stop() }
@@ -739,8 +930,53 @@ object PlayerManager {
         return true
     }
 
+    internal fun rejectUsbExclusiveToggleControl(): Boolean {
+        NPLogger.w(
+            "NERI-PlayerManager",
+            "rejectUsbExclusiveToggleControl(): reason=$usbExclusiveToggleTransitionReason, stack=[${debugStackHint()}]"
+        )
+        postPlayerEvent(
+            PlayerEvent.ShowError(
+                getLocalizedString(R.string.settings_usb_exclusive_status_transitioning)
+            )
+        )
+        return true
+    }
+
+    fun beginUsbExclusiveToggleTransitionFromUi(targetEnabled: Boolean): Boolean {
+        if (usbExclusiveToggleTransitionActive) {
+            rejectUsbExclusiveToggleControl()
+            return false
+        }
+        usbExclusiveToggleTransitionActive = true
+        usbExclusiveToggleTransitionReason = if (targetEnabled) {
+            "usb_exclusive_enabled"
+        } else {
+            "usb_exclusive_disabled"
+        }
+        markUsbExclusivePlaybackPreparing(true, usbExclusiveToggleTransitionReason)
+        usbExclusiveToggleTransitionJob?.cancel()
+        val pendingReason = usbExclusiveToggleTransitionReason
+        usbExclusiveToggleTransitionJob = mainScope.launch {
+            delay(8_000L)
+            if (usbExclusiveToggleTransitionActive && usbExclusiveToggleTransitionReason == pendingReason) {
+                NPLogger.w(
+                    "NERI-UsbExclusive",
+                    "unlock stale USB toggle transition before settings flow update: reason=$pendingReason"
+                )
+                usbExclusiveToggleTransitionActive = false
+                usbExclusiveToggleTransitionReason = ""
+                markUsbExclusivePlaybackPreparing(false, "usb_toggle_ui_timeout:$pendingReason")
+            }
+        }
+        return true
+    }
+
     internal fun shouldBlockLocalRoomControl(commandSource: PlaybackCommandSource): Boolean {
         if (commandSource != PlaybackCommandSource.LOCAL) return false
+        if (usbExclusiveToggleTransitionActive) {
+            return rejectUsbExclusiveToggleControl()
+        }
         if (!isListenTogetherActive()) return false
         val room = activeListenTogetherRoomState()
         if (room?.roomStatus == "controller_offline" && !isCurrentUserControllerInListenTogether()) {
@@ -896,6 +1132,9 @@ object PlayerManager {
             setCurrentSongForPlayback(currentSong.copy(durationMs = resolvedDurationMs))
             changed = true
         }
+        if (currentSong?.sameIdentityAs(song) == true) {
+            _playbackDurationMs.value = resolvedDurationMs
+        }
 
         if (changed) {
             ioScope.launch { persistState() }
@@ -908,7 +1147,24 @@ object PlayerManager {
         }
         val currentSong = _currentSongFlow.value ?: return
         val playerDurationMs = player.duration.takeIf { it > 0L } ?: return
+        _playbackDurationMs.value = playerDurationMs
         maybeUpdateSongDuration(currentSong, playerDurationMs)
+    }
+
+    internal fun shouldStartUsbExclusiveTransportFromSink(): Boolean {
+        if (!usbExclusivePlaybackEnabled) return false
+        return resumePlaybackRequested ||
+            _playWhenReadyFlow.value ||
+            _playbackControlPlayingFlow.value
+    }
+
+    internal fun markUsbExclusivePlaybackPreparing(preparing: Boolean, reason: String) {
+        if (_usbExclusivePlaybackPreparingFlow.value == preparing) return
+        _usbExclusivePlaybackPreparingFlow.value = preparing
+        NPLogger.d(
+            "NERI-UsbExclusive",
+            "playback preparing=$preparing reason=$reason"
+        )
     }
 
     fun changeCurrentPlaybackQuality(optionKey: String) {
@@ -1032,7 +1288,8 @@ object PlayerManager {
     ) {
         pendingPlaybackSoundConfig = resolvePlaybackSoundConfigForEngine(
             baseConfig = newConfig,
-            listenTogetherSyncPlaybackRate = listenTogetherSyncPlaybackRate
+            listenTogetherSyncPlaybackRate = listenTogetherSyncPlaybackRate,
+            usbExclusivePlaybackEnabled = usbExclusivePlaybackEnabled
         )
         playbackSoundApplyJob?.cancel()
 
@@ -1089,7 +1346,9 @@ object PlayerManager {
         targetJob.get()?.cancel()
         targetJob.set(
             ioScope.launch {
-                delay(QUALITY_CHANGE_REFRESH_DEBOUNCE_MS)
+                if (QUALITY_CHANGE_REFRESH_DEBOUNCE_MS > 0L) {
+                    delay(QUALITY_CHANGE_REFRESH_DEBOUNCE_MS)
+                }
                 refreshCurrentSongForQualityChange(source = source, reason = reason)
             }
         )
@@ -1111,8 +1370,10 @@ object PlayerManager {
             resumePositionMs = positionMs,
             allowFallback = true,
             reason = reason,
+            bypassCooldown = true,
             fallbackSeekPositionMs = positionMs,
-            resumePlaybackAfterRefresh = shouldResumePlaybackAfterRefresh
+            resumePlaybackAfterRefresh = shouldResumePlaybackAfterRefresh,
+            resumedPlaybackCommandSource = activePlaybackCommandSource
         )
     }
 
