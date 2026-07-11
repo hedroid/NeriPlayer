@@ -12,6 +12,11 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  AUTO_MINOR_PATCH_THRESHOLD: "10"
+  AUTO_MINOR_COMMIT_PREFIX_REGEX: '^(feat|feature|minor|release-minor)(\(.+\))?:'
+  AUTO_MINOR_UPSTREAM_TAG_REGEX: '^v[0-9]+\.[0-9]+\.0$'
+
 jobs:
   sync-and-release:
     runs-on: ubuntu-latest
@@ -113,13 +118,68 @@ jobs:
             exit 1
           fi
 
-          next_patch=$((patch + 1))
-          version_name="${major}.${minor}.${next_patch}"
-          version_code=$((major * 10000 + minor * 100 + next_patch))
+          bump_type="patch"
+          bump_reason="default patch increment"
+          range_start="${{ steps.upstream.outputs.current_sha }}"
+          range_end="${{ steps.upstream.outputs.upstream_sha }}"
+
+          if git log --format='%s' "${range_start}..${range_end}" | grep -Eiq "${AUTO_MINOR_COMMIT_PREFIX_REGEX}"; then
+            bump_type="minor"
+            bump_reason="matched upstream commit prefix rule"
+          else
+            upstream_tag_match="$(
+              git tag --merged "${range_end}" \
+                --sort=-version:refname \
+                | grep -E "${AUTO_MINOR_UPSTREAM_TAG_REGEX}" \
+                | head -n 1 || true
+            )"
+
+            if [ -n "${upstream_tag_match}" ]; then
+              bump_type="minor"
+              bump_reason="matched upstream tag rule (${upstream_tag_match})"
+            else
+              current_month="$(TZ=Asia/Shanghai date +'%Y-%m')"
+              latest_sync_release_tag="$(
+                git for-each-ref \
+                  --sort=-creatordate \
+                  --format='%(refname:short)' \
+                  'refs/tags/v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true
+              )"
+              latest_sync_release_month=""
+              if [ -n "${latest_sync_release_tag}" ]; then
+                latest_sync_release_month="$(
+                  git log -1 --date=format:'%Y-%m' --format='%ad' "${latest_sync_release_tag}" 2>/dev/null || true
+                )"
+              fi
+
+              if [ "${latest_sync_release_month}" != "${current_month}" ]; then
+                bump_type="minor"
+                bump_reason="first auto sync release in current month (${current_month})"
+              else
+                threshold="${AUTO_MINOR_PATCH_THRESHOLD}"
+                if [ "${patch}" -ge "${threshold}" ]; then
+                  bump_type="minor"
+                  bump_reason="patch threshold ${threshold} reached"
+                fi
+              fi
+            fi
+          fi
+
+          if [ "${bump_type}" = "minor" ]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+
+          version_name="${major}.${minor}.${patch}"
+          version_code=$((major * 10000 + minor * 100 + patch))
           tag_name="v${version_name}"
           target_sha="$(git rev-parse HEAD)"
 
           echo "base_version=${base_version}" >> "$GITHUB_OUTPUT"
+          echo "bump_type=${bump_type}" >> "$GITHUB_OUTPUT"
+          echo "bump_reason=${bump_reason}" >> "$GITHUB_OUTPUT"
           echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
           echo "version_code=${version_code}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
@@ -169,6 +229,8 @@ jobs:
             echo "## Auto Sync"
             echo "- Upstream repository: cwuom/NeriPlayer"
             echo "- Upstream commit: ${{ steps.upstream.outputs.upstream_sha }}"
+            echo "- Bump type: ${{ steps.meta.outputs.bump_type }}"
+            echo "- Bump reason: ${{ steps.meta.outputs.bump_reason }}"
             echo "- APK versionName: ${{ steps.meta.outputs.version_name }}"
             echo "- APK versionCode: ${{ steps.meta.outputs.version_code }}"
             echo
