@@ -8,6 +8,21 @@ on:
         required: true
         default: master
         type: string
+      bump_type:
+        description: Version bump strategy
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: Required when bump_type is custom, example 1.2.3
+        required: false
+        default: ""
+        type: string
       release_tag:
         description: Optional Git tag for this release
         required: false
@@ -50,19 +65,77 @@ jobs:
           set -euo pipefail
 
           target_sha="$(git rev-parse HEAD)"
-          version_name="$(sed -n 's/.*RELEASE_VERSION_NAME = "\(.*\)".*/\1/p' build-logic/convention/src/main/kotlin/Common.kt | head -n 1)"
-          if [ -z "${version_name}" ]; then
-            echo "Failed to determine version name from Common.kt"
+          base_version="$(sed -n 's/.*RELEASE_VERSION_NAME = "\(.*\)".*/\1/p' build-logic/convention/src/main/kotlin/Common.kt | head -n 1)"
+          if [ -z "${base_version}" ]; then
+            echo "Failed to determine base version from Common.kt"
             exit 1
           fi
+
+          latest_release_tag="$(
+            git for-each-ref \
+              --sort=-version:refname \
+              --format='%(refname:short)' \
+              'refs/tags/v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true
+          )"
+
+          previous_tag="${latest_release_tag}"
+          seed_version="${base_version}"
+          if [ -n "${latest_release_tag}" ]; then
+            seed_version="${latest_release_tag#v}"
+          fi
+
+          IFS='.' read -r major minor patch <<EOF
+          ${seed_version}
+          EOF
+
+          if [ -z "${major:-}" ] || [ -z "${minor:-}" ] || [ -z "${patch:-}" ]; then
+            echo "Failed to parse semantic version: ${seed_version}"
+            exit 1
+          fi
+
+          case "${{ inputs.bump_type }}" in
+            patch)
+              patch=$((patch + 1))
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            custom)
+              if [ -z "${{ inputs.custom_version }}" ]; then
+                echo "custom_version is required when bump_type=custom"
+                exit 1
+              fi
+              IFS='.' read -r major minor patch <<EOF
+          ${{ inputs.custom_version }}
+          EOF
+              if [ -z "${major:-}" ] || [ -z "${minor:-}" ] || [ -z "${patch:-}" ]; then
+                echo "Invalid custom_version: ${{ inputs.custom_version }}"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported bump_type: ${{ inputs.bump_type }}"
+              exit 1
+              ;;
+          esac
+
+          version_name="${major}.${minor}.${patch}"
+          version_code=$((major * 10000 + minor * 100 + patch))
 
           tag_name="${{ inputs.release_tag }}"
           if [ -z "${tag_name}" ]; then
             tag_name="v${version_name}"
           fi
-          previous_tag="$(git for-each-ref --merged HEAD --sort=-creatordate --format='%(refname:short)' 'refs/tags/v*' | head -n 1 || true)"
 
+          echo "base_version=${base_version}" >> "$GITHUB_OUTPUT"
           echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${version_code}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "target_sha=${target_sha}" >> "$GITHUB_OUTPUT"
           echo "previous_tag=${previous_tag}" >> "$GITHUB_OUTPUT"
@@ -71,6 +144,8 @@ jobs:
         run: |
           ./gradlew clean assembleRelease \
             -PbuildAllReleaseAbis=true \
+            -PbuildVersionName=${{ steps.meta.outputs.version_name }} \
+            -PbuildVersionCode=${{ steps.meta.outputs.version_code }} \
             -PKEYSTORE_FILE=neri.jks \
             -PKEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} \
             -PKEY_ALIAS=neriplayer \
@@ -102,6 +177,11 @@ jobs:
 
           {
             echo
+            echo
+            echo "## Release"
+            echo "- Bump type: ${{ inputs.bump_type }}"
+            echo "- APK versionName: ${{ steps.meta.outputs.version_name }}"
+            echo "- APK versionCode: ${{ steps.meta.outputs.version_code }}"
             echo
             echo "## Commits"
             if [ -n "${PREVIOUS_TAG}" ]; then
