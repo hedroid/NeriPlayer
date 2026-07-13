@@ -73,11 +73,15 @@ jobs:
           fi
 
       - name: Require workflow push token when workflow files changed
-        if: steps.upstream.outputs.has_changes == 'true' && steps.workflow_changes.outputs.has_workflow_changes == 'true' && secrets.SYNC_PUSH_TOKEN == ''
+        if: steps.upstream.outputs.has_changes == 'true' && steps.workflow_changes.outputs.has_workflow_changes == 'true'
+        env:
+          SYNC_PUSH_TOKEN: ${{ secrets.SYNC_PUSH_TOKEN }}
         run: |
-          echo "Upstream sync changed .github/workflows files, but SYNC_PUSH_TOKEN is not configured."
-          echo "Please add a GitHub token with repo + workflow permissions as repository secret SYNC_PUSH_TOKEN."
-          exit 1
+          if [ -z "${SYNC_PUSH_TOKEN}" ]; then
+            echo "Upstream sync changed .github/workflows files, but SYNC_PUSH_TOKEN is not configured."
+            echo "Please add a GitHub token with repo + workflow permissions as repository secret SYNC_PUSH_TOKEN."
+            exit 1
+          fi
 
       - name: Push merged master
         if: steps.upstream.outputs.has_changes == 'true'
