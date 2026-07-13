@@ -43,6 +43,7 @@ import moe.ouom.neriplayer.data.model.identity
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.sync.github.ConflictResolution
 import moe.ouom.neriplayer.data.sync.github.ConflictType
+import moe.ouom.neriplayer.data.sync.github.copyWithNormalizedMembershipTokens
 import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
 import moe.ouom.neriplayer.data.sync.github.SyncConflict
 import moe.ouom.neriplayer.data.sync.github.SyncDataChangeDetector
@@ -319,7 +320,9 @@ class WebDavSyncManager private constructor(context: Context) {
             }
         val syncPlaylistSongDeletions = storage.getPlaylistSongDeletions()
             .map {
-                it.copy(mediaUri = LocalSongSupport.sanitizeMediaUriForSync(it.mediaUri))
+                it.copyWithNormalizedMembershipTokens(
+                    mediaUri = LocalSongSupport.sanitizeMediaUriForSync(it.mediaUri)
+                )
             }
 
         val playbackCounterSnapshot = playbackStatsRepo.syncCounterSnapshot()
@@ -955,7 +958,9 @@ class WebDavSyncManager private constructor(context: Context) {
         if (LocalSongSupport.isLocalSong(deletion.album, deletion.mediaUri, 0L, appContext)) {
             return null
         }
-        return deletion.copy(mediaUri = LocalSongSupport.sanitizeMediaUriForSync(deletion.mediaUri))
+        return deletion.copyWithNormalizedMembershipTokens(
+            mediaUri = LocalSongSupport.sanitizeMediaUriForSync(deletion.mediaUri)
+        )
     }
 
     private fun sanitizeSyncSong(song: SyncSong): SyncSong? {
@@ -963,7 +968,9 @@ class WebDavSyncManager private constructor(context: Context) {
         if (LocalSongSupport.isLocalSong(song.album, song.mediaUri, song.albumId, localizedContext)) {
             return null
         }
-        return song.copy(mediaUri = LocalSongSupport.sanitizeMediaUriForSync(song.mediaUri))
+        return song.copyWithNormalizedMembershipTokens(
+            mediaUri = LocalSongSupport.sanitizeMediaUriForSync(song.mediaUri)
+        )
     }
 
     private fun hasDataChanged(remote: SyncData, merged: SyncData): Boolean {
