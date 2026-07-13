@@ -40,8 +40,8 @@ import moe.ouom.neriplayer.core.api.search.QQMusicSearchApi
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicClient
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicPlaybackRepository
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
-import moe.ouom.neriplayer.core.player.AudioDownloadManager
-import moe.ouom.neriplayer.data.ListenTogetherPreferences
+import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
+import moe.ouom.neriplayer.data.listentogether.ListenTogetherPreferences
 import moe.ouom.neriplayer.data.auth.bili.BiliCookieRepository
 import moe.ouom.neriplayer.data.auth.netease.NeteaseCookieRepository
 import moe.ouom.neriplayer.data.auth.web.ForegroundWebLoginGuard
@@ -55,9 +55,9 @@ import moe.ouom.neriplayer.data.platform.youtube.YouTubeMusicPlaylistCacheReposi
 import moe.ouom.neriplayer.data.playlist.usage.PlaylistUsageRepository
 import moe.ouom.neriplayer.data.stats.PlaybackStatsRepository
 import moe.ouom.neriplayer.data.traffic.TrafficStatsRepository
-import moe.ouom.neriplayer.listentogether.ListenTogetherApi
+import moe.ouom.neriplayer.listentogether.network.http.ListenTogetherApi
 import moe.ouom.neriplayer.listentogether.ListenTogetherSessionManager
-import moe.ouom.neriplayer.listentogether.ListenTogetherWebSocketClient
+import moe.ouom.neriplayer.listentogether.network.ws.ListenTogetherWebSocketClient
 import moe.ouom.neriplayer.data.settings.dataStore
 import moe.ouom.neriplayer.data.settings.persistBootstrapSettingsSnapshot
 import moe.ouom.neriplayer.data.settings.persistPlaybackPreferenceSnapshot
@@ -71,7 +71,7 @@ import moe.ouom.neriplayer.data.platform.youtube.buildYouTubeStreamRequestHeader
 import moe.ouom.neriplayer.data.platform.youtube.isTrustedYouTubeHost
 import moe.ouom.neriplayer.data.platform.youtube.isYouTubeGoogleVideoHost
 import moe.ouom.neriplayer.data.platform.youtube.isYouTubeInnertubeHost
-import moe.ouom.neriplayer.util.DynamicProxySelector
+import moe.ouom.neriplayer.util.network.DynamicProxySelector
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit

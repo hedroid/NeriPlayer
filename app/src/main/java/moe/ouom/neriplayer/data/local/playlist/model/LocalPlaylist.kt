@@ -23,12 +23,16 @@ package moe.ouom.neriplayer.data.local.playlist.model
  * Updated: 2026/3/23
  */
 
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 
 data class LocalPlaylist(
     val id: Long,
     val name: String,
     val songs: MutableList<SongItem> = mutableListOf(),
     val modifiedAt: Long = System.currentTimeMillis(),
-    val customCoverUrl: String? = null
+    val customCoverUrl: String? = null,
+    val songOrderVersion: Int = DISPLAY_ORDER_SONG_ORDER_VERSION
 )
+
+const val LEGACY_SONG_ORDER_VERSION = 0
+const val DISPLAY_ORDER_SONG_ORDER_VERSION = 1

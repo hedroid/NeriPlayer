@@ -141,7 +141,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -151,7 +150,6 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.R
@@ -159,12 +157,13 @@ import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.download.countPendingDownloadTasks
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
-import moe.ouom.neriplayer.core.player.AudioDownloadManager
+import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.data.local.audioimport.LocalAudioImportResult
 import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
 import moe.ouom.neriplayer.data.local.media.LocalMediaSupport
+import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.system.SystemLocalPlaylists
 import moe.ouom.neriplayer.data.local.media.displayAlbum
@@ -177,23 +176,26 @@ import moe.ouom.neriplayer.data.local.media.isLocalSong
 import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.component.BatchDownloadManagerSheet
-import moe.ouom.neriplayer.ui.component.PlaylistExportSheet
-import moe.ouom.neriplayer.ui.component.LocalSongDetailsDialog
-import moe.ouom.neriplayer.ui.component.LocalSongSyncConfirmDialog
-import moe.ouom.neriplayer.ui.component.SongDownloadSubtitle
+import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
+import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.local.LocalSongDetailsDialog
+import moe.ouom.neriplayer.ui.component.local.LocalSongSyncConfirmDialog
+import moe.ouom.neriplayer.ui.component.download.SongDownloadSubtitle
+import moe.ouom.neriplayer.ui.util.rememberPlaylistDisplayCoverUrl
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.ui.viewmodel.playlist.LocalPlaylistDetailViewModel
 import moe.ouom.neriplayer.ui.viewmodel.playlist.LocalPlaylistDetailUiState
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.HapticFloatingActionButton
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticOutlinedButton
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.formatDuration
-import moe.ouom.neriplayer.util.formatTotalDuration
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.ui.viewmodel.playlist.LocalMetadataProcessingState
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
+import moe.ouom.neriplayer.ui.haptic.HapticFloatingActionButton
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticOutlinedButton
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.util.format.formatTotalDuration
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 import org.burnoutcrew.reorderable.ItemPosition
 import org.burnoutcrew.reorderable.ReorderableItem
 import org.burnoutcrew.reorderable.detectReorder
@@ -248,16 +250,25 @@ internal fun toggleDisplayedSongSelection(
     }
 }
 
-internal fun <T> snapshotReversedList(items: List<T>): List<T> {
-    return items.toList().asReversed()
+internal fun <T> snapshotDisplayOrderList(items: List<T>): List<T> {
+    return items.toList()
 }
 
 internal fun selectedStoredLocalSongsForExport(
     storedSongs: List<SongItem>,
     selectedKeys: Set<String>
 ): List<SongItem> {
-    // 目标歌单也会倒序展示，所以这里保留存储顺序，避免全选新建后看起来反过来
     return storedSongs.filter { it.stableKey() in selectedKeys }
+}
+
+private fun SongItem.optimisticPlaylistInsertKeys(): Set<String> {
+    return buildSet {
+        add("identity:${stableKey()}")
+        LocalSongSupport.localDuplicateKeys(
+            song = this@optimisticPlaylistInsertKeys,
+            includeMetadataFallback = true
+        ).forEach { key -> add("local:$key") }
+    }
 }
 
 internal fun normalizeLocalPlaylistHeaderCoverModel(headerCover: String?): String {
@@ -298,6 +309,10 @@ fun LocalPlaylistDetailScreen(
         resolveDisplayedLocalPlaylistDetailState(rawUiState, playlistId)
     }
     val scanPreviewState by vm.scanPreviewState.collectAsState()
+    val metadataProcessingState by vm.metadataProcessingState.collectAsState()
+    val visibleMetadataProcessingState = metadataProcessingState
+        .takeIf { it.playlistId == playlistId }
+        ?: LocalMetadataProcessingState()
     LaunchedEffect(playlistId) { vm.start(playlistId) }
 
     // 保存最新的歌单数据，用于在Screen销毁时更新使用记录
@@ -533,11 +548,18 @@ fun LocalPlaylistDetailScreen(
                 contract = ActivityResultContracts.OpenDocumentTree()
             ) { uri ->
                 uri ?: return@rememberLauncherForActivityResult
-                runCatching {
+                val persistGranted = runCatching {
                     context.contentResolver.takePersistableUriPermission(
                         uri,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                     )
+                }.isSuccess
+                if (!persistGranted) {
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            "目录持久授权失败，导入的歌曲在应用重启后可能无法访问"
+                        )
+                    }
                 }
                 startFolderAudioScan(uri)
             }
@@ -588,7 +610,7 @@ fun LocalPlaylistDetailScreen(
                 )
             }
 
-            // 可变列表保持存储层顺序，UI 读取时用快照倒序展示
+            // 可变列表保持展示顺序，数据层会负责兼容旧版本存储
             val localSongs = remember(playlistId) {
                 mutableStateListOf<SongItem>().also { it.addAll(playlist.songs) }
             }
@@ -635,6 +657,30 @@ fun LocalPlaylistDetailScreen(
                     pendingSyncConfirmAction = action
                 } else {
                     action()
+                }
+            }
+
+            fun appendSongsOptimistically(targetPlaylistId: Long, songs: List<SongItem>) {
+                val isCurrentTarget = targetPlaylistId == playlistId ||
+                    (targetPlaylistId == LocalFilesPlaylist.SYSTEM_ID && isLocalFilesPlaylist)
+                if (!isCurrentTarget || songs.isEmpty()) return
+                val existingKeys = HashSet<String>(localSongs.size * 2)
+                localSongs.forEach { song ->
+                    existingKeys += song.optimisticPlaylistInsertKeys()
+                }
+                val now = System.currentTimeMillis()
+                val additions = songs.mapNotNull { song ->
+                    val candidateKeys = song.optimisticPlaylistInsertKeys()
+                    if (candidateKeys.any(existingKeys::contains)) {
+                        return@mapNotNull null
+                    }
+                    existingKeys += candidateKeys
+                    song
+                }.mapIndexed { index, song ->
+                    song.copy(addedAt = (now - index).coerceAtLeast(1L))
+                }
+                if (additions.isNotEmpty()) {
+                    localSongs.addAll(0, additions)
                 }
             }
 
@@ -827,7 +873,7 @@ fun LocalPlaylistDetailScreen(
             val hasRestoredScroll = rememberSaveable(playlistId) { mutableStateOf(false) }
             val listState = reorderState.listState
             val baseQueue by remember(localSongs) {
-                derivedStateOf { snapshotReversedList(localSongs) }
+                derivedStateOf { snapshotDisplayOrderList(localSongs) }
             }
             val queueIndexBySongKey by remember(baseQueue) {
                 derivedStateOf {
@@ -838,27 +884,13 @@ fun LocalPlaylistDetailScreen(
                     }
                 }
             }
-            val appContext = remember(context) { context.applicationContext }
-            var headerCover by remember(playlistId, baseQueue, downloadPresenceVersion) {
-                mutableStateOf(
-                    baseQueue.firstNotNullOfOrNull { song ->
-                        song.displayCoverUrl(context)?.takeIf(String::isNotBlank)
-                    }
-                )
+            val displayOrderPlaylistForCover = remember(playlist, baseQueue) {
+                playlist.copy(songs = baseQueue.toMutableList())
             }
-            LaunchedEffect(playlistId, baseQueue, appContext, downloadPresenceVersion) {
-                val immediateCover = baseQueue.firstNotNullOfOrNull { song ->
-                    song.displayCoverUrl(context)?.takeIf(String::isNotBlank)
-                }
-                headerCover = immediateCover
-                withContext(Dispatchers.IO) {
-                    baseQueue.firstNotNullOfOrNull { song ->
-                        song.displayCoverUrl(appContext)?.takeIf(String::isNotBlank)
-                    }
-                }?.let { resolvedCover ->
-                    headerCover = resolvedCover
-                }
-            }
+            val headerCover = rememberPlaylistDisplayCoverUrl(
+                playlist = displayOrderPlaylistForCover,
+                resolveLocalFallback = true
+            )
             val displayedSongs by remember(baseQueue, searchQuery, context) {
                 derivedStateOf {
                     val base = baseQueue
@@ -939,6 +971,8 @@ fun LocalPlaylistDetailScreen(
                     songs = scanPreviewState.songs,
                     query = scanPreviewState.query,
                     onQueryChange = vm::updateScanPreviewQuery,
+                    metadataOnly = scanPreviewState.metadataOnly,
+                    onMetadataOnlyChange = vm::updateScanPreviewMetadataOnly,
                     selectedKeys = scanPreviewState.selectedKeys,
                     onSelectedKeysChange = vm::updateScanPreviewSelection,
                     snackbarHostState = snackbarHostState,
@@ -947,6 +981,7 @@ fun LocalPlaylistDetailScreen(
                         val selectedSongs = scanPreviewState.songs.filter {
                             it.stableKey() in scanPreviewState.selectedKeys
                         }
+                        appendSongsOptimistically(LocalFilesPlaylist.SYSTEM_ID, selectedSongs)
                         vm.applyScannedSongs(selectedSongs, ::showAudioImportResult)
                         dismissScanPreviewPage(cancelScan = false)
                     },
@@ -986,6 +1021,7 @@ fun LocalPlaylistDetailScreen(
                                 songs = selectedSongs,
                                 actionLabel = context.getString(R.string.playlist_add_to)
                             ) {
+                                appendSongsOptimistically(target.id, selectedSongs)
                                 vm.addScannedSongsToPlaylist(
                                     targetPlaylistId = target.id,
                                     songs = selectedSongs,
@@ -1328,10 +1364,20 @@ fun LocalPlaylistDetailScreen(
                                 }
                             }
 
-                            // 列表（倒序）
+                            if (visibleMetadataProcessingState.isProcessing) {
+                                item(
+                                    key = "metadata_processing_card",
+                                    contentType = "local_metadata_processing"
+                                ) {
+                                    LocalMetadataProcessingCard(visibleMetadataProcessingState)
+                                }
+                            }
+
+                            // 列表
                             itemsIndexed(
                                 items = displayedSongs,
-                                key = { _, song -> song.stableKey() }
+                                key = { _, song -> song.stableKey() },
+                                contentType = { _, _ -> "local_playlist_song" }
                             ) { revIndex, song ->
                                 ReorderableItem(state = reorderState, key = song.stableKey()) { isDragging ->
                                     val rowScale by animateFloatAsState(
@@ -1390,7 +1436,7 @@ fun LocalPlaylistDetailScreen(
                                                     )
                                                 } else {
                                                     Text(
-                                                        text = (revIndex + 1).toString(), // 展示顺序编号（倒序）
+                                                        text = (revIndex + 1).toString(),
                                                         style = MaterialTheme.typography.titleSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                         maxLines = 1,
@@ -1404,11 +1450,11 @@ fun LocalPlaylistDetailScreen(
                                             val displayCoverUrl = rememberSongDisplayCoverUrl(song)
                                             if (!displayCoverUrl.isNullOrBlank()) {
                                                 AsyncImage(
-                                                    model = offlineCachedImageRequest(
+                                                    model = fastScrollableImageRequest(
                                                         context = itemContext,
                                                         data = displayCoverUrl,
-                                                        sizePx = 192,
-                                                        allowHardware = false,
+                                                        sizePx = 128,
+                                                        crossfade = false,
                                                         offlineMode = offlineMode
                                                     ),
                                                     contentDescription = null,
@@ -1688,8 +1734,9 @@ fun LocalPlaylistDetailScreen(
                                 actionLabel = context.getString(R.string.playlist_add_to)
                             ) {
                                 scope.launch {
-                                    repo.createPlaylistWithSongs(name, songs)
+                                    repo.createPlaylistWithPreparedSongs(name, songs)
                                 }
+                                exitSelectionMode()
                             }
                         },
                         onExportToPlaylist = { target ->
@@ -1702,8 +1749,9 @@ fun LocalPlaylistDetailScreen(
                                 actionLabel = context.getString(R.string.playlist_add_to)
                             ) {
                                 scope.launch {
-                                    repo.addSongsToPlaylist(target.id, songs)
+                                    repo.addPreparedSongsToPlaylist(target.id, songs)
                                 }
+                                exitSelectionMode()
                             }
                         }
                     )
@@ -1787,12 +1835,61 @@ fun LocalPlaylistDetailScreen(
     }
 }
 
+@Composable
+private fun LocalMetadataProcessingCard(state: LocalMetadataProcessingState) {
+    val total = state.totalCount.coerceAtLeast(0)
+    val processed = state.processedCount.coerceIn(0, total.takeIf { it > 0 } ?: Int.MAX_VALUE)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.56f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.5.dp
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.local_playlist_metadata_processing_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = if (total > 0) {
+                        stringResource(
+                            R.string.local_playlist_metadata_processing_message,
+                            processed,
+                            total
+                        )
+                    } else {
+                        stringResource(R.string.local_playlist_metadata_processing_message_unknown)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
+                )
+            }
+        }
+    }
+}
+
 private data class LocalScanPreviewItem(
     val song: SongItem,
     val stableKey: String,
+    val title: String,
     val fileName: String,
     val filePath: String,
     val subtitle: String,
+    val hasMetadata: Boolean,
     val searchText: String
 )
 
@@ -1810,21 +1907,38 @@ private fun SongItem.toLocalScanPreviewItem(context: Context): LocalScanPreviewI
         ?.name
         ?: localFileName?.takeIf { it.isNotBlank() }
         ?: displayName
+    val hasMetadata = hasMeaningfulPreviewMetadata(context, resolvedFileName)
     val subtitle = buildList {
-        displayName.takeIf { it.isNotBlank() && it != resolvedFileName }?.let(::add)
         displayArtist.takeIf { it.isNotBlank() }?.let(::add)
         displayAlbum.takeIf { it.isNotBlank() }?.let(::add)
+        resolvedFileName.takeIf { it.isNotBlank() && it != displayName }?.let(::add)
         durationMs.takeIf { it > 0L }?.let { add(formatDuration(it)) }
     }.joinToString(" · ")
     return LocalScanPreviewItem(
         song = this,
         stableKey = stableKey(),
+        title = displayName,
         fileName = resolvedFileName,
         filePath = resolvedPath,
         subtitle = subtitle,
+        hasMetadata = hasMetadata,
         searchText = listOf(resolvedFileName, resolvedPath, displayName, displayArtist, displayAlbum)
             .joinToString("\n")
     )
+}
+
+private fun SongItem.hasMeaningfulPreviewMetadata(context: Context, fileName: String): Boolean {
+    val fileTitle = fileName.substringBeforeLast('.', fileName).trim()
+    val unknownArtist = context.getString(R.string.music_unknown_artist)
+    val hasTitleMetadata = name.isNotBlank() &&
+        (fileTitle.isBlank() || !name.equals(fileTitle, ignoreCase = true))
+    val hasArtistMetadata = artist.trim().isNotBlank() &&
+        !artist.equals(unknownArtist, ignoreCase = true)
+    val hasAlbumMetadata = album.trim().isNotBlank() &&
+        album != moe.ouom.neriplayer.data.local.media.LocalSongSupport.LOCAL_ALBUM_IDENTITY &&
+        !LocalFilesPlaylist.matches(album, context)
+    return hasTitleMetadata || hasArtistMetadata || hasAlbumMetadata ||
+        !coverUrl.isNullOrBlank() || !originalCoverUrl.isNullOrBlank()
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -1834,6 +1948,8 @@ private fun LocalScanPreviewScreen(
     songs: List<SongItem>,
     query: String,
     onQueryChange: (String) -> Unit,
+    metadataOnly: Boolean = false,
+    onMetadataOnlyChange: ((Boolean) -> Unit)? = null,
     selectedKeys: Set<String>,
     onSelectedKeysChange: (Set<String>) -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -1862,25 +1978,46 @@ private fun LocalScanPreviewScreen(
     val displayedItems by produceState<List<LocalScanPreviewItem>>(
         initialValue = emptyList(),
         previewItems,
-        query
+        query,
+        metadataOnly
     ) {
         val keyword = query.trim()
-        value = if (keyword.isBlank()) {
+        value = withContext(Dispatchers.Default) {
             previewItems
-        } else {
-            withContext(Dispatchers.Default) {
-                previewItems.filter { item ->
-                    item.searchText.contains(keyword, ignoreCase = true)
-                }
+                .asSequence()
+                .filter { item -> !metadataOnly || item.hasMetadata }
+                .filter { item -> keyword.isBlank() || item.searchText.contains(keyword, ignoreCase = true) }
+                .toList()
+        }
+    }
+    LaunchedEffect(metadataOnly, previewItems) {
+        if (metadataOnly) {
+            val metadataKeys = previewItems
+                .asSequence()
+                .filter { it.hasMetadata }
+                .mapTo(LinkedHashSet()) { it.stableKey }
+            val nextSelectedKeys = selectedKeys.intersect(metadataKeys)
+            if (nextSelectedKeys != selectedKeys) {
+                onSelectedKeysChange(nextSelectedKeys)
             }
         }
     }
-    val allDisplayedSelected = displayedItems.isNotEmpty() &&
-        displayedItems.all { it.stableKey in selectedKeys }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val metadataFilterAvailable = onMetadataOnlyChange != null
+    val displayedKeys by remember(displayedItems) {
+        derivedStateOf {
+            displayedItems.mapTo(LinkedHashSet(displayedItems.size)) { it.stableKey }
+        }
+    }
+    val allDisplayedSelected = displayedKeys.isNotEmpty() && displayedKeys.all(selectedKeys::contains)
     val resolvedTitle = title ?: stringResource(R.string.local_playlist_scan_preview_title)
     val resolvedSearchPlaceholder =
         searchPlaceholder ?: stringResource(R.string.local_playlist_scan_preview_search)
-    val resolvedEmptyText = emptyText ?: stringResource(R.string.download_scan_empty)
+    val resolvedEmptyText = emptyText ?: if (metadataOnly) {
+        stringResource(R.string.local_playlist_scan_metadata_empty)
+    } else {
+        stringResource(R.string.download_scan_empty)
+    }
     val resolvedActionLabel = actionLabel?.invoke(selectedKeys.size)
         ?: stringResource(R.string.download_scan_add_selected, selectedKeys.size)
     val showBusy = isScanning || isBusy
@@ -1914,6 +2051,36 @@ private fun LocalScanPreviewScreen(
                                 .size(18.dp),
                             strokeWidth = 2.dp
                         )
+                    }
+                    if (metadataFilterAvailable) {
+                        Box {
+                            HapticIconButton(onClick = { showMoreMenu = true }) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = stringResource(R.string.common_more_options)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(stringResource(R.string.local_playlist_scan_filter_metadata))
+                                    },
+                                    trailingIcon = {
+                                        Checkbox(
+                                            checked = metadataOnly,
+                                            onCheckedChange = null
+                                        )
+                                    },
+                                    onClick = {
+                                        onMetadataOnlyChange?.invoke(!metadataOnly)
+                                        showMoreMenu = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 },
                 windowInsets = WindowInsets.statusBars,
@@ -2018,9 +2185,9 @@ private fun LocalScanPreviewScreen(
                         onClick = {
                             onSelectedKeysChange(
                                 if (allDisplayedSelected) {
-                                    selectedKeys - displayedItems.map { it.stableKey }.toSet()
+                                    selectedKeys - displayedKeys
                                 } else {
-                                    selectedKeys + displayedItems.map { it.stableKey }.toSet()
+                                    selectedKeys + displayedKeys
                                 }
                             )
                         }
@@ -2036,7 +2203,6 @@ private fun LocalScanPreviewScreen(
                     HapticTextButton(
                         enabled = displayedItems.isNotEmpty(),
                         onClick = {
-                            val displayedKeys = displayedItems.map { it.stableKey }.toSet()
                             onSelectedKeysChange(
                                 selectedKeys
                                     .subtract(displayedKeys)
@@ -2065,7 +2231,11 @@ private fun LocalScanPreviewScreen(
                         state = listState,
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(displayedItems, key = { _, item -> item.stableKey }) { _, item ->
+                        itemsIndexed(
+                            items = displayedItems,
+                            key = { _, item -> item.stableKey },
+                            contentType = { _, _ -> "local_scan_preview_song" }
+                        ) { _, item ->
                             val selected = item.stableKey in selectedKeys
                             Row(
                                 modifier = Modifier
@@ -2099,7 +2269,7 @@ private fun LocalScanPreviewScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(
-                                        text = item.fileName,
+                                        text = item.title,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         style = MaterialTheme.typography.bodyLarge

@@ -32,10 +32,12 @@ import moe.ouom.neriplayer.data.local.playlist.system.SystemLocalPlaylists
 import moe.ouom.neriplayer.core.api.search.MusicPlatform
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylist
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
+import moe.ouom.neriplayer.data.local.playlist.model.DISPLAY_ORDER_SONG_ORDER_VERSION
+import moe.ouom.neriplayer.data.local.playlist.model.LEGACY_SONG_ORDER_VERSION
 import moe.ouom.neriplayer.data.local.playlist.model.LocalPlaylist
 import moe.ouom.neriplayer.data.model.SongIdentity
 import moe.ouom.neriplayer.data.model.stableKey
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 
 /**
  * 同步数据结构
@@ -69,7 +71,8 @@ data class SyncPlaylist(
     @ProtoNumber(3) val songs: List<SyncSong>,
     @ProtoNumber(4) val createdAt: Long,
     @ProtoNumber(5) val modifiedAt: Long,
-    @ProtoNumber(6) val isDeleted: Boolean = false
+    @ProtoNumber(6) val isDeleted: Boolean = false,
+    @ProtoNumber(7) val songOrderVersion: Int = LEGACY_SONG_ORDER_VERSION
 ) {
     companion object {
         fun fromLocalPlaylist(playlist: LocalPlaylist, modifiedAt: Long = System.currentTimeMillis(), context: Context? = null): SyncPlaylist {
@@ -81,19 +84,73 @@ data class SyncPlaylist(
                 name = systemDescriptor?.currentName ?: playlist.name,
                 songs = playlist.songs.mapNotNull { SyncSong.fromSongItemOrNull(it, context) },
                 createdAt = playlist.id, // 使用ID作为创建时间
-                modifiedAt = modifiedAt
+                modifiedAt = modifiedAt,
+                songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
+            )
+        }
+    }
+
+    internal fun normalizedForDisplayOrder(now: Long = System.currentTimeMillis()): SyncPlaylist {
+        if (isDeleted) {
+            return copy(
+                songs = emptyList(),
+                songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
+            )
+        }
+
+        val displaySongs = if (songOrderVersion >= DISPLAY_ORDER_SONG_ORDER_VERSION) {
+            songs.sortedByAddedAtForDisplay()
+        } else {
+            songs.migrateLegacySongsToDisplayOrder(modifiedAt, now)
+        }
+        return if (
+            songOrderVersion >= DISPLAY_ORDER_SONG_ORDER_VERSION &&
+            displaySongs == songs
+        ) {
+            this
+        } else {
+            copy(
+                songs = displaySongs,
+                songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
             )
         }
     }
 
     fun toLocalPlaylist(): LocalPlaylist {
+        val normalized = normalizedForDisplayOrder()
         return LocalPlaylist(
-            id = id,
-            name = name,
-            songs = songs.map { it.toSongItem() }.toMutableList(),
-            modifiedAt = modifiedAt
+            id = normalized.id,
+            name = normalized.name,
+            songs = normalized.songs.map { it.toSongItem() }.toMutableList(),
+            modifiedAt = normalized.modifiedAt,
+            songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
         )
     }
+}
+
+private fun List<SyncSong>.migrateLegacySongsToDisplayOrder(
+    playlistModifiedAt: Long,
+    now: Long
+): List<SyncSong> {
+    if (isEmpty()) return emptyList()
+    val newestAddedAt = maxOf(
+        now,
+        playlistModifiedAt,
+        maxOfOrNull { it.addedAt } ?: 0L
+    )
+    return asReversed().mapIndexed { index, song ->
+        song.copy(addedAt = (newestAddedAt - index).coerceAtLeast(1L))
+    }
+}
+
+private fun List<SyncSong>.sortedByAddedAtForDisplay(): List<SyncSong> {
+    if (size < 2) return this
+    return withIndex()
+        .sortedWith(
+            compareByDescending<IndexedValue<SyncSong>> { it.value.addedAt }
+                .thenBy { it.index }
+        )
+        .map { it.value }
 }
 
 /**
@@ -152,7 +209,7 @@ data class SyncSong(
                 durationMs = song.durationMs,
                 coverUrl = syncCoverUrl,
                 mediaUri = LocalSongSupport.sanitizeMediaUriForSync(song.mediaUri),
-                addedAt = song.addedAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                addedAt = song.addedAt.coerceAtLeast(0L),
                 matchedLyric = song.matchedLyric,
                 matchedTranslatedLyric = song.matchedTranslatedLyric,
                 matchedLyricSource = song.matchedLyricSource?.name,
@@ -414,6 +471,16 @@ enum class ConflictResolution {
 }
 
 @Serializable
+data class SyncPlaybackCounterShard(
+    @ProtoNumber(1) val deviceId: String,
+    @ProtoNumber(2) val epochStartedAt: Long = 0L,
+    @ProtoNumber(3) val totalListenMs: Long = 0L,
+    @ProtoNumber(4) val playCount: Int = 0,
+    @ProtoNumber(5) val firstPlayedAt: Long = 0L,
+    @ProtoNumber(6) val lastPlayedAt: Long = 0L
+)
+
+@Serializable
 data class SyncTrackStat(
     @ProtoNumber(1) val identityKey: String,
     @ProtoNumber(2) val name: String,
@@ -427,7 +494,10 @@ data class SyncTrackStat(
     @ProtoNumber(10) val durationMs: Long = 0L,
     @ProtoNumber(11) val mediaUri: String? = null,
     @ProtoNumber(12) val id: Long = 0L,
-    @ProtoNumber(13) val albumId: Long = 0L
+    @ProtoNumber(13) val albumId: Long = 0L,
+    @ProtoNumber(14) val counterBaseListenMs: Long = 0L,
+    @ProtoNumber(15) val counterBasePlayCount: Int = 0,
+    @ProtoNumber(16) val counterShards: List<SyncPlaybackCounterShard> = emptyList()
 )
 
 @Serializable
@@ -445,5 +515,8 @@ data class SyncPlaybackStatBucket(
     @ProtoNumber(11) val durationMs: Long = 0L,
     @ProtoNumber(12) val mediaUri: String? = null,
     @ProtoNumber(13) val id: Long = 0L,
-    @ProtoNumber(14) val albumId: Long = 0L
+    @ProtoNumber(14) val albumId: Long = 0L,
+    @ProtoNumber(15) val counterBaseListenMs: Long = 0L,
+    @ProtoNumber(16) val counterBasePlayCount: Int = 0,
+    @ProtoNumber(17) val counterShards: List<SyncPlaybackCounterShard> = emptyList()
 )

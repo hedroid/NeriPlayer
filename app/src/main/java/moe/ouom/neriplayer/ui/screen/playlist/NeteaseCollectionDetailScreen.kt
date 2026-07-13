@@ -30,13 +30,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -81,14 +79,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
@@ -134,7 +129,7 @@ import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
-import moe.ouom.neriplayer.core.player.AudioDownloadManager
+import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
@@ -144,23 +139,22 @@ import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.component.BatchDownloadManagerSheet
-import moe.ouom.neriplayer.ui.component.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
+import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionDetailUiState
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionDetailViewModel
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionHeader
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
-import moe.ouom.neriplayer.util.HapticFloatingActionButton
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.util.formatDuration
-import moe.ouom.neriplayer.util.formatPlayCount
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.ui.haptic.HapticFloatingActionButton
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.util.format.formatPlayCount
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -701,7 +695,6 @@ fun DetailScreen(
                         onDismissRequest = { showExportSheet = false },
                         onCreateAndExport = { name ->
                             val songs = ui.tracks
-                                .asReversed()
                                 .filter { selectedIds.contains(it.id) }
                             scope.launch {
                                 repo.createPlaylistWithSongs(name, songs)
@@ -709,7 +702,6 @@ fun DetailScreen(
                         },
                         onExportToPlaylist = { playlist ->
                             val songs = ui.tracks
-                                .asReversed()
                                 .filter { selectedIds.contains(it.id) }
                             scope.launch {
                                 repo.addSongsToPlaylist(playlist.id, songs)

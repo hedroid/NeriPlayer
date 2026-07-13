@@ -82,7 +82,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -115,6 +115,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -138,8 +139,6 @@ import dev.chrisbanes.haze.hazeChild
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -150,17 +149,17 @@ import moe.ouom.neriplayer.core.api.search.MusicPlatform
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
-import moe.ouom.neriplayer.core.player.AudioPlayerService
-import moe.ouom.neriplayer.core.player.AudioReactive
+import moe.ouom.neriplayer.core.player.effects.AudioReactive
 import moe.ouom.neriplayer.core.player.PlayerManager
-import moe.ouom.neriplayer.core.player.recoverUsbExclusivePlaybackOnForeground
-import moe.ouom.neriplayer.core.player.StartupAudioFocusController
-import moe.ouom.neriplayer.core.player.updateUsbExclusiveForegroundState
-import moe.ouom.neriplayer.core.player.preloadRestoredStateSnapshot
-import moe.ouom.neriplayer.core.player.shouldSkipLocalPlaybackSyncServiceStart
+import moe.ouom.neriplayer.core.player.lifecycle.recoverUsbExclusivePlaybackOnForeground
+import moe.ouom.neriplayer.core.player.lifecycle.updateUsbExclusiveForegroundState
+import moe.ouom.neriplayer.core.player.service.AudioPlayerService
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
-import moe.ouom.neriplayer.core.player.policy.PlaybackCommandSource
-import moe.ouom.neriplayer.core.player.policy.shouldSyncPlaybackServiceForLocalPlaybackCommand
+import moe.ouom.neriplayer.core.startup.player.PlayerStartupBootstrapper
+import moe.ouom.neriplayer.core.startup.player.PlayerStartupAudioFocusRefresher
+import moe.ouom.neriplayer.core.startup.player.PlayerStartupHistoryRecorder
+import moe.ouom.neriplayer.core.startup.player.PlayerStartupServiceSyncCoordinator
+import moe.ouom.neriplayer.core.startup.theme.StartupThemeResolver
 import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayCoverUrl
 import moe.ouom.neriplayer.data.model.displayName
@@ -171,15 +170,14 @@ import moe.ouom.neriplayer.data.settings.PlaybackPreferenceSnapshot
 import moe.ouom.neriplayer.data.settings.ThemeDefaults
 import moe.ouom.neriplayer.data.settings.ThemeMode
 import moe.ouom.neriplayer.data.settings.ThemePreferenceSnapshot
-import moe.ouom.neriplayer.data.settings.readPlaybackPreferenceSnapshot
 import moe.ouom.neriplayer.data.settings.readPlaybackPreferenceSnapshotCached
 import moe.ouom.neriplayer.data.storage.clearExtraStorageCaches
 import moe.ouom.neriplayer.data.traffic.TrafficNetworkType
 import moe.ouom.neriplayer.navigation.Destinations
-import moe.ouom.neriplayer.ui.component.NeriBottomBar
-import moe.ouom.neriplayer.ui.component.NeriMiniPlayer
-import moe.ouom.neriplayer.ui.component.ThemeRevealOverlay
-import moe.ouom.neriplayer.ui.component.blockUnderlyingTouches
+import moe.ouom.neriplayer.ui.component.navigation.NeriBottomBar
+import moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayer
+import moe.ouom.neriplayer.ui.component.common.ThemeRevealOverlay
+import moe.ouom.neriplayer.ui.component.common.blockUnderlyingTouches
 import moe.ouom.neriplayer.ui.screen.DownloadManagerScreen
 import moe.ouom.neriplayer.ui.screen.DownloadProgressScreen
 import moe.ouom.neriplayer.ui.screen.NowPlayingScreen
@@ -207,32 +205,35 @@ import moe.ouom.neriplayer.ui.screen.playlist.NeteasePlaylistDetailScreen
 import moe.ouom.neriplayer.ui.theme.NeriTheme
 import moe.ouom.neriplayer.ui.theme.isActualSystemDarkTheme
 import moe.ouom.neriplayer.ui.theme.rememberActualSystemDarkTheme
+import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.ui.view.HyperBackground
 import moe.ouom.neriplayer.ui.viewmodel.debug.LogViewerScreen
-import moe.ouom.neriplayer.ui.viewmodel.artist.NeteaseArtistSummary
+import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliVideoItem
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
-import moe.ouom.neriplayer.util.AnrWatchdog
-import moe.ouom.neriplayer.util.CoverArtColorCache
-import moe.ouom.neriplayer.util.ExceptionHandler
-import moe.ouom.neriplayer.util.NativeCrashHandler
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.util.adjustedAccentColorArgb
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.openAppBackgroundSettings
-import moe.ouom.neriplayer.util.readBackgroundBehaviorAllowance
-import moe.ouom.neriplayer.util.requestIgnoreBatteryOptimizationsCompat
-import moe.ouom.neriplayer.util.formatFileSize
-import moe.ouom.neriplayer.util.isRemoteImageSource
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.rememberOfflineModeState
-import moe.ouom.neriplayer.util.syncHapticFeedbackSetting
+import moe.ouom.neriplayer.util.crash.AnrWatchdog
+import moe.ouom.neriplayer.util.media.CoverArtColorCache
+import moe.ouom.neriplayer.core.crash.ExceptionHandler
+import moe.ouom.neriplayer.util.crash.NativeCrashHandler
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.media.adjustedAccentColorArgb
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.util.platform.openAppBackgroundSettings
+import moe.ouom.neriplayer.util.platform.readBackgroundBehaviorAllowance
+import moe.ouom.neriplayer.util.platform.requestIgnoreBatteryOptimizationsCompat
+import moe.ouom.neriplayer.util.format.formatFileSize
+import moe.ouom.neriplayer.util.media.isRemoteImageSource
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.network.rememberOfflineModeState
+import moe.ouom.neriplayer.ui.haptic.syncHapticFeedbackSetting
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private val navigationGson: Gson by lazy(LazyThreadSafetyMode.PUBLICATION) { Gson() }
 
 private fun resolveMainStartDestination(
     preferredRoute: String,
@@ -255,6 +256,8 @@ private fun SongItem?.resolveUiCoverSource(context: android.content.Context): St
 
 private const val NOW_PLAYING_REMOTE_BLUR_IMAGE_SIZE_PX = 640
 private const val NOW_PLAYING_LOCAL_BLUR_IMAGE_SIZE_PX = 384
+private const val PLAYBACK_VISUAL_COVER_CLEAR_DELAY_MS = 900L
+private const val NOW_PLAYING_BACKGROUND_CROSSFADE_MS = 520
 
 private tailrec fun Context.findActivity(): Activity? {
     return when (this) {
@@ -278,6 +281,58 @@ private fun resolvedNowPlayingBlurStrength(coverUrl: String?, configuredBlurAmou
     } else {
         configuredBlurAmount.coerceAtMost(64f)
     }
+}
+
+internal fun resolvePlaybackVisualCoverUrl(
+    currentCoverUrl: String?,
+    previousVisualCoverUrl: String?,
+    hasCurrentSong: Boolean,
+    clearDelayElapsed: Boolean
+): String? {
+    val normalizedCoverUrl = currentCoverUrl?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        normalizedCoverUrl != null -> normalizedCoverUrl
+        !hasCurrentSong || clearDelayElapsed -> null
+        else -> previousVisualCoverUrl
+    }
+}
+
+@Composable
+private fun rememberPlaybackVisualCoverUrl(
+    coverUrl: String?,
+    currentSongKey: String?
+): String? {
+    var visualCoverUrl by remember {
+        mutableStateOf(
+            resolvePlaybackVisualCoverUrl(
+                currentCoverUrl = coverUrl,
+                previousVisualCoverUrl = null,
+                hasCurrentSong = currentSongKey != null,
+                clearDelayElapsed = false
+            )
+        )
+    }
+
+    LaunchedEffect(coverUrl, currentSongKey) {
+        visualCoverUrl = resolvePlaybackVisualCoverUrl(
+            currentCoverUrl = coverUrl,
+            previousVisualCoverUrl = visualCoverUrl,
+            hasCurrentSong = currentSongKey != null,
+            clearDelayElapsed = false
+        )
+
+        if (coverUrl.isNullOrBlank() && currentSongKey != null && visualCoverUrl != null) {
+            delay(PLAYBACK_VISUAL_COVER_CLEAR_DELAY_MS)
+            visualCoverUrl = resolvePlaybackVisualCoverUrl(
+                currentCoverUrl = coverUrl,
+                previousVisualCoverUrl = visualCoverUrl,
+                hasCurrentSong = true,
+                clearDelayElapsed = true
+            )
+        }
+    }
+
+    return visualCoverUrl
 }
 
 @Composable
@@ -689,11 +744,10 @@ fun NeriApp(
 ) {
     val context = LocalContext.current
     var appContentReady by rememberSaveable { mutableStateOf(false) }
-    val bootstrapIsDark = when {
-        initialThemeSnapshot.forceDark -> true
-        initialThemeSnapshot.followSystemDark -> isActualSystemDarkTheme(context)
-        else -> false
-    }
+    val bootstrapIsDark = StartupThemeResolver.resolveSnapshotUseDark(
+        snapshot = initialThemeSnapshot,
+        systemDark = isActualSystemDarkTheme(context)
+    )
 
     LaunchedEffect(Unit) {
         // 先交一个极轻的背景首帧，下一帧再挂整棵导航和状态订阅树
@@ -727,33 +781,37 @@ private fun NeriAppContent(
     val repo = remember { AppContainer.settingsRepo }
     val systemDark = rememberActualSystemDarkTheme()
     val application = remember(context) { context.applicationContext as Application }
+    SideEffect {
+        // 播放点击可能早于启动预加载完成，先绑定上下文避免懒初始化缺入口
+        PlayerManager.bindApplication(application)
+    }
     val startupPlaybackPreferences = remember(application) {
         readPlaybackPreferenceSnapshotCached(application) ?: PlaybackPreferenceSnapshot()
     }
     val coverArtImageLoader = remember(context) { Coil.imageLoader(context) }
 
-    val storedFollowSystemDark by repo.followSystemDarkFlow.collectAsState(
-        initial = initialThemeSnapshot.followSystemDark
+    val storedFollowSystemDark by repo.followSystemDarkFlow.collectAsStateWithLifecycle(
+        initialValue = initialThemeSnapshot.followSystemDark
     )
-    val dynamicColorEnabled by repo.dynamicColorFlow.collectAsState(
-        initial = initialThemeSnapshot.dynamicColor
+    val dynamicColorEnabled by repo.dynamicColorFlow.collectAsStateWithLifecycle(
+        initialValue = initialThemeSnapshot.dynamicColor
     )
-    val storedForceDark by repo.forceDarkFlow.collectAsState(
-        initial = initialThemeSnapshot.forceDark
+    val storedForceDark by repo.forceDarkFlow.collectAsStateWithLifecycle(
+        initialValue = initialThemeSnapshot.forceDark
     )
     var showNowPlaying by rememberSaveable { mutableStateOf(false) }
     var showNowPlayingLyrics by rememberSaveable { mutableStateOf(false) }
     var restoreLyricsAfterAlbumBack by rememberSaveable { mutableStateOf(false) }
     var lyricsAlbumRouteObserved by rememberSaveable { mutableStateOf(false) }
-    val devModeEnabled by repo.devModeEnabledFlow.collectAsState(initial = false)
-    val alwaysRecordLogsEnabled by repo.alwaysRecordLogsEnabledFlow.collectAsState(initial = false)
-    val themeSeedColor by repo.themeSeedColorFlow.collectAsState(initial = ThemeDefaults.DEFAULT_SEED_COLOR_HEX)
-    val themeColorPalette by repo.themeColorPaletteFlow.collectAsState(initial = ThemeDefaults.PRESET_COLORS)
-    val themePaletteStyleValue by repo.themePaletteStyleFlow.collectAsState(
-        initial = ThemeDefaults.DEFAULT_PALETTE_STYLE
+    val devModeEnabled by repo.devModeEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val alwaysRecordLogsEnabled by repo.alwaysRecordLogsEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val themeSeedColor by repo.themeSeedColorFlow.collectAsStateWithLifecycle(initialValue = ThemeDefaults.DEFAULT_SEED_COLOR_HEX)
+    val themeColorPalette by repo.themeColorPaletteFlow.collectAsStateWithLifecycle(initialValue = ThemeDefaults.PRESET_COLORS)
+    val themePaletteStyleValue by repo.themePaletteStyleFlow.collectAsStateWithLifecycle(
+        initialValue = ThemeDefaults.DEFAULT_PALETTE_STYLE
     )
-    val themeColorSpecValue by repo.themeColorSpecFlow.collectAsState(
-        initial = ThemeDefaults.DEFAULT_COLOR_SPEC
+    val themeColorSpecValue by repo.themeColorSpecFlow.collectAsStateWithLifecycle(
+        initialValue = ThemeDefaults.DEFAULT_COLOR_SPEC
     )
     val themePaletteStyle = remember(themePaletteStyleValue) {
         PaletteStyle.valueOf(ThemeDefaults.normalizePaletteStyle(themePaletteStyleValue))
@@ -761,72 +819,72 @@ private fun NeriAppContent(
     val themeColorSpec = remember(themeColorSpecValue) {
         ColorSpec.SpecVersion.valueOf(ThemeDefaults.normalizeColorSpec(themeColorSpecValue))
     }
-    val lyricBlurEnabled by repo.lyricBlurEnabledFlow.collectAsState(initial = true)
-    val lyricBlurAmount by repo.lyricBlurAmountFlow.collectAsState(initial = 1.5f)
+    val lyricBlurEnabled by repo.lyricBlurEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val lyricBlurAmount by repo.lyricBlurAmountFlow.collectAsStateWithLifecycle(initialValue = 1.5f)
     val cloudMusicLyricDefaultOffsetMs by repo.cloudMusicLyricDefaultOffsetMsFlow
-        .collectAsState(initial = startupPlaybackPreferences.cloudMusicLyricDefaultOffsetMs)
+        .collectAsStateWithLifecycle(initialValue = startupPlaybackPreferences.cloudMusicLyricDefaultOffsetMs)
     val qqMusicLyricDefaultOffsetMs by repo.qqMusicLyricDefaultOffsetMsFlow
-        .collectAsState(initial = startupPlaybackPreferences.qqMusicLyricDefaultOffsetMs)
-    val floatingLyricsPreferences by repo.floatingLyricsPreferencesFlow.collectAsState(
-        initial = FloatingLyricsPreferences()
+        .collectAsStateWithLifecycle(initialValue = startupPlaybackPreferences.qqMusicLyricDefaultOffsetMs)
+    val floatingLyricsPreferences by repo.floatingLyricsPreferencesFlow.collectAsStateWithLifecycle(
+        initialValue = FloatingLyricsPreferences()
     )
-    val advancedLyricsEnabled by repo.advancedLyricsEnabledFlow.collectAsState(initial = true)
-    val advancedBlurEnabled by repo.advancedBlurEnabledFlow.collectAsState(initial = true)
+    val advancedLyricsEnabled by repo.advancedLyricsEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val advancedBlurEnabled by repo.advancedBlurEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val advancedBlurAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val effectiveAdvancedBlurEnabled = advancedBlurAvailable && advancedBlurEnabled
-    val nowPlayingAudioReactiveEnabled by repo.nowPlayingAudioReactiveEnabledFlow.collectAsState(initial = true)
-    val nowPlayingDynamicBackgroundEnabled by repo.nowPlayingDynamicBackgroundEnabledFlow.collectAsState(initial = true)
-    val nowPlayingCoverBlurBackgroundEnabled by repo.nowPlayingCoverBlurBackgroundEnabledFlow.collectAsState(initial = false)
-    val nowPlayingCoverBlurAmount by repo.nowPlayingCoverBlurAmountFlow.collectAsState(initial = 1.5f)
-    val nowPlayingCoverBlurDarken by repo.nowPlayingCoverBlurDarkenFlow.collectAsState(initial = 0.2f)
-    val lyricFontScale by repo.lyricFontScaleFlow.collectAsState(initial = 1.0f)
-    val uiDensityScale by repo.uiDensityScaleFlow.collectAsState(initial = 1.0f)
-    val bypassProxy by repo.bypassProxyFlow.collectAsState(initial = true)
-    val backgroundImageUri by repo.backgroundImageUriFlow.collectAsState(initial = null)
-    val downloadDirectoryUri by repo.downloadDirectoryUriFlow.collectAsState(initial = null)
-    val downloadFileNameTemplate by repo.downloadFileNameTemplateFlow.collectAsState(initial = null)
-    val backgroundImageBlur by repo.backgroundImageBlurFlow.collectAsState(initial = 0f)
-    val backgroundImageAlpha by repo.backgroundImageAlphaFlow.collectAsState(initial = 0.3f)
-    val hapticFeedbackEnabled by repo.hapticFeedbackEnabledFlow.collectAsState(initial = true)
-    val showCoverSourceBadge by repo.showCoverSourceBadgeFlow.collectAsState(initial = true)
-    val nowPlayingToolbarDockEnabled by repo.nowPlayingToolbarDockEnabledFlow.collectAsState(initial = true)
-    val nowPlayingKeepScreenOn by repo.nowPlayingKeepScreenOnFlow.collectAsState(initial = true)
-    val showNowPlayingTitle by repo.nowPlayingShowTitleFlow.collectAsState(initial = true)
-    val showNowPlayingProgressQualitySwitch by repo.nowPlayingProgressShowQualitySwitchFlow.collectAsState(initial = true)
-    val showNowPlayingProgressAudioCodec by repo.nowPlayingProgressShowAudioCodecFlow.collectAsState(initial = true)
-    val showNowPlayingProgressAudioSpec by repo.nowPlayingProgressShowAudioSpecFlow.collectAsState(initial = true)
-    val showLyricTranslation by repo.showLyricTranslationFlow.collectAsState(initial = true)
-    val defaultStartDestination by repo.defaultStartDestinationFlow.collectAsState(initial = Destinations.Home.route)
-    val showHomeContinueCard by repo.homeCardContinueFlow.collectAsState(initial = true)
-    val showHomeTrendingCard by repo.homeCardTrendingFlow.collectAsState(initial = true)
-    val showHomeRadarCard by repo.homeCardRadarFlow.collectAsState(initial = true)
-    val showHomeRecommendedCard by repo.homeCardRecommendedFlow.collectAsState(initial = true)
-    val playbackFadeIn by repo.playbackFadeInFlow.collectAsState(initial = false)
-    val playbackCrossfadeNext by repo.playbackCrossfadeNextFlow.collectAsState(initial = false)
-    val playbackFadeInDurationMs by repo.playbackFadeInDurationMsFlow.collectAsState(initial = 500L)
-    val playbackFadeOutDurationMs by repo.playbackFadeOutDurationMsFlow.collectAsState(initial = 500L)
-    val playbackCrossfadeInDurationMs by repo.playbackCrossfadeInDurationMsFlow.collectAsState(initial = 500L)
-    val playbackCrossfadeOutDurationMs by repo.playbackCrossfadeOutDurationMsFlow.collectAsState(initial = 500L)
-    val keepLastPlaybackProgress by repo.keepLastPlaybackProgressFlow.collectAsState(initial = true)
-    val keepPlaybackModeState by repo.keepPlaybackModeStateFlow.collectAsState(initial = true)
-    val neteaseAutoSourceSwitch by repo.neteaseAutoSourceSwitchFlow.collectAsState(
-        initial = startupPlaybackPreferences.neteaseAutoSourceSwitch
+    val nowPlayingAudioReactiveEnabled by repo.nowPlayingAudioReactiveEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val nowPlayingDynamicBackgroundEnabled by repo.nowPlayingDynamicBackgroundEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val nowPlayingCoverBlurBackgroundEnabled by repo.nowPlayingCoverBlurBackgroundEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val nowPlayingCoverBlurAmount by repo.nowPlayingCoverBlurAmountFlow.collectAsStateWithLifecycle(initialValue = 1.5f)
+    val nowPlayingCoverBlurDarken by repo.nowPlayingCoverBlurDarkenFlow.collectAsStateWithLifecycle(initialValue = 0.2f)
+    val lyricFontScale by repo.lyricFontScaleFlow.collectAsStateWithLifecycle(initialValue = 1.0f)
+    val uiDensityScale by repo.uiDensityScaleFlow.collectAsStateWithLifecycle(initialValue = 1.0f)
+    val bypassProxy by repo.bypassProxyFlow.collectAsStateWithLifecycle(initialValue = true)
+    val backgroundImageUri by repo.backgroundImageUriFlow.collectAsStateWithLifecycle(initialValue = null)
+    val downloadDirectoryUri by repo.downloadDirectoryUriFlow.collectAsStateWithLifecycle(initialValue = null)
+    val downloadFileNameTemplate by repo.downloadFileNameTemplateFlow.collectAsStateWithLifecycle(initialValue = null)
+    val backgroundImageBlur by repo.backgroundImageBlurFlow.collectAsStateWithLifecycle(initialValue = 0f)
+    val backgroundImageAlpha by repo.backgroundImageAlphaFlow.collectAsStateWithLifecycle(initialValue = 0.3f)
+    val hapticFeedbackEnabled by repo.hapticFeedbackEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showCoverSourceBadge by repo.showCoverSourceBadgeFlow.collectAsStateWithLifecycle(initialValue = true)
+    val nowPlayingToolbarDockEnabled by repo.nowPlayingToolbarDockEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val nowPlayingKeepScreenOn by repo.nowPlayingKeepScreenOnFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showNowPlayingTitle by repo.nowPlayingShowTitleFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showNowPlayingProgressQualitySwitch by repo.nowPlayingProgressShowQualitySwitchFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showNowPlayingProgressAudioCodec by repo.nowPlayingProgressShowAudioCodecFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showNowPlayingProgressAudioSpec by repo.nowPlayingProgressShowAudioSpecFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showLyricTranslation by repo.showLyricTranslationFlow.collectAsStateWithLifecycle(initialValue = true)
+    val defaultStartDestination by repo.defaultStartDestinationFlow.collectAsStateWithLifecycle(initialValue = Destinations.Home.route)
+    val showHomeContinueCard by repo.homeCardContinueFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showHomeTrendingCard by repo.homeCardTrendingFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showHomeRadarCard by repo.homeCardRadarFlow.collectAsStateWithLifecycle(initialValue = true)
+    val showHomeRecommendedCard by repo.homeCardRecommendedFlow.collectAsStateWithLifecycle(initialValue = true)
+    val playbackFadeIn by repo.playbackFadeInFlow.collectAsStateWithLifecycle(initialValue = false)
+    val playbackCrossfadeNext by repo.playbackCrossfadeNextFlow.collectAsStateWithLifecycle(initialValue = false)
+    val playbackFadeInDurationMs by repo.playbackFadeInDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
+    val playbackFadeOutDurationMs by repo.playbackFadeOutDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
+    val playbackCrossfadeInDurationMs by repo.playbackCrossfadeInDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
+    val playbackCrossfadeOutDurationMs by repo.playbackCrossfadeOutDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
+    val keepLastPlaybackProgress by repo.keepLastPlaybackProgressFlow.collectAsStateWithLifecycle(initialValue = true)
+    val keepPlaybackModeState by repo.keepPlaybackModeStateFlow.collectAsStateWithLifecycle(initialValue = true)
+    val neteaseAutoSourceSwitch by repo.neteaseAutoSourceSwitchFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.neteaseAutoSourceSwitch
     )
-    val stopOnBluetoothDisconnect by repo.stopOnBluetoothDisconnectFlow.collectAsState(initial = true)
-    val usbExclusivePlayback by repo.usbExclusivePlaybackFlow.collectAsState(
-        initial = startupPlaybackPreferences.usbExclusivePlayback
+    val stopOnBluetoothDisconnect by repo.stopOnBluetoothDisconnectFlow.collectAsStateWithLifecycle(initialValue = true)
+    val usbExclusivePlayback by repo.usbExclusivePlaybackFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.usbExclusivePlayback
     )
     val usbExclusiveBackgroundPermissionPromptSuppressed by repo
         .usbExclusiveBackgroundPermissionPromptSuppressedFlow
-        .collectAsState(initial = false)
-    val allowMixedPlayback by repo.allowMixedPlaybackFlow.collectAsState(initial = false)
-    val preemptAudioFocus by repo.preemptAudioFocusFlow.collectAsState(
-        initial = startupPlaybackPreferences.preemptAudioFocus
+        .collectAsStateWithLifecycle(initialValue = false)
+    val allowMixedPlayback by repo.allowMixedPlaybackFlow.collectAsStateWithLifecycle(initialValue = false)
+    val preemptAudioFocus by repo.preemptAudioFocusFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.preemptAudioFocus
     )
-    val maxCacheSizeBytes by repo.maxCacheSizeBytesFlow.collectAsState(
-        initial = startupPlaybackPreferences.maxCacheSizeBytes
+    val maxCacheSizeBytes by repo.maxCacheSizeBytesFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.maxCacheSizeBytes
     )
-    val homeUsageEntries by AppContainer.playlistUsageRepo.frequentPlaylistsFlow.collectAsState(initial = emptyList())
+    val homeUsageEntries by AppContainer.playlistUsageRepo.frequentPlaylistsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var pendingFollowSystemDark by remember { mutableStateOf<Boolean?>(null) }
     var pendingForceDark by remember { mutableStateOf<Boolean?>(null) }
     var themeRevealSnapshot by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -840,6 +898,28 @@ private fun NeriAppContent(
     var coverArtRefreshToken by remember { mutableIntStateOf(0) }
     var showUsbExclusiveBackgroundPermissionDialog by rememberSaveable { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    var lifecycleResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
+    val startupAudioFocusRefresher = remember(context) {
+        PlayerStartupAudioFocusRefresher(context)
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            lifecycleResumed = when (event) {
+                Lifecycle.Event.ON_RESUME -> true
+                Lifecycle.Event.ON_PAUSE,
+                Lifecycle.Event.ON_STOP,
+                Lifecycle.Event.ON_DESTROY -> false
+                else -> lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val followSystemDark = pendingFollowSystemDark ?: storedFollowSystemDark
     val forceDark = pendingForceDark ?: storedForceDark
@@ -869,11 +949,13 @@ private fun NeriAppContent(
 
     // 缓存当前封面的取色结果，避免开关动态取色时先闪到默认种子色
     var coverSeedHex by remember { mutableStateOf<String?>(null) }
-    val currentSong by PlayerManager.currentSongFlow.collectAsState()
-    val downloadPresenceVersion by GlobalDownloadManager.downloadPresenceVersion.collectAsState()
-    val displayCoverUrl = remember(currentSong, context, downloadPresenceVersion, coverArtRefreshToken) {
-        currentSong.resolveUiCoverSource(context)
-    }
+    val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
+    val displayCoverUrl = rememberSongDisplayCoverUrl(currentSong)
+    val currentSongKey = remember(currentSong) { currentSong?.stableKey() }
+    val playbackVisualCoverUrl = rememberPlaybackVisualCoverUrl(
+        coverUrl = displayCoverUrl,
+        currentSongKey = currentSongKey
+    )
     val scope = rememberCoroutineScope()
     var pendingTrafficRiskDownloadRequest by remember {
         mutableStateOf<GlobalDownloadManager.TrafficRiskDownloadRequest?>(null)
@@ -884,171 +966,85 @@ private fun NeriAppContent(
         }
     }
 
+    val serviceSyncCoordinator = remember(context) {
+        PlayerStartupServiceSyncCoordinator(
+            awaitUiFrame = { withFrameNanos { } },
+            isServiceReadyForPassiveLocalPlaybackSync = AudioPlayerService::isReadyForPassiveLocalPlaybackSync,
+            hasItems = PlayerManager::hasItems,
+            hasLocalCurrentSong = {
+                PlayerManager.currentSongFlow.value?.let { song ->
+                    LocalSongSupport.isLocalSong(song, context)
+                } == true
+            },
+            isUsbExclusivePlaybackActiveForForegroundService =
+                PlayerManager::isUsbExclusivePlaybackActiveForForegroundService,
+            shouldRunPlaybackServiceInForeground = PlayerManager::shouldRunPlaybackServiceInForeground,
+            isServiceInstanceActiveForDiagnostics = AudioPlayerService::isInstanceActiveForDiagnostics,
+            isServiceForegroundActiveForDiagnostics = AudioPlayerService::isForegroundActiveForDiagnostics,
+            startService = { source, forceForeground ->
+                AudioPlayerService.startSyncService(
+                    context,
+                    source,
+                    forceForeground = forceForeground
+                )
+            },
+            playbackCommandFlow = PlayerManager.playbackCommandFlow
+        )
+    }
     val scheduleAudioServiceStart: (String, Boolean) -> Unit = { source, forceForeground ->
         scope.launch {
-            // 让 currentSong/mini player 先过一帧，避免和服务启动抢主线程
-            withFrameNanos { }
-            // 本地切歌时先让播放器和首帧稳定下来，再补系统媒体会话同步
-            if (source.startsWith("local_playback_command_")) {
-                delay(450L)
-            }
-            if (
-                shouldSkipLocalPlaybackSyncServiceStart(
-                    source = source,
-                    serviceReady = AudioPlayerService.isReadyForPassiveLocalPlaybackSync(),
-                    hasItems = PlayerManager.hasItems(),
-                    hasLocalCurrentSong = PlayerManager.currentSongFlow.value?.let {
-                        LocalSongSupport.isLocalSong(it, context)
-                    } == true,
-                    usbExclusivePlaybackActive = PlayerManager
-                        .isUsbExclusivePlaybackActiveForForegroundService()
-                )
-            ) {
-                NPLogger.d(
-                    "NERI-App",
-                    "Skipping audio service sync because active playback service is already tracking " +
-                        "source=$source serviceInstance=" +
-                        AudioPlayerService.isInstanceActiveForDiagnostics() +
-                        " serviceForeground=" +
-                        AudioPlayerService.isForegroundActiveForDiagnostics()
-                )
-                return@launch
-            }
-            NPLogger.d("NERI-App", "Starting audio service: source=$source")
-            AudioPlayerService.startSyncService(
-                context,
-                source,
+            serviceSyncCoordinator.startServiceAfterUiFrame(
+                source = source,
                 forceForeground = forceForeground
             )
         }
     }
 
     fun updateStartupAudioFocus(reason: String) {
-        if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
-        if (!PlayerManager.isPlayerInitialized()) return
-        if (
-            reason == "lifecycle_resume" &&
-            PlayerManager.isUsbExclusiveNativePlaybackStable()
-        ) {
-            NPLogger.d(
-                "NERI-App",
-                "Skipping startup audio focus refresh during stable USB native playback"
-            )
-            return
-        }
-        val transportActive = runCatching { PlayerManager.isTransportActive() }
-            .getOrDefault(false)
-        val usbExclusiveNativeActive = PlayerManager.shouldUseUsbExclusiveFocusGuard()
-        StartupAudioFocusController.updateForForeground(
-            context = context,
-            enabled = preemptAudioFocus || usbExclusiveNativeActive,
+        startupAudioFocusRefresher.refreshForeground(
+            lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+            reason = reason,
+            preemptAudioFocus = preemptAudioFocus,
             allowMixedPlayback = allowMixedPlayback,
-            usbExclusivePlayback = usbExclusivePlayback,
-            usbExclusiveNativeActive = usbExclusiveNativeActive,
-            transportActive = transportActive,
-            reason = reason
+            usbExclusivePlayback = usbExclusivePlayback
         )
     }
 
     LaunchedEffect(application) {
-        val exactStartupPlaybackPreferences = withContext(Dispatchers.IO) {
-            readPlaybackPreferenceSnapshot(application)
-        }
-        val startupRestoreSnapshot = preloadRestoredStateSnapshot(
+        PlayerStartupBootstrapper(
             app = application,
-            keepLastPlaybackProgressEnabled =
-                exactStartupPlaybackPreferences.keepLastPlaybackProgress,
-            keepPlaybackModeStateEnabled =
-                exactStartupPlaybackPreferences.keepPlaybackModeState
-        )
-        withFrameNanos { }
-        PlayerManager.initializePreloaded(
-            app = application,
-            startupPlaybackPreferences = exactStartupPlaybackPreferences,
-            restoredStateSnapshot = startupRestoreSnapshot
-        )
-        NPLogger.d("NERI-App", "PlayerManager.initialize called")
-        NPLogger.d(
-            "NERI-App",
-            "Player bootstrap state hasItems=${PlayerManager.hasItems()} transportActive=${PlayerManager.isTransportActive()} isPlaying=${PlayerManager.isPlayingFlow.value}"
-        )
-        val shouldBootstrapPlaybackService =
-            PlayerManager.hasItems() && PlayerManager.shouldBootstrapPlaybackServiceOnAppLaunch()
-        val shouldBootstrapPreemptAudioFocusSession =
-            !shouldBootstrapPlaybackService &&
-                exactStartupPlaybackPreferences.preemptAudioFocus &&
-                !exactStartupPlaybackPreferences.allowMixedPlayback &&
-                PlayerManager.hasItems()
-        StartupAudioFocusController.updateForForeground(
             context = context,
-            enabled = exactStartupPlaybackPreferences.preemptAudioFocus ||
-                PlayerManager.shouldUseUsbExclusiveFocusGuard(),
-            allowMixedPlayback = exactStartupPlaybackPreferences.allowMixedPlayback,
-            usbExclusivePlayback = exactStartupPlaybackPreferences.usbExclusivePlayback,
-            usbExclusiveNativeActive = PlayerManager.shouldUseUsbExclusiveFocusGuard(),
-            transportActive = PlayerManager.isTransportActive() || shouldBootstrapPlaybackService,
-            reason = "app_bootstrap"
+            awaitUiFrameBeforePlayerInit = {
+                withFrameNanos { }
+            }
+        ).bootstrap().serviceStart?.let { serviceStart ->
+            scheduleAudioServiceStart(serviceStart.source, serviceStart.forceForeground)
+        }
+
+        launch {
+            serviceSyncCoordinator.collectLocalPlaybackCommands()
+        }
+
+        val historyRecorder = PlayerStartupHistoryRecorder(
+            currentSongFlow = PlayerManager.currentSongFlow,
+            recordSong = AppContainer.playHistoryRepo::record,
+            startupSongToSkip = PlayerManager.currentSongFlow.value
         )
-        if (shouldBootstrapPlaybackService) {
-            NPLogger.d("NERI-App", "Starting audio service from app bootstrap")
-            scheduleAudioServiceStart("app_bootstrap", true)
-        } else if (shouldBootstrapPreemptAudioFocusSession) {
-            NPLogger.d("NERI-App", "Starting audio service for preempt audio focus session")
-            scheduleAudioServiceStart("preempt_audio_focus_bootstrap", false)
-        } else {
-            NPLogger.d(
-                "NERI-App",
-                "Skip audio service bootstrap: hasItems=${PlayerManager.hasItems()} currentSong=${PlayerManager.currentSongFlow.value != null}"
-            )
-        }
-
         launch {
-            PlayerManager.playbackCommandFlow.collect { command ->
-                if (command.source != PlaybackCommandSource.LOCAL) {
-                    return@collect
-                }
-                if (!shouldSyncPlaybackServiceForLocalPlaybackCommand(command.type)) {
-                    return@collect
-                }
-                if (!PlayerManager.hasItems()) {
-                    return@collect
-                }
-                // 恢复旧队列后点继续播放，也要像切新歌一样补一次系统媒体会话同步
-                scheduleAudioServiceStart(
-                    "local_playback_command_${command.type.lowercase()}",
-                    PlayerManager.shouldRunPlaybackServiceInForeground()
-                )
-            }
+            historyRecorder.run()
         }
-
-        launch {
-            // 跳过初始值，订阅之后的变更，每次切曲写入最近播放
-            var lastRecordedSongKey: String? = null
-            PlayerManager.currentSongFlow
-                .drop(1)
-                .filterNotNull()
-                .collect { song ->
-                    val songKey = song.stableKey()
-                    if (songKey == lastRecordedSongKey) {
-                        return@collect
-                    }
-                    lastRecordedSongKey = songKey
-                    // 首次切歌时先让播放稳定下来，避免历史记录和同步调度挤占首帧
-                    delay(700L)
-                    if (PlayerManager.currentSongFlow.value?.stableKey() != songKey) {
-                        return@collect
-                    }
-                    AppContainer.playHistoryRepo.record(song)
-                }
-            }
 
     }
 
     LaunchedEffect(preemptAudioFocus, allowMixedPlayback, usbExclusivePlayback) {
         if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             updateStartupAudioFocus("settings_changed")
-        } else if ((!preemptAudioFocus && !usbExclusivePlayback) || allowMixedPlayback) {
-            StartupAudioFocusController.release("settings_changed_inactive")
+        } else {
+            startupAudioFocusRefresher.releaseForInactiveSettingsChange(
+                preemptAudioFocus = preemptAudioFocus,
+                usbExclusivePlayback = usbExclusivePlayback,
+                allowMixedPlayback = allowMixedPlayback
+            )
         }
     }
 
@@ -1072,21 +1068,21 @@ private fun NeriAppContent(
         }
     }
 
-    LaunchedEffect(displayCoverUrl, coverArtRefreshToken, showNowPlaying, dynamicColorEnabled, offlineMode) {
-        if (displayCoverUrl.isNullOrBlank() || !dynamicColorEnabled) {
+    LaunchedEffect(playbackVisualCoverUrl, coverArtRefreshToken, showNowPlaying, dynamicColorEnabled, offlineMode) {
+        if (playbackVisualCoverUrl.isNullOrBlank() || !dynamicColorEnabled) {
             coverSeedHex = null
             return@LaunchedEffect
         }
-        val cachedSample = CoverArtColorCache.peek(displayCoverUrl)
+        val cachedSample = CoverArtColorCache.peek(playbackVisualCoverUrl)
         if (cachedSample != null) {
             coverSeedHex = cachedSample.seedHex
         }
 
-        if (showNowPlaying && isRemoteImageSource(displayCoverUrl)) {
+        if (showNowPlaying && isRemoteImageSource(playbackVisualCoverUrl)) {
             coverArtImageLoader.enqueue(
                 offlineCachedImageRequest(
                     context = context,
-                    data = displayCoverUrl,
+                    data = playbackVisualCoverUrl,
                     sizePx = 256,
                     allowHardware = false,
                     offlineMode = offlineMode
@@ -1103,7 +1099,7 @@ private fun NeriAppContent(
             delay(warmupDelayMillis)
         }
 
-        CoverArtColorCache.preload(context, displayCoverUrl, offlineMode)?.let { sample ->
+        CoverArtColorCache.preload(context, playbackVisualCoverUrl, offlineMode)?.let { sample ->
             coverSeedHex = sample.seedHex
         }
     }
@@ -1123,22 +1119,25 @@ private fun NeriAppContent(
         )
     }
 
-    val isDark = themeMode.resolveUseDark(systemDark)
+    val isDark = StartupThemeResolver.resolveModeUseDark(
+        mode = themeMode,
+        systemDark = systemDark
+    )
     val hazeState = remember { HazeState() }
-    val preferredQuality by repo.audioQualityFlow.collectAsState(initial = "exhigh")
-    val youtubePreferredQuality by repo.youtubeAudioQualityFlow.collectAsState(initial = "very_high")
-    val biliPreferredQuality by repo.biliAudioQualityFlow.collectAsState(initial = "high")
-    val mobileDataFollowDefaultAudioQuality by repo.mobileDataFollowDefaultAudioQualityFlow.collectAsState(
-        initial = startupPlaybackPreferences.mobileDataFollowDefaultAudioQuality
+    val preferredQuality by repo.audioQualityFlow.collectAsStateWithLifecycle(initialValue = "exhigh")
+    val youtubePreferredQuality by repo.youtubeAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "very_high")
+    val biliPreferredQuality by repo.biliAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "high")
+    val mobileDataFollowDefaultAudioQuality by repo.mobileDataFollowDefaultAudioQualityFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.mobileDataFollowDefaultAudioQuality
     )
-    val mobileDataNeteaseAudioQuality by repo.mobileDataNeteaseAudioQualityFlow.collectAsState(
-        initial = startupPlaybackPreferences.mobileDataNeteaseAudioQuality
+    val mobileDataNeteaseAudioQuality by repo.mobileDataNeteaseAudioQualityFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.mobileDataNeteaseAudioQuality
     )
-    val mobileDataYouTubeAudioQuality by repo.mobileDataYouTubeAudioQualityFlow.collectAsState(
-        initial = startupPlaybackPreferences.mobileDataYouTubeAudioQuality
+    val mobileDataYouTubeAudioQuality by repo.mobileDataYouTubeAudioQualityFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.mobileDataYouTubeAudioQuality
     )
-    val mobileDataBiliAudioQuality by repo.mobileDataBiliAudioQualityFlow.collectAsState(
-        initial = startupPlaybackPreferences.mobileDataBiliAudioQuality
+    val mobileDataBiliAudioQuality by repo.mobileDataBiliAudioQualityFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.mobileDataBiliAudioQuality
     )
     val currentThemeBackgroundArgb = MaterialTheme.colorScheme.background.toArgb()
     val themeRevealActive =
@@ -1266,12 +1265,12 @@ private fun NeriAppContent(
                     if (keepUsbExclusiveFocus) {
                         updateStartupAudioFocus("lifecycle_${event.name.lowercase()}_keep_usb")
                     } else {
-                        StartupAudioFocusController.release("lifecycle_${event.name.lowercase()}")
+                        startupAudioFocusRefresher.release("lifecycle_${event.name.lowercase()}")
                     }
                 }
                 Lifecycle.Event.ON_DESTROY -> {
                     clearThemeRevealState()
-                    StartupAudioFocusController.release("lifecycle_${event.name.lowercase()}")
+                    startupAudioFocusRefresher.release("lifecycle_${event.name.lowercase()}")
                 }
                 else -> Unit
             }
@@ -1360,14 +1359,14 @@ private fun NeriAppContent(
     }
 
     CompositionLocalProvider(LocalDensity provides finalDensity) {
-        val activeCoverSeedHex = if (displayCoverUrl == null) null else coverSeedHex
+        val activeCoverSeedHex = if (playbackVisualCoverUrl == null) null else coverSeedHex
         val effectiveSeedHex = if (dynamicColorEnabled) {
             activeCoverSeedHex ?: themeSeedColor
         } else {
             themeSeedColor
         }
         val useSystemDynamic =
-            dynamicColorEnabled && activeCoverSeedHex == null && displayCoverUrl == null
+            dynamicColorEnabled && activeCoverSeedHex == null && playbackVisualCoverUrl == null
 
         NeriTheme(
             followSystemDark = followSystemDark,
@@ -1382,7 +1381,7 @@ private fun NeriAppContent(
             val backEntry by navController.currentBackStackEntryAsState()
             val currentRoute = backEntry?.destination?.route
             fun navigateToNeteaseArtist(artist: NeteaseArtistSummary) {
-                val json = Uri.encode(Gson().toJson(artist))
+                val json = Uri.encode(navigationGson.toJson(artist))
                 val currentEntry = navController.currentBackStackEntry
                 val currentIsArtist =
                     currentEntry?.destination?.route == Destinations.NeteaseArtistDetail.route
@@ -1391,7 +1390,7 @@ private fun NeriAppContent(
                     ?.getString("artistJson")
                     ?.let {
                         runCatching {
-                            Gson().fromJson(it, NeteaseArtistSummary::class.java)
+                            navigationGson.fromJson(it, NeteaseArtistSummary::class.java)
                         }.getOrNull()
                     }
                 if (currentArtist?.id == artist.id) {
@@ -1449,16 +1448,21 @@ private fun NeriAppContent(
             val effectiveAudioReactiveEnabled =
                 nowPlayingAudioReactiveEnabled && effectiveDynamicBackgroundEnabled
 
-            DisposableEffect(showNowPlaying, effectiveAudioReactiveEnabled) {
-                AudioReactive.enabled = showNowPlaying && effectiveAudioReactiveEnabled
+            DisposableEffect(showNowPlaying, effectiveAudioReactiveEnabled, lifecycleResumed) {
+                AudioReactive.enabled = showNowPlaying && effectiveAudioReactiveEnabled && lifecycleResumed
                 onDispose { AudioReactive.enabled = false }
             }
 
+            DisposableEffect(showNowPlaying, lifecycleResumed) {
+                PlayerManager.updateInteractiveNowPlayingVisible(showNowPlaying && lifecycleResumed)
+                onDispose { PlayerManager.updateInteractiveNowPlayingVisible(false) }
+            }
+
             val activity = remember(context) { context.findActivity() }
-            DisposableEffect(activity, showNowPlaying, nowPlayingKeepScreenOn) {
+            DisposableEffect(activity, showNowPlaying, nowPlayingKeepScreenOn, lifecycleResumed) {
                 val window = activity?.window
                 val keepScreenOnFlag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                val shouldKeepScreenOn = showNowPlaying && nowPlayingKeepScreenOn
+                val shouldKeepScreenOn = showNowPlaying && nowPlayingKeepScreenOn && lifecycleResumed
                 val wasKeepScreenOn = window?.attributes?.flags?.and(keepScreenOnFlag) == keepScreenOnFlag
                 if (shouldKeepScreenOn) {
                     window?.addFlags(keepScreenOnFlag)
@@ -1498,13 +1502,12 @@ private fun NeriAppContent(
                 val bottomBarHazeModifier =
                     if (effectiveAdvancedBlurEnabled) Modifier.hazeChild(state = hazeState) else Modifier
 
-                val currentSong by PlayerManager.currentSongFlow.collectAsState()
                 val isMiniPlayerVisible = currentSong != null && !showNowPlaying
-                val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsState()
+                val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsStateWithLifecycle()
                 val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow
-                    .collectAsState()
+                    .collectAsStateWithLifecycle()
                 val reservedMiniPlayerHeightDp = if (isMiniPlayerVisible) {
-                    moe.ouom.neriplayer.ui.component.NeriMiniPlayerDefaults.Height
+                    moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayerDefaults.Height
                 } else {
                     0.dp
                 }
@@ -1676,7 +1679,7 @@ private fun NeriAppContent(
                                     }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
-                                    val playlist = Gson().fromJson(playlistJson, PlaylistSummary::class.java)
+                                    val playlist = navigationGson.fromJson(playlistJson, PlaylistSummary::class.java)
                                     NeteasePlaylistDetailScreen(
                                         playlist = playlist,
                                         onBack = { navController.popBackStack() },
@@ -1702,7 +1705,7 @@ private fun NeriAppContent(
                                     }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
-                                    val album = Gson().fromJson(playlistJson, AlbumSummary::class.java)
+                                    val album = navigationGson.fromJson(playlistJson, AlbumSummary::class.java)
                                     NeteaseAlbumDetailScreen(
                                         album = album,
                                         onBack = { navController.popBackStack() },
@@ -1728,14 +1731,14 @@ private fun NeriAppContent(
                                     }
                                 ) { backStackEntry ->
                                     val artistJson = backStackEntry.arguments?.getString("artistJson")
-                                    val artist = Gson().fromJson(artistJson, NeteaseArtistSummary::class.java)
+                                    val artist = navigationGson.fromJson(artistJson, NeteaseArtistSummary::class.java)
                                     NeteaseArtistDetailScreen(
                                         artist = artist,
                                         onBack = { navController.popBackStack() },
                                         onSongClick = ::playSongsAndOpenNowPlaying,
                                         offlineMode = offlineMode,
                                         onAlbumClick = { album ->
-                                            val json = Uri.encode(Gson().toJson(album))
+                                            val json = Uri.encode(navigationGson.toJson(album))
                                             navController.navigate("netease_album_detail/$json")
                                         }
                                     )
@@ -1758,7 +1761,7 @@ private fun NeriAppContent(
                                     }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
-                                    val playlist = Gson().fromJson(playlistJson, BiliPlaylist::class.java)
+                                    val playlist = navigationGson.fromJson(playlistJson, BiliPlaylist::class.java)
                                     BiliPlaylistDetailScreen(
                                         playlist = playlist,
                                         onBack = { navController.popBackStack() },
@@ -2459,7 +2462,7 @@ private fun NeriAppContent(
                         targetOffsetY = { fullHeight -> fullHeight }
                     ) + fadeOut(animationSpec = tween(durationMillis = 150))
                 ) {
-                    val currentCoverUrl = displayCoverUrl
+                    val currentCoverUrl = playbackVisualCoverUrl
                     val activeCoverSeedHex = if (currentCoverUrl == null) null else coverSeedHex
                     val effectiveSeedHex = if (dynamicColorEnabled) {
                         activeCoverSeedHex ?: themeSeedColor
@@ -2479,11 +2482,8 @@ private fun NeriAppContent(
                     ) {
                         BackHandler { showNowPlaying = false }
 
-                        val currentSongNP by PlayerManager.currentSongFlow.collectAsState()
-                        val nowPlayingQueue by PlayerManager.currentQueueFlow.collectAsState()
-                        val nowPlayingCoverUrl = remember(currentSongNP, context) {
-                            currentSongNP.resolveUiCoverSource(context)
-                        }
+                        val nowPlayingQueue by PlayerManager.currentQueueFlow.collectAsStateWithLifecycle()
+                        val nowPlayingCoverUrl = currentCoverUrl
 
                         Box(
                             modifier = Modifier
@@ -2520,8 +2520,8 @@ private fun NeriAppContent(
                                 }
                             }
                             val latestCoverBlurRequestKey by rememberUpdatedState(coverBlurRequestKey)
-                            val currentQueueIndex = remember(nowPlayingQueue, currentSongNP) {
-                                val current = currentSongNP ?: return@remember -1
+                            val currentQueueIndex = remember(nowPlayingQueue, currentSong) {
+                                val current = currentSong ?: return@remember -1
                                 nowPlayingQueue.indexOfFirst { it.sameIdentityAs(current) }
                             }
                             val preloadCoverUrls = remember(
@@ -2652,6 +2652,7 @@ private fun NeriAppContent(
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
                                         .data(nowPlayingCoverUrl)
+                                        .crossfade(NOW_PLAYING_BACKGROUND_CROSSFADE_MS)
                                         .allowHardware(false)
                                         .bitmapConfig(Bitmap.Config.RGB_565)
                                         .size(blurImageSizePx)
@@ -2685,9 +2686,7 @@ private fun NeriAppContent(
                                     },
                                     onError = {
                                         if (latestCoverBlurRequestKey == coverBlurRequestKey) {
-                                            stableCoverUrl = null
-                                            stableBlurStrength = null
-                                            coverBlurLoadFailed = true
+                                            coverBlurLoadFailed = stableCoverUrl.isNullOrBlank()
                                         }
                                     }
                                 )
@@ -2716,7 +2715,7 @@ private fun NeriAppContent(
                                     showLyricsScreen = showNowPlayingLyrics,
                                     onShowLyricsScreenChange = { showNowPlayingLyrics = it },
                                     onEnterAlbum = { album ->
-                                        val json = Uri.encode(Gson().toJson(album))
+                                        val json = Uri.encode(navigationGson.toJson(album))
                                         navController.navigate("netease_album_detail/$json")
                                         if (showNowPlayingLyrics) {
                                             restoreLyricsAfterAlbumBack = true

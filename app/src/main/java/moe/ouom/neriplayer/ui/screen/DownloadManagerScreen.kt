@@ -50,6 +50,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -58,10 +59,10 @@ import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.download.DownloadedSong
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.viewmodel.DownloadManagerViewModel
-import moe.ouom.neriplayer.util.formatDate
-import moe.ouom.neriplayer.util.formatFileSize
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.util.format.formatDate
+import moe.ouom.neriplayer.util.format.formatFileSize
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +83,7 @@ fun DownloadManagerScreen(
         }
     )
     val miniPlayerHeight = LocalMiniPlayerHeight.current
-    val downloadedSongs by viewModel.downloadedSongs.collectAsState()
+    val downloadedSongs by viewModel.downloadedSongs.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         if (viewModel.downloadedSongs.value.isEmpty() && !viewModel.isRefreshing.value) {
@@ -433,8 +434,8 @@ private fun DownloadedSongsList(
     onDeleteRequest: (DownloadedSong) -> Unit,
     offlineMode: Boolean
 ) {
-    val downloadedSongs by viewModel.downloadedSongs.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val downloadedSongs by viewModel.downloadedSongs.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val miniPlayerHeight = LocalMiniPlayerHeight.current
 
     // 过滤搜索结果

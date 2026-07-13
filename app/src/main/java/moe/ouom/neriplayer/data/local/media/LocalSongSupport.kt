@@ -27,7 +27,7 @@ package moe.ouom.neriplayer.data.local.media
 import android.content.Context
 import androidx.core.net.toUri
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 import java.io.File
 import java.util.Locale
 
@@ -100,6 +100,10 @@ object LocalSongSupport {
                 ?.trim()
                 ?.takeIf { it.isNotBlank() && song.channelId.equals("local", ignoreCase = true) }
             localAudioId?.let { add("audio:$it") }
+            song.sourceStableKey
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { add("source:$it") }
 
             if (includeMetadataFallback) {
                 addMetadataFallbackKeys(song)

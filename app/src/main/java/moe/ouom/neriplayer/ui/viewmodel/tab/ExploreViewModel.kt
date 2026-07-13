@@ -46,8 +46,8 @@ import moe.ouom.neriplayer.data.auth.netease.NeteaseCookieRepository
 import moe.ouom.neriplayer.data.auth.common.SavedCookieAuthState
 import moe.ouom.neriplayer.data.platform.youtube.buildYouTubeMusicMediaUri
 import moe.ouom.neriplayer.data.platform.youtube.stableYouTubeMusicId
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.artist.parseNeteaseArtistSummaries
 import org.json.JSONObject
 

@@ -448,8 +448,13 @@
     <string name="local_playlist_scan_preview_title">预览本地文件</string>
     <string name="local_playlist_scan_preview_search">搜索本地文件</string>
     <string name="local_playlist_scan_preview_apply">导入所选歌曲</string>
+    <string name="local_playlist_scan_filter_metadata">隐藏无元数据歌曲</string>
+    <string name="local_playlist_scan_metadata_empty">没有带元数据的本地音频</string>
     <string name="local_playlist_import_audio_no_new">没有新的本地音频需要导入</string>
     <string name="local_playlist_add_scanned_no_new">所选歌曲已在目标歌单中</string>
+    <string name="local_playlist_metadata_processing_title">正在处理歌曲信息</string>
+    <string name="local_playlist_metadata_processing_message">正在读取本地歌曲名、歌手和专辑信息（%1$d/%2$d）</string>
+    <string name="local_playlist_metadata_processing_message_unknown">正在读取本地歌曲名、歌手和专辑信息</string>
     <string name="local_playlist_rename">重命名歌单</string>
     <string name="local_playlist_delete">删除歌单</string>
     <string name="local_playlist_delete_confirm">确定要删除此歌单吗？此操作不可恢复！</string>
@@ -567,6 +572,7 @@
     <string name="search_video">搜索视频</string>
     <string name="search_netease">搜索网易云</string>
     <string name="search_playlist">搜索歌单内歌曲</string>
+    <string name="search_artist_songs">搜索歌手歌曲</string>
     <string name="search_favorite">搜索收藏夹内视频</string>
     <string name="search_result_play_keep_queue">播放（保留队列）</string>
     <string name="search_result_add_to_current_queue">添加到当前播放列表</string>
@@ -1112,6 +1118,8 @@
     <string name="settings_nowplaying_audio_reactive_desc">控制正在播放页面的音频律动效果</string>
     <string name="settings_nowplaying_dynamic_background">正在播放动态背景</string>
     <string name="settings_nowplaying_dynamic_background_desc">控制正在播放页面的动态背景效果</string>
+    <string name="settings_nowplaying_disable_cover_blur_required">需关闭模糊封面背景</string>
+    <string name="settings_nowplaying_dynamic_background_required">需先开启正在播放动态背景</string>
     <string name="theme_color_tech_blue">科技·蓝</string>
     <string name="theme_color_soft_purple">柔和·紫</string>
     <string name="theme_color_passion_red">热情·红</string>
@@ -1483,6 +1491,7 @@
     <string name="listen_together_member_list_title">已加入成员</string>
     <string name="listen_together_error_member_control_disabled">房主已关闭听众操作权限</string>
     <string name="listen_together_error_controller_offline">房主当前离线，请等待重连后再试</string>
+    <string name="listen_together_error_controller_offline_link">房主已离线，无法获取播放链接</string>
     <string name="listen_together_error_local_playback_blocked">处于一起听时不可切换到本地音乐播放</string>
     <string name="listen_together_error_unauthorized">房间凭证已失效，请重新加入一起听</string>
     <string name="listen_together_error_room_not_found">房间不存在或已失效，无法继续加入</string>
@@ -1543,6 +1552,12 @@
     <string name="settings_listen_together_server_input_placeholder">示例：https://example.com，留空使用内置默认服务器</string>
     <string name="settings_listen_together_server_input_invalid">服务器地址格式无效，请输入完整的 http:// 或 https:// 地址</string>
     <string name="listen_together_invite_server_invalid">邀请中的服务器地址无效，无法加入该房间</string>
+    <string name="listen_together_error_room_id_length">房间 ID 需要为 %1$d 位</string>
+    <string name="listen_together_error_room_id_chars">房间 ID 仅支持大写字母和数字</string>
+    <string name="listen_together_error_user_uuid_required">用户 UUID 不能为空</string>
+    <string name="listen_together_error_user_uuid_invalid">用户 UUID 格式无效</string>
+    <string name="listen_together_error_nickname_length">当前昵称长度需要为 %1$d-%2$d 位</string>
+    <string name="listen_together_error_nickname_chars">当前昵称仅支持汉字、英文字母和数字</string>
     <string name="settings_listen_together_server_test">测试可用性</string>
     <string name="settings_listen_together_server_saved">一起听服务器设置已保存</string>
     <string name="settings_listen_together_server_reset_done">已恢复使用内置默认服务器</string>

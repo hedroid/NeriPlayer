@@ -4,9 +4,10 @@ import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.media.normalizeLocalAlbumIdentity
 import moe.ouom.neriplayer.data.model.identity
 import moe.ouom.neriplayer.data.model.sameIdentityAs
+import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.platform.youtube.buildYouTubeMusicMediaUri
 import moe.ouom.neriplayer.data.platform.youtube.stableYouTubeMusicId
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -70,6 +71,38 @@ class LocalSongAlbumIdentityTest {
         )
 
         assertTrue(contentSong.sameIdentityAs(hydratedSong))
+    }
+
+    @Test
+    fun `downloaded local song keeps source identity for library dedupe`() {
+        val remoteSong = SongItem(
+            id = 42L,
+            name = "song",
+            artist = "artist",
+            album = "Netease",
+            albumId = 0L,
+            durationMs = 1_000L,
+            coverUrl = null,
+            channelId = "netease",
+            audioId = "42"
+        )
+        val downloadedLocalSong = SongItem(
+            id = 99L,
+            name = "song",
+            artist = "artist",
+            album = LocalSongSupport.LOCAL_ALBUM_IDENTITY,
+            albumId = 0L,
+            durationMs = 1_000L,
+            coverUrl = null,
+            mediaUri = "/storage/emulated/0/Music/song.mp3",
+            localFilePath = "/storage/emulated/0/Music/song.mp3",
+            channelId = "local",
+            audioId = "99",
+            sourceStableKey = remoteSong.stableKey()
+        )
+
+        assertTrue(downloadedLocalSong.sameIdentityAs(remoteSong))
+        assertEquals(remoteSong.identity(), downloadedLocalSong.identity())
     }
 
     @Test

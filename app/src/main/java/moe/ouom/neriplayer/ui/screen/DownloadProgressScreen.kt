@@ -46,20 +46,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import moe.ouom.neriplayer.R
-import moe.ouom.neriplayer.core.download.countPendingDownloadTasks
-import moe.ouom.neriplayer.core.download.countQueuedDownloadTasks
 import moe.ouom.neriplayer.core.download.DownloadStatus
 import moe.ouom.neriplayer.core.download.DownloadTask
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.download.isDownloadTaskCancellable
-import moe.ouom.neriplayer.core.player.AudioDownloadManager
+import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.util.formatFileSize
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.util.format.formatFileSize
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,10 +67,10 @@ fun DownloadProgressScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val batchDownloadProgress by AudioDownloadManager.batchProgressFlow.collectAsState()
-    val downloadTasks by GlobalDownloadManager.downloadTasks.collectAsState()
-    val taskSummary by GlobalDownloadManager.downloadTaskSummary.collectAsState()
-    val activeDownloadOperations by GlobalDownloadManager.activeDownloadOperationsFlow.collectAsState()
+    val batchDownloadProgress by AudioDownloadManager.batchProgressFlow.collectAsStateWithLifecycle()
+    val downloadTasks by GlobalDownloadManager.downloadTasks.collectAsStateWithLifecycle()
+    val taskSummary by GlobalDownloadManager.downloadTaskSummary.collectAsStateWithLifecycle()
+    val activeDownloadOperations by GlobalDownloadManager.activeDownloadOperationsFlow.collectAsStateWithLifecycle()
     val pendingTaskCount = taskSummary.pendingTaskCount
     val queuedTaskCount = taskSummary.queuedTaskCount
     val visibleBatchProgress = batchDownloadProgress?.takeIf { progress ->

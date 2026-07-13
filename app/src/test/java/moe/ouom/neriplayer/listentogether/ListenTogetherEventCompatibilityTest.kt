@@ -1,5 +1,27 @@
 package moe.ouom.neriplayer.listentogether
 
+import moe.ouom.neriplayer.listentogether.compat.buildTrackFinishedLegacyFallbackEvent
+import moe.ouom.neriplayer.listentogether.compat.isListenTogetherMemberControlTargetCurrent
+import moe.ouom.neriplayer.listentogether.compat.isListenTogetherPendingMemberControlSatisfied
+import moe.ouom.neriplayer.listentogether.compat.isUnsupportedTrackFinishedEventError
+import moe.ouom.neriplayer.listentogether.compat.resolveListenTogetherLinkReadyState
+import moe.ouom.neriplayer.listentogether.compat.resolveListenTogetherPlaybackCommandShouldPlay
+import moe.ouom.neriplayer.listentogether.compat.shouldSuppressListenerControlWhileAwaitingStream
+import moe.ouom.neriplayer.listentogether.mapping.withStreamUrl
+import moe.ouom.neriplayer.listentogether.playback.boundedAroundStableKey
+import moe.ouom.neriplayer.listentogether.playback.currentStableKey
+import moe.ouom.neriplayer.listentogether.playback.expectedPositionMs
+import moe.ouom.neriplayer.listentogether.playback.hasSameTrackSequenceAs
+import moe.ouom.neriplayer.listentogether.playback.LISTEN_TOGETHER_MAX_SHAREABLE_QUEUE_SIZE
+import moe.ouom.neriplayer.listentogether.playback.indexOfTrack
+import moe.ouom.neriplayer.listentogether.playback.isListenTogetherSeekControlSatisfied
+import moe.ouom.neriplayer.listentogether.playback.requestedStableKey
+import moe.ouom.neriplayer.listentogether.playback.sameTrackAs
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherChannels
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherEvent
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherPlaybackState
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherRoomState
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherTrack
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -202,6 +224,202 @@ class ListenTogetherEventCompatibilityTest {
     }
 
     @Test
+    fun `playing expected position uses server clock offset and playback rate`() {
+        val playback = ListenTogetherPlaybackState(
+            state = "playing",
+            basePositionMs = 10_000L,
+            baseTimestampMs = 1_000L,
+            playbackRate = 1.5
+        )
+
+        assertEquals(
+            14_500L,
+            playback.expectedPositionMs(
+                nowMs = 3_000L,
+                serverClockOffsetMs = 1_000L
+            )
+        )
+    }
+
+    @Test
+    fun `paused expected position keeps base position`() {
+        val playback = ListenTogetherPlaybackState(
+            state = "paused",
+            basePositionMs = 10_000L,
+            baseTimestampMs = 1_000L
+        )
+
+        assertEquals(10_000L, playback.expectedPositionMs(nowMs = 20_000L))
+    }
+
+    @Test
+    fun `room current stable key prefers explicit track over queue`() {
+        val state = ListenTogetherRoomState(
+            roomId = "ABC234",
+            version = 1L,
+            currentIndex = 1,
+            track = track("netease:explicit", "explicit"),
+            queue = listOf(
+                track("netease:0", "0"),
+                track("netease:queue", "queue")
+            )
+        )
+
+        assertEquals("netease:explicit", state.currentStableKey())
+    }
+
+    @Test
+    fun `event requested stable key falls back to indexed queue`() {
+        val event = ListenTogetherEvent(
+            type = "REQUEST_SEEK",
+            currentIndex = 1,
+            queue = listOf(
+                track("netease:0", "0"),
+                track("netease:target", "target")
+            )
+        )
+
+        assertEquals("netease:target", event.requestedStableKey())
+    }
+
+    @Test
+    fun `same track sequence compares stable media identity`() {
+        val first = songItem(
+            channelId = ListenTogetherChannels.NETEASE,
+            audioId = "1"
+        )
+        val same = songItem(
+            channelId = ListenTogetherChannels.NETEASE,
+            audioId = "1"
+        )
+        val different = songItem(
+            channelId = ListenTogetherChannels.NETEASE,
+            audioId = "2"
+        )
+
+        assertTrue(first.sameTrackAs(same))
+        assertFalse(first.sameTrackAs(different))
+        assertTrue(listOf(first).hasSameTrackSequenceAs(listOf(same)))
+        assertEquals(1, listOf(different, same).indexOfTrack(first))
+    }
+
+    @Test
+    fun `member control must target current room track`() {
+        assertTrue(
+            isListenTogetherMemberControlTargetCurrent(
+                eventType = "REQUEST_PAUSE",
+                requestedStableKey = "netease:1",
+                currentStableKey = "netease:1"
+            )
+        )
+        assertFalse(
+            isListenTogetherMemberControlTargetCurrent(
+                eventType = "REQUEST_PAUSE",
+                requestedStableKey = "netease:old",
+                currentStableKey = "netease:1"
+            )
+        )
+    }
+
+    @Test
+    fun `listener play pause is suppressed while waiting for authoritative stream`() {
+        assertTrue(
+            shouldSuppressListenerControlWhileAwaitingStream(
+                eventType = "REQUEST_PAUSE",
+                awaitingAuthoritativeStream = true,
+                localTrackHasDirectStream = false
+            )
+        )
+        assertFalse(
+            shouldSuppressListenerControlWhileAwaitingStream(
+                eventType = "REQUEST_PAUSE",
+                awaitingAuthoritativeStream = true,
+                localTrackHasDirectStream = true
+            )
+        )
+    }
+
+    @Test
+    fun `listener set track request is not suppressed by missing stream`() {
+        assertFalse(
+            shouldSuppressListenerControlWhileAwaitingStream(
+                eventType = "REQUEST_SET_TRACK",
+                awaitingAuthoritativeStream = true,
+                localTrackHasDirectStream = false
+            )
+        )
+    }
+
+    @Test
+    fun `listener play request is preserved while waiting for authoritative stream`() {
+        assertFalse(
+            shouldSuppressListenerControlWhileAwaitingStream(
+                eventType = "REQUEST_PLAY",
+                awaitingAuthoritativeStream = true,
+                localTrackHasDirectStream = false
+            )
+        )
+    }
+
+    @Test
+    fun `playback mode request does not require current track target`() {
+        assertTrue(
+            isListenTogetherMemberControlTargetCurrent(
+                eventType = "REQUEST_PLAYBACK_MODE",
+                requestedStableKey = null,
+                currentStableKey = "netease:1"
+            )
+        )
+    }
+
+    @Test
+    fun `playback mode is carried in room playback state`() {
+        val state = ListenTogetherRoomState(
+            roomId = "ABC234",
+            version = 1L,
+            playback = ListenTogetherPlaybackState(
+                state = "playing",
+                repeatMode = 2,
+                shuffleEnabled = true
+            )
+        )
+
+        assertEquals(2, state.playback.repeatMode)
+        assertTrue(state.playback.shuffleEnabled == true)
+    }
+
+    @Test
+    fun `legacy room playback state leaves playback mode unspecified`() {
+        val state = ListenTogetherRoomState(
+            roomId = "ABC234",
+            version = 1L,
+            playback = ListenTogetherPlaybackState(state = "playing")
+        )
+
+        assertNull(state.playback.repeatMode)
+        assertNull(state.playback.shuffleEnabled)
+    }
+
+    @Test
+    fun `playback mode request is satisfied by matching room playback mode`() {
+        val state = ListenTogetherRoomState(
+            roomId = "ABC234",
+            version = 1L,
+            playback = ListenTogetherPlaybackState(
+                repeatMode = 1,
+                shuffleEnabled = true
+            )
+        )
+        val event = ListenTogetherEvent(
+            type = "REQUEST_PLAYBACK_MODE",
+            repeatMode = 1,
+            shuffleEnabled = true
+        )
+
+        assertTrue(isListenTogetherPendingMemberControlSatisfied(event, state))
+    }
+
+    @Test
     fun `join auto pause flag alone does not pause a playing room`() {
         val state = roomState(playbackState = "playing")
 
@@ -256,6 +474,23 @@ class ListenTogetherEventCompatibilityTest {
             subAudioId = "24547973984",
             name = "暗号",
             artist = "周杰伦"
+        )
+    }
+
+    private fun songItem(
+        channelId: String,
+        audioId: String
+    ): moe.ouom.neriplayer.data.model.SongItem {
+        return moe.ouom.neriplayer.data.model.SongItem(
+            id = audioId.toLong(),
+            name = "Song $audioId",
+            artist = "Artist",
+            album = "",
+            albumId = 0L,
+            durationMs = 180_000L,
+            coverUrl = null,
+            channelId = channelId,
+            audioId = audioId
         )
     }
 

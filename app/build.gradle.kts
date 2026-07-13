@@ -12,6 +12,19 @@ plugins {
     id("kotlin-parcelize")
 }
 
+val isGithubPullRequest = providers.environmentVariable("GITHUB_EVENT_NAME").orNull == "pull_request"
+val allowUnsignedRelease =
+    (project.findProperty("allowUnsignedRelease") as String?)?.toBoolean() == true || isGithubPullRequest
+val releaseKeystorePath = project.findProperty("KEYSTORE_FILE") as String? ?: "neri.jks"
+val releaseKeystoreFile = project.file(releaseKeystorePath)
+val releaseStorePassword = project.findProperty("KEYSTORE_PASSWORD") as String?
+val releaseKeyAlias = project.findProperty("KEY_ALIAS") as String? ?: "key0"
+val releaseKeyPassword = project.findProperty("KEY_PASSWORD") as String?
+val releaseSigningReady = releaseKeystoreFile.exists() &&
+    !releaseStorePassword.isNullOrBlank() &&
+    releaseKeyAlias.isNotBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "moe.ouom.neriplayer"
     val buildUUID = UUID.randomUUID()
@@ -21,16 +34,11 @@ android {
 
     signingConfigs {
         create("release") {
-            val storePath = project.findProperty("KEYSTORE_FILE") as String? ?: "neri.jks"
-            val resolvedStoreFile = project.layout.projectDirectory.file(storePath).asFile
-
-            if (resolvedStoreFile.exists()) {
-                storeFile = resolvedStoreFile
-                storePassword = project.findProperty("KEYSTORE_PASSWORD") as String? ?: ""
-                keyAlias = project.findProperty("KEY_ALIAS") as String? ?: "key0"
-                keyPassword = project.findProperty("KEY_PASSWORD") as String? ?: ""
-            } else {
-                println("Release keystore not found at '${resolvedStoreFile.path}'. Using debug signing config instead.")
+            if (releaseSigningReady) {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseStorePassword.orEmpty()
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword.orEmpty()
             }
         }
     }
@@ -75,7 +83,6 @@ android {
 
     buildTypes {
         val releaseSigningConfig = signingConfigs.getByName("release")
-        val debugSigningConfig = signingConfigs.getByName("debug")
 
         release {
             isMinifyEnabled = true
@@ -86,10 +93,8 @@ android {
                     abiFilters += defaultReleaseAbiFilters
                 }
             }
-            signingConfig = if (releaseSigningConfig.storeFile?.exists() == true) {
-                releaseSigningConfig
-            } else {
-                debugSigningConfig
+            if (releaseSigningReady) {
+                signingConfig = releaseSigningConfig
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -143,6 +148,31 @@ android {
         }
     }
 
+}
+
+gradle.taskGraph.whenReady {
+    val releasePackagingRequested = allTasks.any { task ->
+        task.project == project && (
+            task.name == "assemble" ||
+                task.name == "bundle" ||
+                task.name.contains("Release", ignoreCase = false) &&
+                listOf("assemble", "bundle", "package", "sign").any(task.name::startsWith)
+            )
+    }
+    if (releasePackagingRequested && !allowUnsignedRelease && !releaseSigningReady) {
+        val missingSigningParts = buildList {
+            if (!releaseKeystoreFile.exists()) add("KEYSTORE_FILE=$releaseKeystorePath")
+            if (releaseStorePassword.isNullOrBlank()) add("KEYSTORE_PASSWORD")
+            if (releaseKeyAlias.isBlank()) add("KEY_ALIAS")
+            if (releaseKeyPassword.isNullOrBlank()) add("KEY_PASSWORD")
+        }.joinToString()
+
+        throw GradleException(
+            "Release signing material is required. Missing: $missingSigningParts. " +
+                "Pass -PKEYSTORE_FILE, -PKEYSTORE_PASSWORD, -PKEY_ALIAS and -PKEY_PASSWORD " +
+                "or use -PallowUnsignedRelease=true for PR validation builds."
+        )
+    }
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

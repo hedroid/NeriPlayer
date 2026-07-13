@@ -14,20 +14,20 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import androidx.core.content.ContextCompat
-import moe.ouom.neriplayer.core.player.AudioPlayerService
+import moe.ouom.neriplayer.core.player.service.AudioPlayerService
 import moe.ouom.neriplayer.core.player.PlayerManager
-import moe.ouom.neriplayer.core.player.retryUsbExclusivePlayback
+import moe.ouom.neriplayer.core.player.lifecycle.retryUsbExclusivePlayback
 import moe.ouom.neriplayer.core.player.audio.isUsbOutputType
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveSessionController
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveAudioPathTracker
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveWakeLock
-import moe.ouom.neriplayer.core.player.usb.usbExclusiveDeviceKey
-import moe.ouom.neriplayer.core.player.usb.usbExclusiveDeviceKeyMatchesLabel
-import moe.ouom.neriplayer.core.player.usb.matchesUsbExclusiveDeviceKey
+import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveSessionController
+import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathTracker
+import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveWakeLock
+import moe.ouom.neriplayer.core.player.usb.device.usbExclusiveDeviceKey
+import moe.ouom.neriplayer.core.player.usb.device.usbExclusiveDeviceKeyMatchesLabel
+import moe.ouom.neriplayer.core.player.usb.device.matchesUsbExclusiveDeviceKey
 import moe.ouom.neriplayer.data.settings.DEFAULT_USB_EXCLUSIVE_DEVICE_KEY
 import moe.ouom.neriplayer.data.settings.readPlaybackPreferenceSnapshotSync
 import moe.ouom.neriplayer.data.settings.toUsbExclusivePreferences
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class UsbExclusiveDiagnosticsSnapshot(

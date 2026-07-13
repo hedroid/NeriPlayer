@@ -27,13 +27,13 @@ package moe.ouom.neriplayer.data.sync.webdav
 import android.content.Context
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.data.history.PlayedEntry
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
+import moe.ouom.neriplayer.data.local.playlist.model.DISPLAY_ORDER_SONG_ORDER_VERSION
 import moe.ouom.neriplayer.data.local.playlist.model.LocalPlaylist
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
@@ -45,6 +45,7 @@ import moe.ouom.neriplayer.data.sync.github.ConflictResolution
 import moe.ouom.neriplayer.data.sync.github.ConflictType
 import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
 import moe.ouom.neriplayer.data.sync.github.SyncConflict
+import moe.ouom.neriplayer.data.sync.github.SyncDataChangeDetector
 import moe.ouom.neriplayer.data.sync.github.SyncData
 import moe.ouom.neriplayer.data.sync.github.SyncDataSerializer
 import moe.ouom.neriplayer.data.sync.github.SyncFavoritePlaylist
@@ -63,8 +64,9 @@ import moe.ouom.neriplayer.data.sync.github.SyncTrackStat
 import moe.ouom.neriplayer.data.sync.github.LocalSyncMutationConflictException
 import moe.ouom.neriplayer.data.sync.github.SyncUploadRetryExecutor
 import moe.ouom.neriplayer.data.stats.PlaybackStatsRepository
-import moe.ouom.neriplayer.util.LanguageManager
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.data.sync.SyncCoordinator
+import moe.ouom.neriplayer.util.platform.LanguageManager
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.io.IOException
 
 class WebDavSyncManager private constructor(context: Context) {
@@ -75,7 +77,6 @@ class WebDavSyncManager private constructor(context: Context) {
     private val favoriteRepo = FavoritePlaylistRepository.getInstance(appContext)
     private val playHistoryRepo = PlayHistoryRepository.getInstance(appContext)
     private val playbackStatsRepo = PlaybackStatsRepository.getInstance(appContext)
-    private val syncLock = Mutex()
 
     companion object {
         private const val TAG = "WebDavSyncManager"
@@ -93,7 +94,7 @@ class WebDavSyncManager private constructor(context: Context) {
     suspend fun performSync(): Result<SyncResult> = withContext(Dispatchers.IO) {
         val localizedContext = LanguageManager.applyLanguage(appContext)
 
-        if (!syncLock.tryLock()) {
+        if (!SyncCoordinator.tryLock()) {
             return@withContext Result.failure(
                 WebDavSyncInProgressException(
                     localizedContext.getString(R.string.webdav_sync_in_progress)
@@ -114,11 +115,6 @@ class WebDavSyncManager private constructor(context: Context) {
             val apiClient = WebDavApiClient(appContext, username, password)
             val startMutationVersion = storage.getSyncMutationVersion()
             val localData = sanitizeSyncData(buildLocalSyncData(localizedContext))
-            val uploadedDeletedPlaylistIds = localData.playlists
-                .asSequence()
-                .filter(SyncPlaylist::isDeleted)
-                .map(SyncPlaylist::id)
-                .toSet()
             val remoteSnapshotResult = fetchRemoteSnapshot(
                 apiClient = apiClient,
                 remoteUrl = remoteUrl
@@ -223,7 +219,6 @@ class WebDavSyncManager private constructor(context: Context) {
             uploadResolution.remoteVersion.lastKnownFingerprint
                 ?.let(webDavStorage::saveLastRemoteFingerprint)
             webDavStorage.saveLastSyncTime(System.currentTimeMillis())
-            storage.removeDeletedPlaylistIds(uploadedDeletedPlaylistIds)
             if (localMutatedDuringSync) {
                 WebDavSyncWorker.scheduleDelayedSync(
                     appContext,
@@ -257,7 +252,7 @@ class WebDavSyncManager private constructor(context: Context) {
             NPLogger.e(TAG, "Sync failed", e)
             Result.failure(e)
         } finally {
-            syncLock.unlock()
+            SyncCoordinator.unlock()
         }
     }
 
@@ -275,7 +270,8 @@ class WebDavSyncManager private constructor(context: Context) {
                     songs = emptyList(),
                     createdAt = 0L,
                     modifiedAt = System.currentTimeMillis(),
-                    isDeleted = true
+                    isDeleted = true,
+                    songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
                 )
             }
         }
@@ -326,12 +322,26 @@ class WebDavSyncManager private constructor(context: Context) {
                 it.copy(mediaUri = LocalSongSupport.sanitizeMediaUriForSync(it.mediaUri))
             }
 
+        val playbackCounterSnapshot = playbackStatsRepo.syncCounterSnapshot()
         val syncPlaybackStats = playbackStatsRepo.statsFlow.value
             .filter { SyncPlaybackStatMapper.shouldSync(it, localizedContext) }
-            .map(SyncPlaybackStatMapper::fromTrackStat)
+            .map { stat ->
+                SyncPlaybackStatMapper.fromTrackStat(
+                    stat = stat,
+                    counterShards = playbackCounterSnapshot.trackShards(stat.identityKey)
+                )
+            }
         val syncPlaybackStatBuckets = playbackStatsRepo.dailyStatsFlow.value
             .filter { SyncPlaybackStatMapper.shouldSync(it, localizedContext) }
-            .map(SyncPlaybackStatMapper::fromPlaybackStatBucket)
+            .map { bucket ->
+                SyncPlaybackStatMapper.fromPlaybackStatBucket(
+                    bucket = bucket,
+                    counterShards = playbackCounterSnapshot.dailyShards(
+                        dayStartAt = bucket.dayStartAt,
+                        identityKey = bucket.identityKey
+                    )
+                )
+            }
 
         return SyncData(
             deviceId = getDeviceId(),
@@ -610,7 +620,8 @@ class WebDavSyncManager private constructor(context: Context) {
                 name = finalName,
                 songs = mergedSongs,
                 createdAt = minOf(local.createdAt, remote.createdAt),
-                modifiedAt = maxOf(local.modifiedAt, remote.modifiedAt)
+                modifiedAt = maxOf(local.modifiedAt, remote.modifiedAt),
+                songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
             ),
             hasConflict = hasConflict,
             conflict = conflict,
@@ -735,7 +746,8 @@ class WebDavSyncManager private constructor(context: Context) {
             songs = emptyList(),
             createdAt = minOf(local.createdAt, remote.createdAt),
             modifiedAt = maxOf(local.modifiedAt, remote.modifiedAt),
-            isDeleted = true
+            isDeleted = true,
+            songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
         )
     }
 
@@ -783,7 +795,8 @@ class WebDavSyncManager private constructor(context: Context) {
                     name = systemDescriptor?.currentName ?: syncPlaylist.name,
                     songs = mergeLocalOnlySongs(syncedSongs, preservedLocalSongs),
                     modifiedAt = syncPlaylist.modifiedAt,
-                    customCoverUrl = currentPlaylists[normalizedId]?.customCoverUrl
+                    customCoverUrl = currentPlaylists[normalizedId]?.customCoverUrl,
+                    songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
                 )
             }
         playlistRepo.updatePlaylists(mergedLocalPlaylists)
@@ -841,9 +854,9 @@ class WebDavSyncManager private constructor(context: Context) {
     }
 
     private fun mergeLocalOnlySongs(
-        syncedSongs: List<moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem>,
-        localOnlySongs: List<moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem>
-    ): MutableList<moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem> {
+        syncedSongs: List<moe.ouom.neriplayer.data.model.SongItem>,
+        localOnlySongs: List<moe.ouom.neriplayer.data.model.SongItem>
+    ): MutableList<moe.ouom.neriplayer.data.model.SongItem> {
         val merged = syncedSongs.toMutableList()
         val knownIdentities = merged.map { it.identity() }.toMutableSet()
         localOnlySongs.forEach { song ->
@@ -902,7 +915,7 @@ class WebDavSyncManager private constructor(context: Context) {
             songs = SyncPlaylistSongMergePolicy.deduplicateSongs(
                 playlist.songs.mapNotNull { sanitizeSyncSong(it) }
             )
-        )
+        ).normalizedForDisplayOrder()
     }
 
     private fun sanitizeSyncFavoritePlaylist(playlist: SyncFavoritePlaylist): SyncFavoritePlaylist {
@@ -954,114 +967,7 @@ class WebDavSyncManager private constructor(context: Context) {
     }
 
     private fun hasDataChanged(remote: SyncData, merged: SyncData): Boolean {
-        if (remote.playlists.size != merged.playlists.size) return true
-        if (remote.playlists.map(SyncPlaylist::id) != merged.playlists.map(SyncPlaylist::id)) return true
-
-        val remotePlaylistMap = remote.playlists.associateBy { it.id }
-        for (mergedPlaylist in merged.playlists) {
-            val remotePlaylist = remotePlaylistMap[mergedPlaylist.id] ?: return true
-            if (remotePlaylist.isDeleted != mergedPlaylist.isDeleted) return true
-            if (remotePlaylist.name != mergedPlaylist.name) return true
-            if (remotePlaylist.songs.size != mergedPlaylist.songs.size) return true
-            if (remotePlaylist.songs.map { it.identity() } != mergedPlaylist.songs.map { it.identity() }) return true
-            for (i in remotePlaylist.songs.indices) {
-                val remoteSong = remotePlaylist.songs[i]
-                val mergedSong = mergedPlaylist.songs[i]
-                if (!sameSongMetadata(remoteSong, mergedSong)) return true
-            }
-        }
-
-        if (remote.favoritePlaylists.size != merged.favoritePlaylists.size) return true
-        val remoteFavoriteMap = remote.favoritePlaylists.associateBy { "${it.id}_${it.source}" }
-        val mergedFavoriteMap = merged.favoritePlaylists.associateBy { "${it.id}_${it.source}" }
-        if (remoteFavoriteMap.keys != mergedFavoriteMap.keys) return true
-        remoteFavoriteMap.forEach { (key, remoteFavorite) ->
-            val mergedFavorite = mergedFavoriteMap[key] ?: return true
-            if (remoteFavorite.isDeleted != mergedFavorite.isDeleted) return true
-            if (remoteFavorite.modifiedAt != mergedFavorite.modifiedAt) return true
-            if (remoteFavorite.sortOrder != mergedFavorite.sortOrder) return true
-            if (remoteFavorite.trackCount != mergedFavorite.trackCount) return true
-            if (remoteFavorite.songs.map { it.identity() } != mergedFavorite.songs.map { it.identity() }) return true
-            for (i in remoteFavorite.songs.indices) {
-                val remoteSong = remoteFavorite.songs[i]
-                val mergedSong = mergedFavorite.songs[i]
-                if (!sameSongMetadata(remoteSong, mergedSong)) return true
-            }
-        }
-
-        val remoteRecent = remote.recentPlays.take(50)
-        val mergedRecent = merged.recentPlays.take(50)
-        if (remoteRecent.size != mergedRecent.size) return true
-        for (i in remoteRecent.indices) {
-            if (remoteRecent[i].song.identity() != mergedRecent[i].song.identity()) return true
-            if (!sameSongMetadata(remoteRecent[i].song, mergedRecent[i].song)) return true
-            if (remoteRecent[i].playedAt != mergedRecent[i].playedAt) return true
-        }
-
-        val remoteRecentDeletions = remote.recentPlayDeletions.take(100)
-        val mergedRecentDeletions = merged.recentPlayDeletions.take(100)
-        if (remoteRecentDeletions.size != mergedRecentDeletions.size) return true
-        for (i in remoteRecentDeletions.indices) {
-            if (remoteRecentDeletions[i].identity() != mergedRecentDeletions[i].identity()) return true
-            if (remoteRecentDeletions[i].deletedAt != mergedRecentDeletions[i].deletedAt) return true
-            if (remoteRecentDeletions[i].deviceId != mergedRecentDeletions[i].deviceId) return true
-        }
-
-        val remotePlaylistDeletions = remote.playlistSongDeletions.take(500)
-        val mergedPlaylistDeletions = merged.playlistSongDeletions.take(500)
-        if (remotePlaylistDeletions.size != mergedPlaylistDeletions.size) return true
-        for (i in remotePlaylistDeletions.indices) {
-            if (remotePlaylistDeletions[i].playlistId != mergedPlaylistDeletions[i].playlistId) return true
-            if (remotePlaylistDeletions[i].identity() != mergedPlaylistDeletions[i].identity()) return true
-            if (remotePlaylistDeletions[i].deletedAt != mergedPlaylistDeletions[i].deletedAt) return true
-            if (remotePlaylistDeletions[i].deviceId != mergedPlaylistDeletions[i].deviceId) return true
-        }
-
-        val remoteStats = remote.playbackStats.associateBy { it.identityKey }
-        val mergedStats = merged.playbackStats.associateBy { it.identityKey }
-        if (remote.playbackStatsClearedAt != merged.playbackStatsClearedAt) return true
-        if (remoteStats.keys != mergedStats.keys) return true
-        remoteStats.forEach { (key, remoteStat) ->
-            val mergedStat = mergedStats[key] ?: return true
-            if (!SyncPlaybackStatMapper.sameMetadata(remoteStat, mergedStat)) return true
-        }
-
-        val remoteBuckets = remote.playbackStatBuckets.associateBy { it.dayStartAt to it.identityKey }
-        val mergedBuckets = merged.playbackStatBuckets.associateBy { it.dayStartAt to it.identityKey }
-        if (remoteBuckets.keys != mergedBuckets.keys) return true
-        remoteBuckets.forEach { (key, remoteBucket) ->
-            val mergedBucket = mergedBuckets[key] ?: return true
-            if (!SyncPlaybackStatMapper.sameMetadata(remoteBucket, mergedBucket)) return true
-        }
-        return false
-    }
-
-    private fun sameSongMetadata(a: SyncSong, b: SyncSong): Boolean {
-        return a.name == b.name &&
-            a.artist == b.artist &&
-            a.album == b.album &&
-            a.albumId == b.albumId &&
-            a.durationMs == b.durationMs &&
-            a.coverUrl == b.coverUrl &&
-            a.mediaUri == b.mediaUri &&
-            a.addedAt == b.addedAt &&
-            a.matchedLyric == b.matchedLyric &&
-            a.matchedTranslatedLyric == b.matchedTranslatedLyric &&
-            a.matchedLyricSource == b.matchedLyricSource &&
-            a.matchedSongId == b.matchedSongId &&
-            a.userLyricOffsetMs == b.userLyricOffsetMs &&
-            a.customCoverUrl == b.customCoverUrl &&
-            a.customName == b.customName &&
-            a.customArtist == b.customArtist &&
-            a.originalName == b.originalName &&
-            a.originalArtist == b.originalArtist &&
-            a.originalCoverUrl == b.originalCoverUrl &&
-            a.originalLyric == b.originalLyric &&
-            a.originalTranslatedLyric == b.originalTranslatedLyric &&
-            a.channelId == b.channelId &&
-            a.audioId == b.audioId &&
-            a.subAudioId == b.subAudioId &&
-            a.playlistContextId == b.playlistContextId
+        return SyncDataChangeDetector.hasDataChanged(remote, merged)
     }
 
     private suspend fun fetchRemoteSnapshot(
@@ -1086,6 +992,7 @@ class WebDavSyncManager private constructor(context: Context) {
         }
 
         val remoteData = try {
+            SyncDataSerializer.ensureRemoteContentSize(snapshot.content, false)
             sanitizeSyncData(SyncDataSerializer.deserialize(snapshot.content, false))
         } catch (e: Exception) {
             NPLogger.e(TAG, "Failed to parse remote data", e)

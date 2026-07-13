@@ -35,7 +35,7 @@ import com.google.gson.reflect.TypeToken
 import moe.ouom.neriplayer.data.config.GitHubSyncConfigSnapshot
 import moe.ouom.neriplayer.data.model.SongIdentity
 import moe.ouom.neriplayer.data.model.stableKey
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.util.UUID
 
 /**
@@ -65,6 +65,7 @@ class SecureTokenStorage(private val context: Context) {
         private const val KEY_SYNC_MUTATION_VERSION = "sync_mutation_version"
         private const val MAX_RECENT_PLAY_DELETIONS = 500
         private const val MAX_PLAYLIST_SONG_DELETIONS = 5000
+        private val syncMutationLock = Any()
     }
 
     private fun openEncryptedPrefsWithRecovery(): SharedPreferences {
@@ -368,13 +369,17 @@ class SecureTokenStorage(private val context: Context) {
     }
 
     fun getSyncMutationVersion(): Long {
-        return encryptedPrefs.getLong(KEY_SYNC_MUTATION_VERSION, 0L)
+        return synchronized(syncMutationLock) {
+            encryptedPrefs.getLong(KEY_SYNC_MUTATION_VERSION, 0L)
+        }
     }
 
     fun markSyncMutation(): Long {
-        val nextVersion = getSyncMutationVersion() + 1L
-        encryptedPrefs.edit { putLong(KEY_SYNC_MUTATION_VERSION, nextVersion) }
-        return nextVersion
+        return synchronized(syncMutationLock) {
+            val nextVersion = encryptedPrefs.getLong(KEY_SYNC_MUTATION_VERSION, 0L) + 1L
+            encryptedPrefs.edit { putLong(KEY_SYNC_MUTATION_VERSION, nextVersion) }
+            nextVersion
+        }
     }
 
     fun snapshot(): GitHubSyncConfigSnapshot {
@@ -390,7 +395,12 @@ class SecureTokenStorage(private val context: Context) {
 
     fun restore(snapshot: GitHubSyncConfigSnapshot) {
         encryptedPrefs.edit {
-            clear()
+            remove(KEY_GITHUB_TOKEN)
+            remove(KEY_REPO_OWNER)
+            remove(KEY_REPO_NAME)
+            remove(KEY_AUTO_SYNC_ENABLED)
+            remove(KEY_PLAY_HISTORY_UPDATE_MODE)
+            remove(KEY_DATA_SAVER_MODE)
 
             if (snapshot.token.isNotBlank()) putString(KEY_GITHUB_TOKEN, snapshot.token)
             if (snapshot.repoOwner.isNotBlank()) putString(KEY_REPO_OWNER, snapshot.repoOwner)

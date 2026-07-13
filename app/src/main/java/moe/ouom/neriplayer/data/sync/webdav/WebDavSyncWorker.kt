@@ -18,7 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.util.concurrent.TimeUnit
 
 class WebDavSyncWorker(
@@ -55,7 +55,7 @@ class WebDavSyncWorker(
                 .build()
 
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, syncRequest)
+                .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, syncRequest)
         }
 
         fun schedulePeriodicSync(context: Context) {
@@ -105,7 +105,8 @@ class WebDavSyncWorker(
             } else {
                 val error = syncResult.exceptionOrNull()
                 if (error is WebDavSyncInProgressException) {
-                    return@withContext Result.success()
+                    NPLogger.d(TAG, "WebDAV sync is waiting for the global sync lock, retry later")
+                    return@withContext Result.retry()
                 }
                 NPLogger.e(TAG, "WebDAV sync failed", error)
                 if (

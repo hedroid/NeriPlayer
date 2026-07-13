@@ -67,7 +67,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -88,7 +87,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -110,6 +108,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -129,21 +128,21 @@ import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.component.PlaylistExportSheet
-import moe.ouom.neriplayer.ui.component.bottomSheetScrollGuard
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.ExploreUiState
 import moe.ouom.neriplayer.ui.viewmodel.tab.ExploreViewModel
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.SearchSource
 import moe.ouom.neriplayer.ui.viewmodel.tab.YouTubeMusicPlaylist
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.util.fastScrollableImageRequest
-import moe.ouom.neriplayer.util.formatDuration
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
+import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 
 private const val SEARCH_INPUT_DEBOUNCE_MS = 300L
 
@@ -181,14 +180,16 @@ fun ExploreScreen(
             initializer { ExploreViewModel(context.applicationContext as Application) }
         }
     )
-    val ui by vm.uiState.collectAsState()
+    val ui by vm.uiState.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
-    val backgroundImageUri by AppContainer.settingsRepo.backgroundImageUriFlow.collectAsState(initial = null)
+    val backgroundImageUri by AppContainer.settingsRepo.backgroundImageUriFlow.collectAsStateWithLifecycle(
+        initialValue = null
+    )
 
     val repo = remember(context) { LocalPlaylistRepository.getInstance(context) }
-    val allLocalPlaylists by repo.playlists.collectAsState(initial = emptyList())
+    val allLocalPlaylists by repo.playlists.collectAsStateWithLifecycle(initialValue = emptyList())
     val favoriteSongKeys = remember(allLocalPlaylists, context) {
         FavoritesPlaylist.firstOrNull(allLocalPlaylists, context)
             ?.songs
@@ -196,7 +197,7 @@ fun ExploreScreen(
             .mapTo(mutableSetOf()) { it.stableKey() }
     }
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
-    val favorites by favoriteRepo.favorites.collectAsState()
+    val favorites by favoriteRepo.favorites.collectAsStateWithLifecycle()
     val favoriteKeys = remember(favorites) {
         favorites.mapTo(mutableSetOf()) { "${it.source}:${it.id}" }
     }
@@ -212,7 +213,7 @@ fun ExploreScreen(
     var showExportSheet by remember { mutableStateOf(false) }
 
     val isInternational by AppContainer.settingsRepo.internationalizationEnabledFlow
-        .collectAsState(initial = false)
+        .collectAsStateWithLifecycle(initialValue = false)
     val orderedSearchSources = remember(isInternational) {
         if (isInternational) {
             listOf(

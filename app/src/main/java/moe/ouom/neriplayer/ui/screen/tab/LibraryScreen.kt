@@ -83,7 +83,6 @@ import androidx.compose.material3.TopAppBarState
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -107,6 +106,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -123,10 +123,9 @@ import moe.ouom.neriplayer.data.local.playlist.model.buildLocalArtistSummaries
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.system.SystemLocalPlaylists
 import moe.ouom.neriplayer.data.model.displayArtist
-import moe.ouom.neriplayer.data.model.displayCoverUrl
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.viewmodel.artist.NeteaseArtistSummary
+import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylistKind
@@ -134,10 +133,12 @@ import moe.ouom.neriplayer.ui.viewmodel.tab.LibraryViewModel
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.YouTubeMusicPlaylist
 import moe.ouom.neriplayer.ui.viewmodel.tab.favoriteId
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.formatPlayCount
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.util.rememberPlaylistDisplayCoverUrl
+import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.util.format.formatPlayCount
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
 import org.burnoutcrew.reorderable.ItemPosition
 import org.burnoutcrew.reorderable.ReorderableItem
 import org.burnoutcrew.reorderable.detectReorder
@@ -227,11 +228,11 @@ fun LibraryScreen(
     offlineMode: Boolean = false
 ) {
     val vm: LibraryViewModel = viewModel()
-    val ui by vm.uiState.collectAsState()
+    val ui by vm.uiState.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
     val defaultPlaylistName = stringResource(R.string.library_create_playlist_default)
     val isInternational by AppContainer.settingsRepo.internationalizationEnabledFlow
-        .collectAsState(initial = false)
+        .collectAsStateWithLifecycle(initialValue = false)
     val orderedTabs = remember(isInternational) { libraryTabDisplayOrder(isInternational) }
     val initialPage = remember(orderedTabs, initialTab) {
         orderedTabs.indexOf(initialTab.asVisibleLibraryTab()).takeIf { it >= 0 } ?: 0
@@ -461,7 +462,7 @@ private fun YouTubeMusicPlaylistList(
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
-    val favorites by favoriteRepo.favorites.collectAsState()
+    val favorites by favoriteRepo.favorites.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var menuPlaylist by remember { mutableStateOf<YouTubeMusicPlaylist?>(null) }
 
@@ -894,7 +895,9 @@ private fun LocalPlaylistList(
     val context = LocalContext.current
     val defaultPlaylistName = context.getString(R.string.library_create_playlist_default)
     val maxNameLength = LocalPlaylistRepository.MAX_PLAYLIST_NAME_LENGTH
-    val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsState(initial = false)
+    val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsStateWithLifecycle(
+        initialValue = false
+    )
     val localArtists = remember(playlists, context) {
         buildLocalArtistSummaries(playlists, context)
     }
@@ -1316,14 +1319,16 @@ private fun LocalPlaylistList(
                                     Spacer(modifier = Modifier.size(24.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
-                                val cover = system.displayCoverUrl(context)
+                                val cover = rememberPlaylistDisplayCoverUrl(
+                                    playlist = system,
+                                    resolveLocalFallback = true
+                                )
                                 if (!cover.isNullOrEmpty()) {
                                     AsyncImage(
-                                        model = offlineCachedImageRequest(
+                                        model = fastScrollableImageRequest(
                                             context = context,
                                             data = cover,
-                                            sizePx = 192,
-                                            allowHardware = false,
+                                            sizePx = 160,
                                             offlineMode = offlineMode
                                         ),
                                         contentDescription = null,
@@ -1424,14 +1429,16 @@ private fun LocalPlaylistList(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
-                                val cover = pl.displayCoverUrl(context)
+                                val cover = rememberPlaylistDisplayCoverUrl(
+                                    playlist = pl,
+                                    resolveLocalFallback = true
+                                )
                                 if (!cover.isNullOrEmpty()) {
                                     AsyncImage(
-                                        model = offlineCachedImageRequest(
+                                        model = fastScrollableImageRequest(
                                             context = context,
                                             data = cover,
-                                            sizePx = 192,
-                                            allowHardware = false,
+                                            sizePx = 160,
                                             offlineMode = offlineMode
                                         ),
                                         contentDescription = null,
@@ -1595,14 +1602,16 @@ private fun LocalPlaylistList(
                                     Spacer(modifier = Modifier.size(24.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
-                                val cover = system.displayCoverUrl(context)
+                                val cover = rememberPlaylistDisplayCoverUrl(
+                                    playlist = system,
+                                    resolveLocalFallback = true
+                                )
                                 if (!cover.isNullOrEmpty()) {
                                     AsyncImage(
-                                        model = offlineCachedImageRequest(
+                                        model = fastScrollableImageRequest(
                                             context = context,
                                             data = cover,
-                                            sizePx = 192,
-                                            allowHardware = false,
+                                            sizePx = 160,
                                             offlineMode = offlineMode
                                         ),
                                         contentDescription = null,
@@ -2647,7 +2656,7 @@ private fun FavoritePlaylistList(
 ) {
     val context = LocalContext.current
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
-    val favorites by favoriteRepo.favorites.collectAsState()
+    val favorites by favoriteRepo.favorites.collectAsStateWithLifecycle()
     val miniPlayerHeight = LocalMiniPlayerHeight.current
     val scope = rememberCoroutineScope()
     var sortMode by rememberSaveable { mutableStateOf(false) }

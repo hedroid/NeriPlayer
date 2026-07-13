@@ -25,9 +25,9 @@ package moe.ouom.neriplayer.data.local.playlist.system
 
 import android.content.Context
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.data.local.playlist.model.DISPLAY_ORDER_SONG_ORDER_VERSION
 import moe.ouom.neriplayer.data.local.playlist.model.LocalPlaylist
-import moe.ouom.neriplayer.data.model.identity
-import moe.ouom.neriplayer.util.LanguageManager
+import moe.ouom.neriplayer.util.platform.LanguageManager
 
 object FavoritesPlaylist {
     const val SYSTEM_ID = -1001L
@@ -69,10 +69,11 @@ object FavoritesPlaylist {
             name = currentName(context),
             songs = playlists
                 .flatMap { it.songs }
-                .distinctBy { it.identity() }
+                .distinctSystemSongs()
                 .toMutableList(),
             modifiedAt = playlists.maxOfOrNull { it.modifiedAt } ?: System.currentTimeMillis(),
-            customCoverUrl = playlists.lastOrNull { !it.customCoverUrl.isNullOrBlank() }?.customCoverUrl
+            customCoverUrl = playlists.lastOrNull { !it.customCoverUrl.isNullOrBlank() }?.customCoverUrl,
+            songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
         )
     }
 }

@@ -41,10 +41,11 @@ import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.model.SongIdentity
 import moe.ouom.neriplayer.data.sync.github.GitHubSyncWorker
 import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
+import moe.ouom.neriplayer.util.io.writeTextAtomically
 import moe.ouom.neriplayer.data.sync.github.SyncRecentPlayDeletion
 import moe.ouom.neriplayer.data.sync.webdav.WebDavSyncWorker
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.io.File
 
 data class PlayedEntry(
@@ -68,8 +69,71 @@ data class PlayedEntry(
     val originalTranslatedLyric: String? = null,
     val localFileName: String? = null,
     val localFilePath: String? = null,
+    val channelId: String? = null,
+    val audioId: String? = null,
+    val subAudioId: String? = null,
+    val sourceStableKey: String? = null,
     val playedAt: Long
 )
+
+internal fun SongItem.toPlayedEntry(now: Long): PlayedEntry {
+    return PlayedEntry(
+        id = id,
+        name = name,
+        artist = artist,
+        album = album,
+        albumId = albumId,
+        durationMs = durationMs,
+        coverUrl = coverUrl,
+        mediaUri = mediaUri,
+        matchedLyric = matchedLyric,
+        matchedTranslatedLyric = matchedTranslatedLyric,
+        customCoverUrl = customCoverUrl,
+        customName = customName,
+        customArtist = customArtist,
+        originalName = originalName,
+        originalArtist = originalArtist,
+        originalCoverUrl = originalCoverUrl,
+        originalLyric = originalLyric,
+        originalTranslatedLyric = originalTranslatedLyric,
+        localFileName = localFileName,
+        localFilePath = localFilePath,
+        channelId = channelId,
+        audioId = audioId,
+        subAudioId = subAudioId,
+        sourceStableKey = sourceStableKey,
+        playedAt = now
+    )
+}
+
+internal fun PlayedEntry.toSongItem(): SongItem {
+    return SongItem(
+        id = id,
+        name = name,
+        artist = artist,
+        albumId = albumId,
+        album = album,
+        durationMs = durationMs,
+        coverUrl = coverUrl,
+        mediaUri = localFilePath ?: mediaUri,
+        matchedLyric = matchedLyric,
+        matchedTranslatedLyric = matchedTranslatedLyric,
+        customCoverUrl = customCoverUrl,
+        customName = customName,
+        customArtist = customArtist,
+        originalName = originalName,
+        originalArtist = originalArtist,
+        originalCoverUrl = originalCoverUrl,
+        originalLyric = originalLyric,
+        originalTranslatedLyric = originalTranslatedLyric,
+        localFileName = localFileName,
+        localFilePath = localFilePath,
+        channelId = channelId,
+        audioId = audioId,
+        subAudioId = subAudioId,
+        sourceStableKey = sourceStableKey
+    )
+}
 
 internal enum class PlayHistorySyncUrgency {
     SETTLED,
@@ -110,13 +174,18 @@ class PlayHistoryRepository private constructor(private val app: Context) {
 
     private fun persistToDisk(list: List<PlayedEntry>) {
         runCatching {
-            file.writeText(gson.toJson(list))
+            file.writeTextAtomically(gson.toJson(list))
         }.onFailure { error ->
             NPLogger.e("PlayHistoryRepo", "Failed to persist play history", error)
         }
     }
 
     private fun triggerSyncIfNeeded(urgency: PlayHistorySyncUrgency = PlayHistorySyncUrgency.IMMEDIATE) {
+        runCatching {
+            storage.markSyncMutation()
+        }.onFailure { error ->
+            NPLogger.e("PlayHistoryRepo", "Failed to mark sync mutation", error)
+        }
         try {
             val mode = storage.getPlayHistoryUpdateMode()
             val now = System.currentTimeMillis()
@@ -150,7 +219,6 @@ class PlayHistoryRepository private constructor(private val app: Context) {
 
     private fun triggerAutoSyncNow() {
         try {
-            storage.markSyncMutation()
             if (!storage.isAutoSyncEnabled()) {
                 NPLogger.d("PlayHistoryRepo", "Auto sync is disabled, skipping sync")
             }
@@ -286,18 +354,16 @@ class PlayHistoryRepository private constructor(private val app: Context) {
         }
     }
 
-    fun updateHistory(entries: List<PlayedEntry>) {
-        scope.launch {
-            historyMutex.withLock {
-                NPLogger.d("PlayHistoryRepo", "updateHistory() called: entries=${entries.size}")
-                val clipped = entries
-                    .sortedByDescending { it.playedAt }
-                    .distinctBy { it.identityKey() }
-                    .take(1000)
-                NPLogger.d("PlayHistoryRepo", "updateHistory() setting history to ${clipped.size} entries, latest: ${clipped.firstOrNull()?.name}")
-                _history.value = clipped
-                persistToDisk(clipped)
-            }
+    suspend fun updateHistory(entries: List<PlayedEntry>) {
+        historyMutex.withLock {
+            NPLogger.d("PlayHistoryRepo", "updateHistory() called: entries=${entries.size}")
+            val clipped = entries
+                .sortedByDescending { it.playedAt }
+                .distinctBy { it.identityKey() }
+                .take(1000)
+            NPLogger.d("PlayHistoryRepo", "updateHistory() setting history to ${clipped.size} entries, latest: ${clipped.firstOrNull()?.name}")
+            _history.value = clipped
+            persistToDisk(clipped)
         }
     }
 
@@ -307,32 +373,6 @@ class PlayHistoryRepository private constructor(private val app: Context) {
 
     private fun SongItem.identityKey(): SongIdentity {
         return SongIdentity(id, album, localFilePath ?: mediaUri)
-    }
-
-    private fun SongItem.toPlayedEntry(now: Long): PlayedEntry {
-        return PlayedEntry(
-            id = id,
-            name = name,
-            artist = artist,
-            album = album,
-            albumId = albumId,
-            durationMs = durationMs,
-            coverUrl = coverUrl,
-            mediaUri = mediaUri,
-            matchedLyric = matchedLyric,
-            matchedTranslatedLyric = matchedTranslatedLyric,
-            customCoverUrl = customCoverUrl,
-            customName = customName,
-            customArtist = customArtist,
-            originalName = originalName,
-            originalArtist = originalArtist,
-            originalCoverUrl = originalCoverUrl,
-            originalLyric = originalLyric,
-            originalTranslatedLyric = originalTranslatedLyric,
-            localFileName = localFileName,
-            localFilePath = localFilePath,
-            playedAt = now
-        )
     }
 
     private fun PlayedEntry.mergeSongMetadata(song: SongItem, playedAt: Long = this.playedAt): PlayedEntry {
@@ -356,6 +396,10 @@ class PlayHistoryRepository private constructor(private val app: Context) {
             originalTranslatedLyric = song.originalTranslatedLyric,
             localFileName = song.localFileName,
             localFilePath = song.localFilePath,
+            channelId = song.channelId,
+            audioId = song.audioId,
+            subAudioId = song.subAudioId,
+            sourceStableKey = song.sourceStableKey,
             playedAt = playedAt
         )
     }

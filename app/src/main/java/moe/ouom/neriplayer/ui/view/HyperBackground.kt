@@ -25,9 +25,9 @@ package moe.ouom.neriplayer.ui.view
 
 import android.os.Build
 import android.view.View
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,23 +36,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.toBitmap
 import coil.Coil
+import coil.size.Precision
 import androidx.palette.graphics.Palette
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.core.player.PlayerManager
-import moe.ouom.neriplayer.util.isRemoteImageSource
+import moe.ouom.neriplayer.util.media.isRemoteImageSource
 import kotlin.math.abs
 
 private const val DynamicBackgroundFallbackColor = 0xFF808080.toInt()
 private const val StrongHueConflictDegrees = 105f
+private const val PaletteCoverDecodeSizePx = 320
+private const val DynamicBackgroundPaletteTransitionDurationMs = 520L
 
 private enum class DynamicBackgroundColorRole {
     Base,
@@ -65,7 +72,51 @@ private enum class DynamicBackgroundColorRole {
 private data class DynamicBackgroundPalette(
     val colors: FloatArray,
     val primaryColor: Int
-)
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as DynamicBackgroundPalette
+
+        if (primaryColor != other.primaryColor) return false
+        if (!colors.contentEquals(other.colors)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = primaryColor
+        result = 31 * result + colors.contentHashCode()
+        return result
+    }
+}
+
+private data class DynamicBackgroundShaderPalette(
+    val colors: FloatArray,
+    val lightOffset: Float,
+    val saturateOffset: Float
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as DynamicBackgroundShaderPalette
+
+        if (lightOffset != other.lightOffset) return false
+        if (saturateOffset != other.saturateOffset) return false
+        if (!colors.contentEquals(other.colors)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = lightOffset.hashCode()
+        result = 31 * result + saturateOffset.hashCode()
+        result = 31 * result + colors.contentHashCode()
+        return result
+    }
+}
 
 /**
  * 渲染 Hyper 背景
@@ -91,6 +142,13 @@ fun HyperBackground(
     }
 
     var hostView by remember { mutableStateOf<View?>(null) }
+    var shaderInitialized by remember(painter, hostView, currentIsDark) {
+        mutableStateOf(false)
+    }
+    var targetShaderPalette by remember { mutableStateOf<DynamicBackgroundShaderPalette?>(null) }
+    var activeShaderPalette by remember(painter, currentIsDark) {
+        mutableStateOf<DynamicBackgroundShaderPalette?>(null)
+    }
 
     AndroidView(
         modifier = modifier,
@@ -118,98 +176,167 @@ fun HyperBackground(
         }
     }
 
-    val level by PlayerManager.audioLevelFlow.collectAsState(0f)
-    val beat  by PlayerManager.beatImpulseFlow.collectAsState(0f)
-    val currentLevel by rememberUpdatedState(level)
-    val currentBeat by rememberUpdatedState(beat)
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(painter, hostView, currentIsDark, coverUrl, refreshKey, offlineMode) {
+    LaunchedEffect(coverUrl, refreshKey, offlineMode, currentIsDark) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || coverUrl.isNullOrBlank()) {
+            return@LaunchedEffect
+        }
+        try {
+            val loader = Coil.imageLoader(context)
+            val req = ImageRequest.Builder(context)
+                .data(coverUrl)
+                .size(PaletteCoverDecodeSizePx)
+                .precision(Precision.INEXACT)
+                .allowHardware(false) // Palette 需要 software bitmap
+                .networkCachePolicy(
+                    if (offlineMode && isRemoteImageSource(coverUrl)) {
+                        CachePolicy.DISABLED
+                    } else {
+                        CachePolicy.ENABLED
+                    }
+                )
+                .build()
+            val result = withContext(Dispatchers.IO) { loader.execute(req) }
+            val bmp = (result as? SuccessResult)?.drawable?.toBitmap() ?: return@LaunchedEffect
+            val palette = withContext(Dispatchers.Default) {
+                Palette.from(bmp)
+                    .clearFilters() // 保留更真实的颜色
+                    .maximumColorCount(16)
+                    .generate()
+            }
+            targetShaderPalette = buildDynamicBackgroundShaderPalette(
+                palette = palette,
+                isDark = currentIsDark
+            )
+        } catch (_: Throwable) {
+            // 提色失败时保留上一组颜色，避免切歌瞬间退回默认背景
+        }
+    }
+
+    LaunchedEffect(painter, shaderInitialized, targetShaderPalette) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
+        val target = targetShaderPalette ?: return@LaunchedEffect
+        if (painter == null || !shaderInitialized) return@LaunchedEffect
+        val applied = animateDynamicBackgroundPalette(
+            painter = painter,
+            from = activeShaderPalette,
+            to = target
+        )
+        activeShaderPalette = applied
+    }
+
+    LaunchedEffect(painter, hostView, currentIsDark, lifecycleOwner) {
         if (painter == null || hostView == null) return@LaunchedEffect
         val v = hostView!!
 
         awaitViewReady(v)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !shaderInitialized) {
             try {
                 painter.showRuntimeShader(context, v, null, currentIsDark)
                 v.setRenderEffect(painter.renderEffect)
+                shaderInitialized = true
             } catch (_: Throwable) { return@LaunchedEffect }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !coverUrl.isNullOrBlank()) {
-            try {
-                val loader = Coil.imageLoader(context)
-                val req = ImageRequest.Builder(context)
-                    .data(coverUrl)
-                    .allowHardware(false) // Palette 需要 software bitmap
-                    .networkCachePolicy(
-                        if (offlineMode && isRemoteImageSource(coverUrl)) {
-                            CachePolicy.DISABLED
-                        } else {
-                            CachePolicy.ENABLED
-                        }
-                    )
-                    .build()
-                val result = withContext(Dispatchers.IO) { loader.execute(req) }
-                val bmp = (result as? SuccessResult)?.drawable?.toBitmap()
-
-                if (bmp != null) {
-                    val palette = withContext(Dispatchers.Default) {
-                        Palette.from(bmp)
-                            .clearFilters() // 保留更真实的颜色
-                            .maximumColorCount(16)
-                            .generate()
-                    }
-
-                    val dynamicPalette = buildDynamicBackgroundPalette(
-                        palette = palette,
-                        isDark = currentIsDark
-                    )
-
-                    // 亮度估计，调一点点亮度/饱和度
-                    val lumaValue = colorLuma(dynamicPalette.primaryColor)
-                    val lightOffset = when {
-                        currentIsDark -> (-0.06f + (0.12f * (lumaValue - 0.5f)))  // 暗色下略降亮，偏亮封面就少降一点
-                        else          -> ( 0.08f + (0.10f * (0.5f - lumaValue)))  // 亮色下略升亮，偏暗封面就多升一点
-                    }.coerceIn(-0.12f, 0.12f)
-
-                    val saturateOffset = (if (currentIsDark) 0.24f else 0.16f)
-
-                    // 喂给着色器
-                    painter.setColors(dynamicPalette.colors)
-                    painter.setLightOffset(lightOffset)
-                    painter.setSaturateOffset(saturateOffset)
-                }
-            } catch (_: Throwable) {
-                // 忽略提色失败，继续使用默认配色
-            }
-        }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            var startNs = 0L
-            var smoothLevel = 0f
-            var smoothBeat = 0f
-            while (isActive) {
-                withFrameNanos { t ->
-                    if (startNs == 0L) startNs = t
-                    val seconds = ((t - startNs) / 1_000_000_000.0).toFloat()
-                    painter.setAnimTime(seconds % 62.831852f)
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                var currentLevel = 0f
+                var currentBeat = 0f
+                var startNs = 0L
+                var smoothLevel = 0f
+                var smoothBeat = 0f
+                val levelJob = launch {
+                    PlayerManager.audioLevelFlow.collect { currentLevel = it }
+                }
+                val beatJob = launch {
+                    PlayerManager.beatImpulseFlow.collect { currentBeat = it }
+                }
+                try {
+                    while (isActive) {
+                        withFrameNanos { t ->
+                            if (startNs == 0L) startNs = t
+                            val seconds = ((t - startNs) / 1_000_000_000.0).toFloat()
+                            painter.setAnimTime(seconds % 62.831852f)
 
-                    val targetLevel = currentLevel.coerceIn(0f, 1f)
-                    val targetBeat = (currentBeat * 0.94f).coerceIn(0f, 1f)
-                    val levelRate = if (targetLevel > smoothLevel) 0.12f else 0.045f
-                    val beatRate = if (targetBeat > smoothBeat) 0.46f else 0.12f
-                    smoothLevel += (targetLevel - smoothLevel) * levelRate
-                    smoothBeat += (targetBeat - smoothBeat) * beatRate
-                    painter.setReactive(smoothLevel, smoothBeat)
+                            val targetLevel = currentLevel.coerceIn(0f, 1f)
+                            val targetBeat = (currentBeat * 0.94f).coerceIn(0f, 1f)
+                            val levelRate = if (targetLevel > smoothLevel) 0.12f else 0.045f
+                            val beatRate = if (targetBeat > smoothBeat) 0.46f else 0.12f
+                            smoothLevel += (targetLevel - smoothLevel) * levelRate
+                            smoothBeat += (targetBeat - smoothBeat) * beatRate
+                            painter.setReactive(smoothLevel, smoothBeat)
 
-                    val w = v.width; val h = v.height
-                    if (w > 0 && h > 0) painter.setResolution(w.toFloat(), h.toFloat())
-                    painter.updateMaterials()
-                    v.setRenderEffect(painter.renderEffect)
+                            val w = v.width; val h = v.height
+                            if (w > 0 && h > 0) painter.setResolution(w.toFloat(), h.toFloat())
+                            painter.updateMaterials()
+                            v.setRenderEffect(painter.renderEffect)
+                        }
+                    }
+                } finally {
+                    levelJob.cancel()
+                    beatJob.cancel()
                 }
             }
         }
     }
+}
+
+private fun buildDynamicBackgroundShaderPalette(
+    palette: Palette,
+    isDark: Boolean
+): DynamicBackgroundShaderPalette {
+    val dynamicPalette = buildDynamicBackgroundPalette(
+        palette = palette,
+        isDark = isDark
+    )
+    val lumaValue = colorLuma(dynamicPalette.primaryColor)
+    val lightOffset = when {
+        isDark -> -0.06f + (0.12f * (lumaValue - 0.5f))
+        else -> 0.08f + (0.10f * (0.5f - lumaValue))
+    }.coerceIn(-0.12f, 0.12f)
+    val saturateOffset = if (isDark) 0.24f else 0.16f
+    return DynamicBackgroundShaderPalette(
+        colors = dynamicPalette.colors,
+        lightOffset = lightOffset,
+        saturateOffset = saturateOffset
+    )
+}
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private suspend fun animateDynamicBackgroundPalette(
+    painter: BgEffectPainter,
+    from: DynamicBackgroundShaderPalette?,
+    to: DynamicBackgroundShaderPalette
+): DynamicBackgroundShaderPalette {
+    if (from == null || from.colors.size != to.colors.size) {
+        painter.setColors(to.colors)
+        painter.setLightOffset(to.lightOffset)
+        painter.setSaturateOffset(to.saturateOffset)
+        return to
+    }
+
+    val startColors = from.colors.copyOf()
+    var startNanos = 0L
+    var finished = false
+    while (!finished) {
+        withFrameNanos { frameNanos ->
+            if (startNanos == 0L) {
+                startNanos = frameNanos
+            }
+            val rawFraction = ((frameNanos - startNanos).toDouble() /
+                (DynamicBackgroundPaletteTransitionDurationMs * 1_000_000.0)).toFloat()
+            val fraction = smoothStep01(rawFraction.coerceIn(0f, 1f))
+            painter.setColors(lerpFloatArray(startColors, to.colors, fraction))
+            painter.setLightOffset(lerpFloat(from.lightOffset, to.lightOffset, fraction))
+            painter.setSaturateOffset(lerpFloat(from.saturateOffset, to.saturateOffset, fraction))
+            finished = rawFraction >= 1f
+        }
+    }
+    painter.setColors(to.colors)
+    painter.setLightOffset(to.lightOffset)
+    painter.setSaturateOffset(to.saturateOffset)
+    return to
 }
 
 private fun buildDynamicBackgroundPalette(
@@ -360,10 +487,12 @@ private fun ensureAccentColor(color: Int, fallback: Int): Int {
 
     val fallbackHsl = FloatArray(3)
     ColorUtils.colorToHSL(fallback, fallbackHsl)
-    val resolvedHue = when {
-        hsl[1] > 0.04f -> hsl[0]
-        fallbackHsl[1] > 0.04f -> fallbackHsl[0]
-        else -> 320f
+    val resolvedHue = if (hsl[1] > 0.04f) {
+        hsl[0]
+    } else if (fallbackHsl[1] > 0.04f) {
+        fallbackHsl[0]
+    } else {
+        320f
     }
     hsl[0] = resolvedHue
     hsl[1] = 0.48f
@@ -408,4 +537,17 @@ private fun hueDistanceDegrees(first: Float, second: Float): Float {
 
 private fun lerpFloat(start: Float, stop: Float, fraction: Float): Float {
     return start + (stop - start) * fraction.coerceIn(0f, 1f)
+}
+
+private fun lerpFloatArray(start: FloatArray, stop: FloatArray, fraction: Float): FloatArray {
+    val result = FloatArray(start.size)
+    for (index in start.indices) {
+        result[index] = lerpFloat(start[index], stop[index], fraction)
+    }
+    return result
+}
+
+private fun smoothStep01(value: Float): Float {
+    val t = value.coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
 }

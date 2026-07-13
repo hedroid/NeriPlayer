@@ -35,7 +35,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.data.settings.SettingsRepository
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.util.concurrent.TimeUnit
 
 /**
@@ -83,7 +83,7 @@ class GitHubSyncWorker(
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(
                     WORK_NAME,
-                    ExistingWorkPolicy.KEEP, // 如果已有任务在执行，保持现有任务
+                    ExistingWorkPolicy.APPEND_OR_REPLACE,
                     syncRequest
                 )
         }
@@ -166,8 +166,8 @@ class GitHubSyncWorker(
             } else {
                 val error = syncResult.exceptionOrNull()
                 if (error is GitHubSyncInProgressException) {
-                    NPLogger.d(TAG, "Sync skipped because another sync is already running")
-                    return@withContext Result.success()
+                    NPLogger.d(TAG, "Sync is waiting for the global sync lock, retry later")
+                    return@withContext Result.retry()
                 }
                 NPLogger.e(TAG, "Sync failed", error)
 

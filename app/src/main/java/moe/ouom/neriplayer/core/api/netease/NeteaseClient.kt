@@ -23,14 +23,16 @@ package moe.ouom.neriplayer.core.api.netease
  * Created: 2025/8/10
  */
 
-import moe.ouom.neriplayer.util.JsonUtil.jsonQuote
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.util.readBytesCompat
+import moe.ouom.neriplayer.util.json.JsonUtil.jsonQuote
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.network.isTransientHttp2StreamReset
+import moe.ouom.neriplayer.util.io.readBytesLimited
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.brotli.dec.BrotliInputStream
@@ -40,10 +42,15 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.zip.GZIPInputStream
-import moe.ouom.neriplayer.util.DynamicProxySelector
+import moe.ouom.neriplayer.util.network.DynamicProxySelector
 
 class NeteaseClient {
+    private companion object {
+        const val MAX_RESPONSE_BYTES = 4L * 1024L * 1024L
+    }
+
     private val okHttpClient: OkHttpClient
+    private val http1RetryClient: OkHttpClient
     private val cookieStore: MutableMap<String, MutableList<Cookie>> = mutableMapOf()
     private val cookieLock = Any()
 
@@ -54,22 +61,35 @@ class NeteaseClient {
         okHttpClient = OkHttpClient.Builder()
             .cookieJar(object : CookieJar {
                 override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-                    val host = url.host
                     synchronized(cookieLock) {
-                        val list = cookieStore.getOrPut(host) { mutableListOf() }
-                        list.removeAll { c -> cookies.any { it.name == c.name } }
-                        list.addAll(cookies)
+                        cookies.forEach { fresh ->
+                            removeStoredCookie(fresh)
+                            if (fresh.isUsableCookie()) {
+                                cookieStore.getOrPut(fresh.domain) { mutableListOf() }.add(fresh)
+                            }
+                        }
                     }
                 }
 
                 override fun loadForRequest(url: HttpUrl): List<Cookie> {
                     return synchronized(cookieLock) {
-                        cookieStore[url.host]?.toList() ?: emptyList()
+                        val now = System.currentTimeMillis()
+                        cookieStore.values.forEach { cookies ->
+                            cookies.removeAll { it.expiresAt <= now }
+                        }
+                        cookieStore.values
+                            .asSequence()
+                            .flatMap { it.asSequence() }
+                            .filter { it.expiresAt > now && it.matches(url) }
+                            .toList()
                     }
                 }
             })
             // use a dynamic ProxySelector so bypass can be toggled at runtime
             .proxySelector(DynamicProxySelector)
+            .build()
+        http1RetryClient = okHttpClient.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
             .build()
     }
 
@@ -103,7 +123,7 @@ class NeteaseClient {
                     .domain(host)    // 域 Cookie
                     .path("/")
                     .build()
-                list.removeAll { it.name == name }
+                list.removeAll { it.sameCookieIdentity(c) }
                 list.add(c)
             }
         }
@@ -129,11 +149,26 @@ class NeteaseClient {
     }
 
     private fun getCsrfCookie(): String? = synchronized(cookieLock) {
+        val now = System.currentTimeMillis()
         cookieStore.values
             .asSequence()
             .flatMap { it.asSequence() }
-            .firstOrNull { it.name == "__csrf" }
+            .firstOrNull { it.name == "__csrf" && it.expiresAt > now }
             ?.value
+    }
+
+    private fun removeStoredCookie(cookie: Cookie) {
+        cookieStore.values.forEach { cookies ->
+            cookies.removeAll { it.sameCookieIdentity(cookie) }
+        }
+    }
+
+    private fun Cookie.isUsableCookie(): Boolean {
+        return value.isNotBlank() && expiresAt > System.currentTimeMillis()
+    }
+
+    private fun Cookie.sameCookieIdentity(other: Cookie): Boolean {
+        return name == other.name && domain == other.domain && path == other.path
     }
 
     private fun buildPersistedCookieHeader(): String? {
@@ -162,7 +197,8 @@ class NeteaseClient {
         params: Map<String, Any>,
         mode: CryptoMode = CryptoMode.WEAPI,
         method: String = "POST",
-        usePersistedCookies: Boolean = true
+        usePersistedCookies: Boolean = true,
+        retryHttp1OnStreamReset: Boolean = false
     ): String {
         val requestUrl = url.toHttpUrl()
 
@@ -215,13 +251,28 @@ class NeteaseClient {
             else -> throw IllegalArgumentException("不支持的请求方法: $method")
         }
 
-        okHttpClient.newCall(builder.build()).execute().use { resp ->
+        val request = builder.build()
+        return try {
+            executeRequest(okHttpClient, request)
+        } catch (error: IOException) {
+            if (!retryHttp1OnStreamReset || !error.isTransientHttp2StreamReset()) throw error
+            NPLogger.w(
+                "NERI-NeteaseClient",
+                "HTTP/2 stream reset for $url, retrying with HTTP/1.1: ${error.message.orEmpty()}"
+            )
+            executeRequest(http1RetryClient, request)
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun executeRequest(client: OkHttpClient, request: Request): String {
+        client.newCall(request).execute().use { resp ->
             val responseBody = resp.body ?: throw IOException("Empty response body")
             val encoding = resp.header("Content-Encoding")?.lowercase(Locale.getDefault())
             val bytes = when (encoding) {
-                "br"   -> BrotliInputStream(responseBody.byteStream()).use { it.readBytesCompat() }
-                "gzip" -> GZIPInputStream(responseBody.byteStream()).use { it.readBytesCompat() }
-                else   -> responseBody.bytes()
+                "br"   -> BrotliInputStream(responseBody.byteStream()).use { it.readBytesLimited(MAX_RESPONSE_BYTES) }
+                "gzip" -> GZIPInputStream(responseBody.byteStream()).use { it.readBytesLimited(MAX_RESPONSE_BYTES) }
+                else   -> responseBody.byteStream().use { it.readBytesLimited(MAX_RESPONSE_BYTES) }
             }
             if (!resp.isSuccessful) {
                 val msg = String(bytes, StandardCharsets.UTF_8)
@@ -239,10 +290,22 @@ class NeteaseClient {
     }
 
     @Throws(IOException::class)
-    fun callEApi(path: String, params: Map<String, Any>, usePersistedCookies: Boolean = true): String {
+    fun callEApi(
+        path: String,
+        params: Map<String, Any>,
+        usePersistedCookies: Boolean = true,
+        retryHttp1OnStreamReset: Boolean = false
+    ): String {
         val p = if (path.startsWith("/")) path else "/$path"
         val url = "https://interface.music.163.com/eapi$p"
-        return request(url, params, CryptoMode.EAPI, "POST", usePersistedCookies)
+        return request(
+            url = url,
+            params = params,
+            mode = CryptoMode.EAPI,
+            method = "POST",
+            usePersistedCookies = usePersistedCookies,
+            retryHttp1OnStreamReset = retryHttp1OnStreamReset
+        )
     }
 
     @Throws(IOException::class)
@@ -338,7 +401,8 @@ class NeteaseClient {
             return callEApi(
                 "/song/enhance/player/url/v1",
                 params,
-                usePersistedCookies = usePersistedCookies
+                usePersistedCookies = usePersistedCookies,
+                retryHttp1OnStreamReset = true
             )
         }
 
@@ -762,7 +826,12 @@ class NeteaseClient {
             "yrv" to 0,
         )
 
-        fun call(): String = this.callEApi("/song/lyric/v1", params, usePersistedCookies = true)
+        fun call(): String = this.callEApi(
+            "/song/lyric/v1",
+            params,
+            usePersistedCookies = true,
+            retryHttp1OnStreamReset = true
+        )
 
         var resp = call()
         try {

@@ -62,6 +62,16 @@ import moe.ouom.neriplayer.core.api.search.SongSearchInfo
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.di.AppContainer.settingsRepo
 import moe.ouom.neriplayer.core.lyricon.LyriconManager
+import moe.ouom.neriplayer.core.player.audio.focus.StartupAudioFocusController
+import moe.ouom.neriplayer.core.player.effects.AudioReactive
+import moe.ouom.neriplayer.core.player.effects.PlaybackEffectsController
+import moe.ouom.neriplayer.core.player.engine.datasource.ConditionalHttpDataSourceFactory
+import moe.ouom.neriplayer.core.player.lifecycle.clearCacheImpl
+import moe.ouom.neriplayer.core.player.lifecycle.ensureInitializedImpl
+import moe.ouom.neriplayer.core.player.lifecycle.handleAudioBecomingNoisyImpl
+import moe.ouom.neriplayer.core.player.lifecycle.initializeImpl
+import moe.ouom.neriplayer.core.player.lifecycle.releaseImpl
+import moe.ouom.neriplayer.core.player.lyrics.syncExternalBluetoothLyrics
 import moe.ouom.neriplayer.core.player.model.AudioDevice
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_PITCH
@@ -80,19 +90,82 @@ import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackSpeed
 import moe.ouom.neriplayer.core.player.debug.UsbExclusiveDebugLogger
-import moe.ouom.neriplayer.core.player.policy.PlaybackCommand
-import moe.ouom.neriplayer.core.player.policy.PlaybackCommandSource
-import moe.ouom.neriplayer.core.player.policy.RefreshInFlightController
-import moe.ouom.neriplayer.core.player.policy.RefreshRequestSemantics
-import moe.ouom.neriplayer.core.player.policy.resolvePendingMediaLoadPosition
-import moe.ouom.neriplayer.core.player.policy.resolvePlaybackSoundConfigForEngine
-import moe.ouom.neriplayer.core.player.policy.resolveExoRepeatMode
-import moe.ouom.neriplayer.core.player.policy.shouldShowPauseButtonForPlaybackControls
-import moe.ouom.neriplayer.core.player.policy.shouldBootstrapPlaybackServiceOnAppLaunch
-import moe.ouom.neriplayer.core.player.policy.shouldRunPlaybackServiceInForeground
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveAudioPathState
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveAudioPathTracker
-import moe.ouom.neriplayer.core.player.usb.UsbExclusiveSessionController
+import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommand
+import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommandSource
+import moe.ouom.neriplayer.core.player.policy.refresh.RefreshInFlightController
+import moe.ouom.neriplayer.core.player.policy.refresh.RefreshRequestSemantics
+import moe.ouom.neriplayer.core.player.prefetch.prefetchYouTubePlayableUrlWindowImpl
+import moe.ouom.neriplayer.core.player.prefetch.prefetchYouTubeQueueWindowImpl
+import moe.ouom.neriplayer.core.player.policy.refresh.YouTubePlaybackRecoveryStrategy
+import moe.ouom.neriplayer.core.player.policy.pending.resolvePendingMediaLoadPosition
+import moe.ouom.neriplayer.core.player.policy.command.resolvePlaybackSoundConfigForEngine
+import moe.ouom.neriplayer.core.player.policy.command.resolveExoRepeatMode
+import moe.ouom.neriplayer.core.player.policy.wake.resolvePlaybackWakeMode
+import moe.ouom.neriplayer.core.player.policy.command.shouldShowPauseButtonForPlaybackControls
+import moe.ouom.neriplayer.core.player.policy.command.shouldBootstrapPlaybackServiceOnAppLaunch
+import moe.ouom.neriplayer.core.player.policy.command.shouldRunPlaybackServiceInForeground
+import moe.ouom.neriplayer.core.player.playback.applyListenTogetherPlaybackModeImpl
+import moe.ouom.neriplayer.core.player.playback.cancelPendingPauseRequestImpl
+import moe.ouom.neriplayer.core.player.playback.cancelVolumeFadeImpl
+import moe.ouom.neriplayer.core.player.playback.cycleRepeatModeImpl
+import moe.ouom.neriplayer.core.player.playback.handleTrackEndedIfNeededImpl
+import moe.ouom.neriplayer.core.player.playback.nextImpl
+import moe.ouom.neriplayer.core.player.playback.pauseImpl
+import moe.ouom.neriplayer.core.player.quality.effectiveBiliQuality
+import moe.ouom.neriplayer.core.player.quality.effectiveNeteaseQuality
+import moe.ouom.neriplayer.core.player.quality.effectiveYouTubeQuality
+import moe.ouom.neriplayer.core.player.playback.PlaybackStatsSnapshot
+import moe.ouom.neriplayer.core.player.playback.PlaybackStatsTracker
+import moe.ouom.neriplayer.core.player.playback.playBiliVideoPartsImpl
+import moe.ouom.neriplayer.core.player.playback.playImpl
+import moe.ouom.neriplayer.core.player.playback.playPlaylistImpl
+import moe.ouom.neriplayer.core.player.playback.previousImpl
+import moe.ouom.neriplayer.core.player.playback.seekToImpl
+import moe.ouom.neriplayer.core.player.playback.setShuffleImpl
+import moe.ouom.neriplayer.core.player.playback.stopPlaybackPreservingQueueImpl
+import moe.ouom.neriplayer.core.player.playback.stopProgressUpdatesImpl
+import moe.ouom.neriplayer.core.player.playback.togglePlayPauseImpl
+import moe.ouom.neriplayer.core.player.playback.trackEndDeduplicationKey
+import moe.ouom.neriplayer.core.player.persistence.RestoredPlayerStateSnapshot
+import moe.ouom.neriplayer.core.player.persistence.addCurrentToFavoritesImpl
+import moe.ouom.neriplayer.core.player.persistence.addCurrentToPlaylistImpl
+import moe.ouom.neriplayer.core.player.persistence.addToQueueEndImpl
+import moe.ouom.neriplayer.core.player.persistence.addToQueueNextImpl
+import moe.ouom.neriplayer.core.player.persistence.getLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.getNeteaseLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.getNeteaseRomanizedLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.getNeteaseTranslatedLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.getPreferredNeteaseLyricContentImpl
+import moe.ouom.neriplayer.core.player.persistence.getPreferredNeteaseRomanizedLyricContentImpl
+import moe.ouom.neriplayer.core.player.persistence.getRomanizedLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.getTranslatedLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.hasItemsImpl
+import moe.ouom.neriplayer.core.player.persistence.hydrateSongMetadataImpl
+import moe.ouom.neriplayer.core.player.persistence.persistStateImpl
+import moe.ouom.neriplayer.core.player.persistence.playBiliVideoAsAudioImpl
+import moe.ouom.neriplayer.core.player.persistence.playFromQueueImpl
+import moe.ouom.neriplayer.core.player.persistence.rebaseUserLyricOffsetsForSourceImpl
+import moe.ouom.neriplayer.core.player.persistence.removeCurrentFromFavoritesImpl
+import moe.ouom.neriplayer.core.player.persistence.replaceCurrentInQueueAndPlayImpl
+import moe.ouom.neriplayer.core.player.persistence.replaceMetadataFromSearchImpl
+import moe.ouom.neriplayer.core.player.persistence.resumeRestoredPlaybackIfNeededImpl
+import moe.ouom.neriplayer.core.player.persistence.suppressFutureAutoResumeForCurrentSessionImpl
+import moe.ouom.neriplayer.core.player.persistence.toggleCurrentFavoriteImpl
+import moe.ouom.neriplayer.core.player.persistence.updateSongCustomInfoImpl
+import moe.ouom.neriplayer.core.player.persistence.updateSongLyricsAndTranslationImpl
+import moe.ouom.neriplayer.core.player.persistence.updateSongLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.updateSongTranslatedLyricsImpl
+import moe.ouom.neriplayer.core.player.persistence.updateUserLyricOffsetImpl
+import moe.ouom.neriplayer.core.player.timer.SleepTimerManager
+import moe.ouom.neriplayer.core.player.timer.SleepTimerMode
+import moe.ouom.neriplayer.core.player.url.YOUTUBE_PLAYBACK_PREFER_M4A
+import moe.ouom.neriplayer.core.player.url.refreshCurrentSongUrlImpl
+import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathState
+import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathTracker
+import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveSessionController
+import moe.ouom.neriplayer.core.player.watchdog.cancelPlaybackStartupWatchdog
+import moe.ouom.neriplayer.core.player.watchdog.clearActivePlaybackCandidates
+import moe.ouom.neriplayer.core.player.watchdog.shouldTreatReadyAtStartAsUnhealthyPrepared
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.media.preferredLocalMediaReference
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
@@ -105,16 +178,17 @@ import moe.ouom.neriplayer.data.settings.DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS
 import moe.ouom.neriplayer.data.settings.DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS
 import moe.ouom.neriplayer.data.settings.PlaybackPreferenceSnapshot
 import moe.ouom.neriplayer.data.settings.UsbExclusivePreferences
-import moe.ouom.neriplayer.listentogether.ListenTogetherChannels
-import moe.ouom.neriplayer.listentogether.buildStableTrackKey
-import moe.ouom.neriplayer.listentogether.resolvedAudioId
-import moe.ouom.neriplayer.listentogether.resolvedChannelId
-import moe.ouom.neriplayer.listentogether.resolvedPlaylistContextId
-import moe.ouom.neriplayer.listentogether.resolvedSubAudioId
-import moe.ouom.neriplayer.ui.component.LyricEntry
+import moe.ouom.neriplayer.listentogether.mapping.buildStableTrackKey
+import moe.ouom.neriplayer.listentogether.mapping.resolvedAudioId
+import moe.ouom.neriplayer.listentogether.mapping.resolvedChannelId
+import moe.ouom.neriplayer.listentogether.mapping.resolvedPlaylistContextId
+import moe.ouom.neriplayer.listentogether.mapping.resolvedSubAudioId
+import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherChannels
+import moe.ouom.neriplayer.ui.component.lyrics.LyricEntry
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliVideoItem
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.platform.LanguageManager
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
@@ -135,13 +209,17 @@ object PlayerManager {
     internal val initializationLock = Any()
     internal lateinit var application: Application
     internal lateinit var player: ExoPlayer
+    private var currentWakeMode: Int = C.WAKE_MODE_NONE
+
+    @Volatile
+    internal var interactiveNowPlayingVisible: Boolean = false
 
     internal lateinit var cache: Cache
     internal var conditionalHttpFactory: ConditionalHttpDataSourceFactory? = null
 
     // Helper function to get localized string
     internal fun getLocalizedString(resId: Int, vararg formatArgs: Any): String {
-        val context = moe.ouom.neriplayer.util.LanguageManager.applyLanguage(application)
+        val context = LanguageManager.applyLanguage(application)
         return context.getString(resId, *formatArgs)
     }
 
@@ -283,6 +361,8 @@ object PlayerManager {
     internal const val STARTUP_STALL_LOCAL_TIMEOUT_MS = 5_000L
     internal const val STARTUP_STALL_REMOTE_TIMEOUT_MS = 12_000L
     internal const val STARTUP_STALL_YOUTUBE_TIMEOUT_MS = 25_000L
+    internal const val STARTUP_STALL_READY_EARLY_TIMEOUT_MS = 5_000L
+    internal const val STARTUP_STALL_USB_EARLY_TIMEOUT_MS = 4_000L
     internal const val STARTUP_STALL_MAX_RECOVERY_ATTEMPTS = 3
     internal const val QUALITY_CHANGE_REFRESH_DEBOUNCE_MS = 0L
     internal const val MIN_FADE_STEPS = 4
@@ -498,6 +578,15 @@ object PlayerManager {
 
     internal fun isApplicationInitialized(): Boolean = this::application.isInitialized
 
+    internal fun bindApplication(app: Application) {
+        if (isApplicationInitialized()) return
+        synchronized(initializationLock) {
+            if (!isApplicationInitialized()) {
+                application = app
+            }
+        }
+    }
+
     internal fun isPlayerInitialized(): Boolean = this::player.isInitialized
 
     internal fun isCacheInitialized(): Boolean = this::cache.isInitialized
@@ -604,6 +693,29 @@ object PlayerManager {
 
     internal fun markUsbExclusiveFocusDisrupted(change: Int) {
         markUsbExclusiveShortDisruption("audio_focus:$change")
+    }
+
+    internal fun pauseForUsbExclusiveFocusLoss(change: Int) {
+        if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled || !initialized) return
+        if (!isPlayerInitialized()) return
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainScope.launch { pauseForUsbExclusiveFocusLoss(change) }
+            return
+        }
+        if (!resumePlaybackRequested && !_playWhenReadyFlow.value && !_isPlayingFlow.value) {
+            return
+        }
+        NPLogger.w(
+            "NERI-PlayerManager",
+            "pause USB exclusive playback after audio focus loss: change=$change " +
+                "playWhenReady=${_playWhenReadyFlow.value} isPlaying=${_isPlayingFlow.value}"
+        )
+        pauseImpl(
+            forcePersist = false,
+            commandSource = PlaybackCommandSource.REMOTE_SYNC,
+            allowFadeOut = false,
+            debugReason = "usb_focus_loss:$change"
+        )
     }
 
     fun markUsbExclusiveShortDisruption(reason: String) {
@@ -1388,6 +1500,8 @@ object PlayerManager {
         currentIndex: Int? = null,
         positionMs: Long? = null,
         shouldPlay: Boolean? = null,
+        repeatMode: Int? = null,
+        shuffleEnabled: Boolean? = null,
         force: Boolean = false
     ) {
         if (source != PlaybackCommandSource.LOCAL) return
@@ -1399,6 +1513,8 @@ object PlayerManager {
                 currentIndex = currentIndex,
                 positionMs = positionMs,
                 shouldPlay = shouldPlay,
+                repeatMode = repeatMode,
+                shuffleEnabled = shuffleEnabled,
                 force = force
             )
         )
@@ -1479,7 +1595,48 @@ object PlayerManager {
         stopTracking: Boolean = false
     ) {
         if (!initialized) return
-        drainPlaybackStatsPersistJobBlocking("${reason}_pending")
+        val pendingJob = synchronized(playbackStatsPersistLock) {
+            playbackStatsPersistJob
+        }
+        val currentSnapshot = synchronized(playbackStatsTracker) {
+            if (stopTracking) {
+                playbackStatsTracker.onPlayingChanged(false) ?: playbackStatsTracker.flushFinal()
+            } else {
+                playbackStatsTracker.flushFinal()
+            }
+        }
+        if (stopTracking) {
+            synchronized(playbackStatsTracker) {
+                playbackStatsTracker.onSongChanged(null)
+            }
+        }
+        val hasPendingWork = (pendingJob != null && !pendingJob.isCompleted)
+        if (!hasPendingWork && currentSnapshot == null) return
+        if (currentSnapshot != null) {
+            NPLogger.d(
+                "NERI-PlayerManager",
+                "flushPlaybackStatsBlocking: reason=$reason, song=${currentSnapshot.song.name}, listenedMs=${currentSnapshot.listenedMs}, playCountIncrement=${currentSnapshot.playCountIncrement}"
+            )
+        }
+        // drain + flush 合并为单次 blockingIo，最大阻塞 2s
+        moe.ouom.neriplayer.core.player.state.blockingIo(timeoutMs = 2_000L) {
+            pendingJob?.join()
+            if (currentSnapshot != null) {
+                recordPlaybackStatsSnapshot(currentSnapshot)
+            }
+        }
+        synchronized(playbackStatsPersistLock) {
+            if (playbackStatsPersistJob === pendingJob && pendingJob?.isCompleted == true) {
+                playbackStatsPersistJob = null
+            }
+        }
+    }
+
+    internal fun flushPlaybackStatsAsyncImpl(
+        reason: String,
+        stopTracking: Boolean = false
+    ) {
+        if (!initialized) return
         val currentSnapshot = synchronized(playbackStatsTracker) {
             if (stopTracking) {
                 playbackStatsTracker.onPlayingChanged(false) ?: playbackStatsTracker.flushFinal()
@@ -1490,11 +1647,9 @@ object PlayerManager {
         if (currentSnapshot != null) {
             NPLogger.d(
                 "NERI-PlayerManager",
-                "flushPlaybackStatsBlocking: reason=$reason, song=${currentSnapshot.song.name}, listenedMs=${currentSnapshot.listenedMs}, playCountIncrement=${currentSnapshot.playCountIncrement}"
+                "flushPlaybackStatsAsync: reason=$reason, song=${currentSnapshot.song.name}, listenedMs=${currentSnapshot.listenedMs}, playCountIncrement=${currentSnapshot.playCountIncrement}"
             )
-            moe.ouom.neriplayer.core.player.state.blockingIo {
-                recordPlaybackStatsSnapshot(currentSnapshot)
-            }
+            persistPlaybackStatsSnapshotAsync(currentSnapshot)
         }
         if (stopTracking) {
             synchronized(playbackStatsTracker) {
@@ -1524,21 +1679,29 @@ object PlayerManager {
 
     /**
      */
-    internal fun computeCacheKey(song: SongItem): String {
+    internal fun computeCacheKey(
+        song: SongItem,
+        youtubeQualityOverride: String? = null,
+        youtubePreferM4aOverride: Boolean? = null
+    ): String {
         return when {
             isLocalSong(song) -> "local-${song.stableKey().hashCode()}"
             isYouTubeMusicTrack(song) -> {
                 val videoId = song.audioId ?: extractYouTubeMusicVideoId(song.mediaUri).orEmpty()
-                computeYouTubeCacheKey(videoId, effectiveYouTubeQuality())
+                computeYouTubeCacheKey(
+                    videoId = videoId,
+                    preferredQuality = youtubeQualityOverride ?: effectiveYouTubeQuality(),
+                    preferM4a = youtubePreferM4aOverride ?: YOUTUBE_PLAYBACK_PREFER_M4A
+                )
             }
             isBiliTrack(song) -> {
-            val cidPart = song.subAudioId ?: song.album.split('|').getOrNull(1)
-            val biliSongId = song.audioId ?: song.id.toString()
-            if (cidPart != null) {
-                "bili-$biliSongId-$cidPart-${effectiveBiliQuality()}"
-            } else {
-                "bili-$biliSongId-${effectiveBiliQuality()}"
-            }
+                val cidPart = song.subAudioId ?: song.album.split('|').getOrNull(1)
+                val biliSongId = song.audioId ?: song.id.toString()
+                if (cidPart != null) {
+                    "bili-$biliSongId-$cidPart-${effectiveBiliQuality()}"
+                } else {
+                    "bili-$biliSongId-${effectiveBiliQuality()}"
+                }
             }
             else -> "netease-${song.id}-${effectiveNeteaseQuality()}"
         }
@@ -1546,9 +1709,14 @@ object PlayerManager {
 
     internal fun computeYouTubeCacheKey(
         videoId: String,
-        preferredQuality: String = effectiveYouTubeQuality()
+        preferredQuality: String = effectiveYouTubeQuality(),
+        preferM4a: Boolean = YOUTUBE_PLAYBACK_PREFER_M4A
     ): String {
-        return "ytmusic-$videoId-$preferredQuality-m4a"
+        return if (preferM4a) {
+            "ytmusic-$videoId-$preferredQuality-stable-m4a"
+        } else {
+            "ytmusic-$videoId-$preferredQuality"
+        }
     }
 
     internal fun buildMediaItem(
@@ -1575,6 +1743,17 @@ object PlayerManager {
                 }
             }
             .build()
+    }
+
+    internal fun applyWakeModeForPlaybackUrl(url: String?) {
+        val wakeMode = resolvePlaybackWakeMode(url)
+        if (wakeMode == currentWakeMode) return
+        player.setWakeMode(wakeMode)
+        currentWakeMode = wakeMode
+    }
+
+    fun updateInteractiveNowPlayingVisible(visible: Boolean) {
+        interactiveNowPlayingVisible = visible
     }
 
     internal fun cancelVolumeFade(resetToFull: Boolean = false) =
@@ -1634,7 +1813,9 @@ object PlayerManager {
         bypassCooldown: Boolean = false,
         fallbackSeekPositionMs: Long? = null,
         resumePlaybackAfterRefresh: Boolean = true,
-        resumedPlaybackCommandSource: PlaybackCommandSource? = null
+        resumedPlaybackCommandSource: PlaybackCommandSource? = null,
+        youtubeRecoveryStrategy: YouTubePlaybackRecoveryStrategy? = null,
+        cacheKeyToInvalidateBeforeResolve: String? = null
     ) = refreshCurrentSongUrlImpl(
         resumePositionMs = resumePositionMs,
         allowFallback = allowFallback,
@@ -1642,7 +1823,9 @@ object PlayerManager {
         bypassCooldown = bypassCooldown,
         fallbackSeekPositionMs = fallbackSeekPositionMs,
         resumePlaybackAfterRefresh = resumePlaybackAfterRefresh,
-        resumedPlaybackCommandSource = resumedPlaybackCommandSource
+        resumedPlaybackCommandSource = resumedPlaybackCommandSource,
+        youtubeRecoveryStrategy = youtubeRecoveryStrategy,
+        cacheKeyToInvalidateBeforeResolve = cacheKeyToInvalidateBeforeResolve
     )
 
     internal fun handleTrackEndedIfNeeded(source: String) =
@@ -1652,6 +1835,11 @@ object PlayerManager {
         reason: String,
         stopTracking: Boolean = false
     ) = flushPlaybackStatsBlockingImpl(reason, stopTracking)
+
+    internal fun flushPlaybackStatsAsync(
+        reason: String,
+        stopTracking: Boolean = false
+    ) = flushPlaybackStatsAsyncImpl(reason, stopTracking)
 
     fun playPlaylist(
         songs: List<SongItem>,
@@ -1685,11 +1873,20 @@ object PlayerManager {
     fun previous(commandSource: PlaybackCommandSource = PlaybackCommandSource.LOCAL) =
         this.previousImpl(commandSource)
 
-    fun cycleRepeatMode() = this.cycleRepeatModeImpl()
+    fun cycleRepeatMode(commandSource: PlaybackCommandSource = PlaybackCommandSource.LOCAL) =
+        this.cycleRepeatModeImpl(commandSource)
 
     fun release() = releaseImpl()
 
-    fun setShuffle(enabled: Boolean) = this.setShuffleImpl(enabled)
+    fun setShuffle(
+        enabled: Boolean,
+        commandSource: PlaybackCommandSource = PlaybackCommandSource.LOCAL
+    ) = this.setShuffleImpl(enabled, commandSource)
+
+    fun applyListenTogetherPlaybackMode(
+        repeatMode: Int?,
+        shuffleEnabled: Boolean?
+    ) = this.applyListenTogetherPlaybackModeImpl(repeatMode, shuffleEnabled)
 
     internal fun stopProgressUpdates() = this.stopProgressUpdatesImpl()
 
@@ -1770,8 +1967,21 @@ object PlayerManager {
         originalSong: SongItem,
         customCoverUrl: String?,
         customName: String?,
-        customArtist: String?
-    ) = updateSongCustomInfoImpl(originalSong, customCoverUrl, customName, customArtist)
+        customArtist: String?,
+        restoreBaseCover: Boolean = false,
+        restoreBaseName: Boolean = false,
+        restoreBaseArtist: Boolean = false,
+        clearMatchedMetadata: Boolean = false
+    ) = updateSongCustomInfoImpl(
+        originalSong,
+        customCoverUrl,
+        customName,
+        customArtist,
+        restoreBaseCover,
+        restoreBaseName,
+        restoreBaseArtist,
+        clearMatchedMetadata
+    )
 
     fun hydrateSongMetadata(originalSong: SongItem, updatedSong: SongItem) =
         hydrateSongMetadataImpl(originalSong, updatedSong)

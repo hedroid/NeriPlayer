@@ -148,7 +148,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -186,6 +185,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
@@ -206,7 +206,7 @@ import moe.ouom.neriplayer.core.download.isDownloadTaskFinalizing
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
 import moe.ouom.neriplayer.core.download.shouldHideRemoteDownloadAction
-import moe.ouom.neriplayer.core.player.AudioDownloadManager
+import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioInfo
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
@@ -233,45 +233,45 @@ import moe.ouom.neriplayer.data.settings.normalizeLyricFontScale
 import moe.ouom.neriplayer.data.settings.resolveLyricDefaultOffsetMs
 import moe.ouom.neriplayer.data.settings.scaledLyricFontSize
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.component.AdvancedLyricsView
-import moe.ouom.neriplayer.ui.component.AppleMusicLyric
-import moe.ouom.neriplayer.ui.component.buildPhoneticLyricEntries
-import moe.ouom.neriplayer.ui.component.flattenWordTimedEntries
-import moe.ouom.neriplayer.ui.component.hasWordTimedEntries
-import moe.ouom.neriplayer.ui.component.LocalSongDetailsDialog
-import moe.ouom.neriplayer.ui.component.LocalSongSyncConfirmDialog
-import moe.ouom.neriplayer.ui.component.LyricsEditorSeed
-import moe.ouom.neriplayer.ui.component.LyricEntry
-import moe.ouom.neriplayer.ui.component.LyricShareSheet
-import moe.ouom.neriplayer.ui.component.LyricVisualSpec
-import moe.ouom.neriplayer.ui.component.PlaybackSoundSheet
-import moe.ouom.neriplayer.ui.component.PlaybackSourceBadge
-import moe.ouom.neriplayer.ui.component.PlaybackSourceType
-import moe.ouom.neriplayer.ui.component.SleepTimerDialog
-import moe.ouom.neriplayer.ui.component.WaveformSlider
-import moe.ouom.neriplayer.ui.component.bottomSheetDragBlocker
-import moe.ouom.neriplayer.ui.component.bottomSheetScrollGuard
-import moe.ouom.neriplayer.ui.component.parseNeteaseLyricsAuto
-import moe.ouom.neriplayer.ui.component.rememberLyricSeekHapticFeedback
-import moe.ouom.neriplayer.ui.component.resolveLyricsEditorInitialText
-import moe.ouom.neriplayer.ui.component.resolveLyricsEditorSeed
-import moe.ouom.neriplayer.ui.component.resolvePreferredLyricContent
-import moe.ouom.neriplayer.ui.component.resolveStoredLyricText
-import moe.ouom.neriplayer.ui.component.toEditableLyricsText
+import moe.ouom.neriplayer.ui.component.lyrics.AdvancedLyricsView
+import moe.ouom.neriplayer.ui.component.lyrics.SyncedLyricsView
+import moe.ouom.neriplayer.ui.component.lyrics.buildPhoneticLyricEntries
+import moe.ouom.neriplayer.ui.component.lyrics.flattenWordTimedEntries
+import moe.ouom.neriplayer.ui.component.lyrics.hasWordTimedEntries
+import moe.ouom.neriplayer.ui.component.local.LocalSongDetailsDialog
+import moe.ouom.neriplayer.ui.component.local.LocalSongSyncConfirmDialog
+import moe.ouom.neriplayer.ui.component.lyrics.LyricsEditorSeed
+import moe.ouom.neriplayer.ui.component.lyrics.LyricEntry
+import moe.ouom.neriplayer.ui.component.lyrics.LyricShareSheet
+import moe.ouom.neriplayer.ui.component.lyrics.LyricVisualSpec
+import moe.ouom.neriplayer.ui.component.playback.PlaybackSoundSheet
+import moe.ouom.neriplayer.ui.component.playback.PlaybackSourceBadge
+import moe.ouom.neriplayer.ui.component.playback.PlaybackSourceType
+import moe.ouom.neriplayer.ui.component.playback.SleepTimerDialog
+import moe.ouom.neriplayer.ui.component.playback.WaveformSlider
+import moe.ouom.neriplayer.ui.component.sheet.bottomSheetDragBlocker
+import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
+import moe.ouom.neriplayer.ui.component.lyrics.parseNeteaseLyricsAuto
+import moe.ouom.neriplayer.ui.component.lyrics.rememberLyricSeekHapticFeedback
+import moe.ouom.neriplayer.ui.component.lyrics.resolveLyricsEditorInitialText
+import moe.ouom.neriplayer.ui.component.lyrics.resolveLyricsEditorSeed
+import moe.ouom.neriplayer.ui.component.lyrics.resolvePreferredLyricContent
+import moe.ouom.neriplayer.ui.component.lyrics.resolveStoredLyricText
+import moe.ouom.neriplayer.ui.component.lyrics.toEditableLyricsText
 import moe.ouom.neriplayer.ui.screen.debug.ListenTogetherRoomPanel
 import moe.ouom.neriplayer.ui.viewmodel.NowPlayingViewModel
-import moe.ouom.neriplayer.ui.viewmodel.artist.NeteaseArtistSummary
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
-import moe.ouom.neriplayer.util.HapticFeedbackEffect
-import moe.ouom.neriplayer.util.HapticFilledIconButton
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticTextButton
-import moe.ouom.neriplayer.util.NPLogger
-import moe.ouom.neriplayer.util.formatDuration
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.performHapticFeedback
-import moe.ouom.neriplayer.util.saveCoverToPictures
+import moe.ouom.neriplayer.ui.haptic.HapticFeedbackEffect
+import moe.ouom.neriplayer.ui.haptic.HapticFilledIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
+import moe.ouom.neriplayer.util.media.saveCoverToPictures
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -398,19 +398,20 @@ fun NowPlayingScreen(
     showNowPlayingTitle: Boolean = true,
     offlineMode: Boolean = false,
 ) {
-    val currentSong by PlayerManager.currentSongFlow.collectAsState()
-    val isPlaying by PlayerManager.isPlayingFlow.collectAsState()
-    val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsState()
-    val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow.collectAsState()
-    val shuffleEnabled by PlayerManager.shuffleModeFlow.collectAsState()
-    val repeatMode by PlayerManager.repeatModeFlow.collectAsState()
-    val durationMs by PlayerManager.playbackDurationFlow.collectAsState()
-    val sleepTimerState by PlayerManager.sleepTimerManager.timerState.collectAsState()
-    val currentPlaybackAudioInfo by PlayerManager.currentPlaybackAudioInfoFlow.collectAsState()
+    val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
+    val isPlaying by PlayerManager.isPlayingFlow.collectAsStateWithLifecycle()
+    val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsStateWithLifecycle()
+    val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow.collectAsStateWithLifecycle()
+    val shuffleEnabled by PlayerManager.shuffleModeFlow.collectAsStateWithLifecycle()
+    val repeatMode by PlayerManager.repeatModeFlow.collectAsStateWithLifecycle()
+    val durationMs by PlayerManager.playbackDurationFlow.collectAsStateWithLifecycle()
+    val sleepTimerState by PlayerManager.sleepTimerManager.timerState.collectAsStateWithLifecycle()
+    val currentPlaybackAudioInfo by PlayerManager.currentPlaybackAudioInfoFlow.collectAsStateWithLifecycle()
+    val playbackSoundState by PlayerManager.playbackSoundStateFlow.collectAsStateWithLifecycle()
     val settingsRepo = remember { AppContainer.settingsRepo }
     val listenTogetherSessionManager = remember { AppContainer.listenTogetherSessionManager }
-    val listenTogetherSessionState by listenTogetherSessionManager.sessionState.collectAsState()
-    val listenTogetherRoomState by listenTogetherSessionManager.roomState.collectAsState()
+    val listenTogetherSessionState by listenTogetherSessionManager.sessionState.collectAsStateWithLifecycle()
+    val listenTogetherRoomState by listenTogetherSessionManager.roomState.collectAsStateWithLifecycle()
     val playbackProgressSeekEnabled = resolveListenTogetherProgressSeekEnabled(
         sessionUserUuid = listenTogetherSessionState.userUuid,
         fallbackRole = listenTogetherSessionState.role,
@@ -421,28 +422,28 @@ fun NowPlayingScreen(
     )
     val showProgressQualitySwitch by settingsRepo
         .nowPlayingProgressShowQualitySwitchFlow
-        .collectAsState(initial = true)
+        .collectAsStateWithLifecycle(initialValue = true)
     val nowPlayingToolbarDockEnabled by settingsRepo
         .nowPlayingToolbarDockEnabledFlow
-        .collectAsState(initial = true)
+        .collectAsStateWithLifecycle(initialValue = true)
     val showProgressAudioCodec by settingsRepo
         .nowPlayingProgressShowAudioCodecFlow
-        .collectAsState(initial = true)
+        .collectAsStateWithLifecycle(initialValue = true)
     val showProgressAudioSpec by settingsRepo
         .nowPlayingProgressShowAudioSpecFlow
-        .collectAsState(initial = true)
+        .collectAsStateWithLifecycle(initialValue = true)
     val cloudMusicLyricDefaultOffsetMs by settingsRepo
         .cloudMusicLyricDefaultOffsetMsFlow
-        .collectAsState(initial = DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS)
+        .collectAsStateWithLifecycle(initialValue = DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS)
     val qqMusicLyricDefaultOffsetMs by settingsRepo
         .qqMusicLyricDefaultOffsetMsFlow
-        .collectAsState(initial = DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS)
+        .collectAsStateWithLifecycle(initialValue = DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS)
     val lyricTranslationUsePhonetic by settingsRepo
         .lyricTranslationUsePhoneticFlow
-        .collectAsState(initial = false)
+        .collectAsStateWithLifecycle(initialValue = false)
 
     // 订阅当前播放链接
-    val currentMediaUrl by PlayerManager.currentMediaUrlFlow.collectAsState()
+    val currentMediaUrl by PlayerManager.currentMediaUrlFlow.collectAsStateWithLifecycle()
     val isFromNeteaseTag =
         currentSong?.album?.startsWith(PlayerManager.NETEASE_SOURCE_TAG) == true
     val isFromBiliTag =
@@ -461,9 +462,9 @@ fun NowPlayingScreen(
     }
     var playbackSourceType by remember { mutableStateOf<PlaybackSourceType?>(null) }
 
-    val playlists by PlayerManager.playlistsFlow.collectAsState()
+    val playlists by PlayerManager.playlistsFlow.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val coverDownloadPresenceVersion by GlobalDownloadManager.downloadPresenceVersion.collectAsState()
+    val coverDownloadPresenceVersion by GlobalDownloadManager.downloadPresenceVersion.collectAsStateWithLifecycle()
     val currentCoverUrl = remember(currentSong, context, coverDownloadPresenceVersion) {
         currentSong?.displayCoverUrl(context)
     }
@@ -484,7 +485,7 @@ fun NowPlayingScreen(
     }
     val isFavorite = favOverride ?: isFavoriteComputed
 
-    val queue by PlayerManager.currentQueueFlow.collectAsState()
+    val queue by PlayerManager.currentQueueFlow.collectAsStateWithLifecycle()
     val displayedQueue = remember(queue) { queue }
     val currentIndexInDisplay = remember(displayedQueue, currentSong) {
         displayedQueue.indexOfFirst {
@@ -1377,6 +1378,8 @@ fun NowPlayingScreen(
                             lyricOffsetMs = totalOffset,
                             lyricBlurEnabled = lyricBlurEnabled,
                             lyricBlurAmount = lyricBlurAmount,
+                            isPlaying = isPlaying && previewPositionOverrideMs == null,
+                            playbackSpeed = playbackSoundState.speed,
                             onLyricClick = { entry -> PlayerManager.seekTo(entry.startTimeMs) },
                             onLyricLongClick = { entry -> lyricShareInitialLine = entry },
                             translatedLyrics = if (showLyricTranslation) secondaryPlainLyrics else null
@@ -1566,7 +1569,7 @@ fun NowPlayingScreen(
                         ) {
                             if (lyrics.isNotEmpty()) {
                                 if (advancedLyricsEnabled) {
-                                    val currentPosition by PlayerManager.playbackPositionFlow.collectAsState()
+                                    val currentPosition by PlayerManager.playbackPositionFlow.collectAsStateWithLifecycle()
                                     val effectiveLyricTimeMs = previewPositionOverrideMs ?: currentPosition
                                     AdvancedLyricsView(
                                         lyrics = lyrics,
@@ -2010,13 +2013,15 @@ fun MoreOptionsSheet(
     val keyboardController = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val isLocalSong = originalSong.isLocalSong()
-    val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsState(initial = false)
+    val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
+    val actualSong = currentSong?.takeIf { it.sameIdentityAs(originalSong) } ?: originalSong
+    val isLocalSong = actualSong.isLocalSong()
+    val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsStateWithLifecycle(initialValue = false)
     val qualityOptions = currentPlaybackAudioInfo?.qualityOptions.orEmpty()
     val canSwitchQuality = qualityOptions.size > 1
     val currentQualityLabel = currentPlaybackAudioInfo?.qualityLabel
-    val playbackSoundState by PlayerManager.playbackSoundStateFlow.collectAsState()
-    val downloadPresenceVersion by GlobalDownloadManager.downloadPresenceVersion.collectAsState()
+    val playbackSoundState by PlayerManager.playbackSoundStateFlow.collectAsStateWithLifecycle()
+    val downloadPresenceVersion by GlobalDownloadManager.downloadPresenceVersion.collectAsStateWithLifecycle()
     val hasLocalDownload = remember(downloadPresenceVersion, originalSong) {
         hasCachedLocalDownload(originalSong)
     }
@@ -2026,7 +2031,7 @@ fun MoreOptionsSheet(
             .map { tasks -> tasks.firstOrNull { it.song.stableKey() == downloadSongKey } }
             .distinctUntilChanged()
     }
-    val currentDownloadTask by currentDownloadTaskFlow.collectAsState(initial = null)
+    val currentDownloadTask by currentDownloadTaskFlow.collectAsStateWithLifecycle(initialValue = null)
     val shouldHideDownloadAction = remember(hasLocalDownload, currentDownloadTask) {
         shouldHideDownloadActionForSong(hasLocalDownload, currentDownloadTask)
     }
@@ -2039,7 +2044,7 @@ fun MoreOptionsSheet(
 
     LaunchedEffect(showSearchView) {
         if (showSearchView) {
-            viewModel.prepareForSearch(originalSong.name)
+            viewModel.prepareForSearch(actualSong.displayName())
             viewModel.performSearch()
             if (autoShowKeyboard) {
                 delay(120)
@@ -2428,7 +2433,7 @@ fun MoreOptionsSheet(
 
                 "Search" -> {
                     // 搜索界面
-                    val searchState by viewModel.manualSearchState.collectAsState()
+                    val searchState by viewModel.manualSearchState.collectAsStateWithLifecycle()
                     val searchResultsListState = rememberLazyListState()
 
                     Column(
@@ -2531,7 +2536,7 @@ fun MoreOptionsSheet(
                                                 )
                                             },
                                             modifier = Modifier.clickable {
-                                                viewModel.onSongSelected(originalSong, songResult)
+                                                viewModel.onSongSelected(actualSong, songResult)
                                                 onDismiss()
                                             }
                                         )
@@ -2577,7 +2582,7 @@ fun MoreOptionsSheet(
                 "EditInfo" -> {
                     EditSongInfoSheet(
                         viewModel = viewModel,
-                        originalSong = originalSong,
+                        originalSong = actualSong,
                         displayedLyrics = displayedLyrics,
                         displayedTranslatedLyrics = displayedTranslatedLyrics,
                         onDismiss = { showEditInfoSheet = false },
@@ -2782,10 +2787,10 @@ fun LyricBehaviorSheet(
     var currentOffset by remember { mutableLongStateOf(song.userLyricOffsetMs) }
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { AppContainer.settingsRepo }
-    val showLyricTranslation by settingsRepo.showLyricTranslationFlow.collectAsState(initial = true)
+    val showLyricTranslation by settingsRepo.showLyricTranslationFlow.collectAsStateWithLifecycle(initialValue = true)
     val lyricTranslationUsePhonetic by settingsRepo
         .lyricTranslationUsePhoneticFlow
-        .collectAsState(initial = false)
+        .collectAsStateWithLifecycle(initialValue = false)
     val sliderMinOffset = minOf(MIN_LYRIC_DEFAULT_OFFSET_MS, currentOffset)
     val sliderMaxOffset = maxOf(MAX_LYRIC_DEFAULT_OFFSET_MS, currentOffset)
     val sliderSteps = (((sliderMaxOffset - sliderMinOffset) / LYRIC_DEFAULT_OFFSET_STEP_MS).toInt() - 1)
@@ -2967,7 +2972,7 @@ fun EditSongInfoSheet(
     val focusManager = LocalFocusManager.current
 
     // 监听当前播放的歌曲，以便在"获取歌曲信息"后更新UI
-    val currentSong by PlayerManager.currentSongFlow.collectAsState()
+    val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
     val actualSong = if (currentSong?.sameIdentityAs(originalSong) == true) {
         currentSong!!
     } else {
@@ -2984,11 +2989,15 @@ fun EditSongInfoSheet(
     var shouldRestoreLyrics by remember { mutableStateOf(false) }  // 标记是否应该恢复歌词(网易云)
     var originalLyric by remember { mutableStateOf<String?>(null) }  // 保存要恢复的原始歌词
     var originalTranslatedLyric by remember { mutableStateOf<String?>(null) }  // 保存要恢复的原始翻译歌词
+    var shouldRestoreCoverBase by remember { mutableStateOf(false) }
+    var shouldRestoreTitleBase by remember { mutableStateOf(false) }
+    var shouldRestoreArtistBase by remember { mutableStateOf(false) }
+    var shouldClearMatchedMetadata by remember { mutableStateOf(false) }
 
     // 标记用户是否手动编辑过，避免自动重置
     var userHasEdited by remember { mutableStateOf(false) }
 
-    val searchState by viewModel.manualSearchState.collectAsState()
+    val searchState by viewModel.manualSearchState.collectAsStateWithLifecycle()
 
     val scrollState = rememberScrollState()
 
@@ -2998,11 +3007,15 @@ fun EditSongInfoSheet(
             coverUrl = actualSong.customCoverUrl ?: actualSong.coverUrl ?: ""
             songName = actualSong.customName ?: actualSong.name
             artistName = actualSong.customArtist ?: actualSong.artist
+            shouldRestoreCoverBase = false
+            shouldRestoreTitleBase = false
+            shouldRestoreArtistBase = false
+            shouldClearMatchedMetadata = false
         }
     }
 
     LaunchedEffect(Unit) {
-        viewModel.prepareForSearch(originalSong.name)
+        viewModel.prepareForSearch(actualSong.displayName())
     }
 
     fun applyOriginalInfo(
@@ -3015,12 +3028,15 @@ fun EditSongInfoSheet(
             if (success && info != null) {
                 if (restoreTitle) {
                     songName = info.name
+                    shouldRestoreTitleBase = true
                 }
                 if (restoreArtist) {
                     artistName = info.artist
+                    shouldRestoreArtistBase = true
                 }
                 if (restoreCover) {
                     coverUrl = info.coverUrl ?: ""
+                    shouldRestoreCoverBase = true
                 }
                 if (restoreLyrics) {
                     if (info.shouldClearLyrics) {
@@ -3034,6 +3050,9 @@ fun EditSongInfoSheet(
                         originalLyric = info.lyric
                         originalTranslatedLyric = info.translatedLyric
                     }
+                }
+                if (restoreCover && restoreTitle && restoreArtist && restoreLyrics) {
+                    shouldClearMatchedMetadata = true
                 }
                 userHasEdited = true
             }
@@ -3081,7 +3100,11 @@ fun EditSongInfoSheet(
             // 封面链接输入框
             OutlinedTextField(
                 value = coverUrl,
-                onValueChange = { coverUrl = it },
+                onValueChange = {
+                    coverUrl = it
+                    userHasEdited = true
+                    shouldRestoreCoverBase = false
+                },
                 label = { Text(stringResource(R.string.music_cover_url)) },
                 placeholder = { Text(stringResource(R.string.music_cover_url_hint)) },
                 modifier = Modifier.fillMaxWidth(),
@@ -3131,7 +3154,11 @@ fun EditSongInfoSheet(
             // 标题输入框
             OutlinedTextField(
                 value = songName,
-                onValueChange = { songName = it },
+                onValueChange = {
+                    songName = it
+                    userHasEdited = true
+                    shouldRestoreTitleBase = false
+                },
                 label = { Text(stringResource(R.string.music_edit_title)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -3157,7 +3184,11 @@ fun EditSongInfoSheet(
             // 艺术家输入框
             OutlinedTextField(
                 value = artistName,
-                onValueChange = { artistName = it },
+                onValueChange = {
+                    artistName = it
+                    userHasEdited = true
+                    shouldRestoreArtistBase = false
+                },
                 label = { Text(stringResource(R.string.music_edit_artist)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -3360,11 +3391,19 @@ fun EditSongInfoSheet(
                                 originalSong = actualSong,
                                 newCoverUrl = coverUrl.ifBlank { null },
                                 newName = songName,
-                                newArtist = artistName
+                                newArtist = artistName,
+                                restoreBaseCover = shouldRestoreCoverBase,
+                                restoreBaseName = shouldRestoreTitleBase,
+                                restoreBaseArtist = shouldRestoreArtistBase,
+                                clearMatchedMetadata = shouldClearMatchedMetadata
                             )
 
                             // 重置编辑标志，允许自动更新
                             userHasEdited = false
+                            shouldRestoreCoverBase = false
+                            shouldRestoreTitleBase = false
+                            shouldRestoreArtistBase = false
+                            shouldClearMatchedMetadata = false
                             onDismiss()
                         } catch (e: Exception) {
                             NPLogger.e("NowPlayingScreen", "保存歌曲信息失败", e)
@@ -3403,12 +3442,15 @@ fun EditSongInfoSheet(
 
                 if (fillCover) {
                     coverUrl = selectedSongForFill!!.coverUrl?.replaceFirst("http://", "https://") ?: ""
+                    shouldRestoreCoverBase = false
                 }
                 if (fillTitle) {
                     songName = selectedSongForFill!!.songName
+                    shouldRestoreTitleBase = false
                 }
                 if (fillArtist) {
                     artistName = selectedSongForFill!!.singer
+                    shouldRestoreArtistBase = false
                 }
                 if (fillLyrics) {
                     selectedSongForFill?.let { selectedSong ->
@@ -3614,7 +3656,7 @@ private fun NowPlayingProgressSection(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val currentPosition by PlayerManager.playbackPositionFlow.collectAsState()
+    val currentPosition by PlayerManager.playbackPositionFlow.collectAsStateWithLifecycle()
     val latestOnPreviewPositionChange by rememberUpdatedState(onPreviewPositionChange)
     val lyricSeekHaptic = rememberLyricSeekHapticFeedback(
         lyrics = lyrics,
@@ -3750,13 +3792,15 @@ private fun NowPlayingLyricsPane(
     lyricOffsetMs: Long,
     lyricBlurEnabled: Boolean,
     lyricBlurAmount: Float,
+    isPlaying: Boolean,
+    playbackSpeed: Float,
     onLyricClick: (LyricEntry) -> Unit,
     onLyricLongClick: (LyricEntry) -> Unit,
     translatedLyrics: List<LyricEntry>? = null
 ) {
-    val currentPosition by PlayerManager.playbackPositionFlow.collectAsState()
+    val currentPosition by PlayerManager.playbackPositionFlow.collectAsStateWithLifecycle()
     val effectivePositionMs = previewPositionOverrideMs ?: currentPosition
-    AppleMusicLyric(
+    SyncedLyricsView(
         lyrics = lyrics,
         currentTimeMs = effectivePositionMs,
         modifier = modifier,
@@ -3769,7 +3813,12 @@ private fun NowPlayingLyricsPane(
         lyricBlurAmount = lyricBlurAmount,
         onLyricClick = onLyricClick,
         onLyricLongClick = onLyricLongClick,
-        translatedLyrics = translatedLyrics
+        translatedLyrics = translatedLyrics,
+        isPlaying = isPlaying,
+        playbackSpeed = playbackSpeed,
+        interpolatePlaybackPosition = true,
+        visualEffectsEnabled = false,
+        smoothActiveLineProgress = false
     )
 }
 

@@ -49,8 +49,8 @@ import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.local.media.normalizeLocalAlbumIdentity
 import moe.ouom.neriplayer.data.local.media.preferredLocalMediaReference
 import moe.ouom.neriplayer.data.model.identity
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
@@ -74,7 +74,8 @@ internal data class QuickImportedSongSeed(
     val album: String?,
     val durationMs: Long?,
     val localFile: File? = null,
-    val nearbyCoverUri: String? = null
+    val nearbyCoverUri: String? = null,
+    val sourceStableKey: String? = null
 )
 
 private data class QuickImportedAudioInfo(
@@ -83,6 +84,11 @@ private data class QuickImportedAudioInfo(
     val artist: String? = null,
     val album: String? = null,
     val durationMs: Long? = null
+)
+
+private data class ExternalAudioCopyInfo(
+    val displayName: String?,
+    val sizeBytes: Long?
 )
 
 private data class FolderScanCandidate(
@@ -154,8 +160,12 @@ internal fun buildNearbySidecarCopyPlans(
 object LocalAudioImportManager {
     private const val TAG = "LocalAudioImport"
     private const val FOLDER_SCAN_METADATA_PARALLELISM = 8
+    private const val FOLDER_SCAN_DEEP_METADATA_LIMIT = 120
+    private const val SCAN_NEARBY_COVER_LIMIT = 120
     private const val SCAN_PROGRESS_LOG_INTERVAL = 200
     private const val SLOW_SCAN_ITEM_THRESHOLD_MS = 120L
+    private const val MAX_EXTERNAL_IMPORT_COUNT = 500
+    private const val MAX_EXTERNAL_IMPORT_BYTES = 2L * 1024L * 1024L * 1024L
     private val audioExtensions = setOf(
         "aac",
         "aif",
@@ -185,7 +195,15 @@ object LocalAudioImportManager {
         val songs = mutableListOf<SongItem>()
         var failedCount = 0
 
-        uris.distinctBy { it.toString() }.forEach { uri ->
+        val distinctUris = uris.distinctBy { it.toString() }
+        if (distinctUris.size > MAX_EXTERNAL_IMPORT_COUNT) {
+            NPLogger.w(
+                TAG,
+                "external import clipped: count=${distinctUris.size}, limit=$MAX_EXTERNAL_IMPORT_COUNT"
+            )
+        }
+
+        distinctUris.take(MAX_EXTERNAL_IMPORT_COUNT).forEach { uri ->
             val stableUri = runCatching {
                 stabilizeExternalUri(context, uri)
             }.onFailure {
@@ -247,13 +265,28 @@ object LocalAudioImportManager {
         val metadataStartedAt = SystemClock.elapsedRealtime()
         val processedCount = AtomicInteger(0)
         val slowItemCount = AtomicInteger(0)
+        val useDeepMetadata = traversalResult.candidates.size <= FOLDER_SCAN_DEEP_METADATA_LIMIT
+        if (!useDeepMetadata) {
+            NPLogger.d(
+                TAG,
+                "scanFolderSongs uses quick metadata: candidates=${traversalResult.candidates.size}, deepLimit=$FOLDER_SCAN_DEEP_METADATA_LIMIT"
+            )
+        }
         val songs = coroutineScope {
             val scanDispatcher = Dispatchers.IO.limitedParallelism(FOLDER_SCAN_METADATA_PARALLELISM)
             traversalResult.candidates.map { candidate ->
                 async(scanDispatcher) {
                     val itemStartedAt = SystemClock.elapsedRealtime()
                     runCatching {
-                        buildFolderScannedSong(context, candidate.uri)
+                        if (useDeepMetadata) {
+                            buildFolderScannedSong(context, candidate.uri)
+                        } else {
+                            buildQuickImportedSong(
+                                context = context,
+                                uri = candidate.uri,
+                                resolveNearbyCover = false
+                            )
+                        }
                     }.onFailure {
                         NPLogger.w(TAG, "scanFolderSongs skipped ${candidate.uri}: ${it.message}")
                     }.also {
@@ -315,6 +348,13 @@ object LocalAudioImportManager {
 
         runCatching {
             context.contentResolver.query(audioUri, projection, selection, null, null)?.use { cursor ->
+                val resolveNearbyCover = cursor.count <= SCAN_NEARBY_COVER_LIMIT
+                if (!resolveNearbyCover) {
+                    NPLogger.d(
+                        TAG,
+                        "scanDeviceSongs skips nearby cover lookup: rows=${cursor.count}, coverLimit=$SCAN_NEARBY_COVER_LIMIT"
+                    )
+                }
                 val idxId = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val idxTitle = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val idxArtist = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
@@ -341,7 +381,11 @@ object LocalAudioImportManager {
                         ?: idxDisplayName.takeIf { it >= 0 }?.let(cursor::getString)
                         ?: contentUri.lastPathSegment
                         ?: contentUri.toString()
-                    val nearbyCoverUri = LocalMediaSupport.findNearbyCover(resolvedFile)?.toURI()?.toString()
+                    val nearbyCoverUri = if (resolveNearbyCover) {
+                        LocalMediaSupport.findNearbyCover(resolvedFile)?.toURI()?.toString()
+                    } else {
+                        null
+                    }
 
                     songs += buildQuickImportedSong(
                         seed = QuickImportedSongSeed(
@@ -449,7 +493,8 @@ object LocalAudioImportManager {
             localFileName = resolvedDisplayName.ifBlank { null },
             localFilePath = seed.localFile?.absolutePath,
             channelId = "local",
-            audioId = stableId.toString()
+            audioId = stableId.toString(),
+            sourceStableKey = seed.sourceStableKey
         )
     }
 
@@ -477,6 +522,7 @@ object LocalAudioImportManager {
             localFilePath = resolvedLocalPath,
             mediaUri = quickSong.mediaUri ?: detailedSong.mediaUri
         ) ?: quickSong.mediaUri ?: detailedSong.mediaUri
+        val resolvedSourceStableKey = quickSong.sourceStableKey ?: detailedSong.sourceStableKey
 
         return quickSong.copy(
             id = resolvedId,
@@ -497,18 +543,43 @@ object LocalAudioImportManager {
             localFileName = quickSong.localFileName ?: detailedSong.localFileName,
             localFilePath = resolvedLocalPath,
             channelId = quickSong.channelId ?: detailedSong.channelId ?: "local",
-            audioId = resolvedAudioId
+            audioId = resolvedAudioId,
+            sourceStableKey = resolvedSourceStableKey
         )
     }
 
-    fun hydrateLocalSongMetadata(context: Context, song: SongItem): SongItem {
+    fun hydrateLocalSongMetadata(
+        context: Context,
+        song: SongItem,
+        includeEmbeddedAssets: Boolean = true
+    ): SongItem {
         if (!LocalSongSupport.isLocalSong(song, context)) {
             return song
         }
         val details = runCatching {
-            LocalMediaSupport.inspect(context, song)
+            if (includeEmbeddedAssets) {
+                LocalMediaSupport.inspect(context, song)
+            } else {
+                LocalMediaSupport.inspectMetadataOnly(context, song)
+            }
         }.onFailure {
             NPLogger.w(TAG, "hydrate local metadata failed for ${song.name}: ${it.message}")
+        }.getOrNull() ?: return song
+
+        return mergeImportedSongMetadata(
+            quickSong = song,
+            detailedSong = LocalMediaSupport.toSongItem(details)
+        )
+    }
+
+    fun hydrateLocalSongTextMetadata(context: Context, song: SongItem): SongItem {
+        if (!LocalSongSupport.isLocalSong(song, context)) {
+            return song
+        }
+        val details = runCatching {
+            LocalMediaSupport.inspectMetadataOnly(context, song)
+        }.onFailure {
+            NPLogger.w(TAG, "hydrate local text metadata failed for ${song.name}: ${it.message}")
         }.getOrNull() ?: return song
 
         return mergeImportedSongMetadata(
@@ -520,7 +591,6 @@ object LocalAudioImportManager {
     private fun isReadableScannedTitle(title: String?): Boolean {
         val trimmed = title?.trim().orEmpty()
         if (trimmed.isBlank()) return false
-        if (trimmed.all(Char::isDigit)) return false
         if (trimmed.startsWith("content://", ignoreCase = true)) return false
         if (trimmed.startsWith("file://", ignoreCase = true)) return false
         return true
@@ -529,7 +599,6 @@ object LocalAudioImportManager {
     private fun isReadableQuickImportedTitle(title: String?): Boolean {
         val trimmed = title?.trim().orEmpty()
         if (trimmed.isBlank()) return false
-        if (trimmed.all(Char::isDigit)) return false
         if (trimmed.startsWith("content://", ignoreCase = true)) return false
         if (trimmed.startsWith("file://", ignoreCase = true)) return false
         return true
@@ -641,7 +710,8 @@ object LocalAudioImportManager {
                 album = details.album.takeUnless { details.usesFallbackAlbum },
                 durationMs = details.durationMs,
                 localFile = details.filePath?.let(::File)?.takeIf(File::exists),
-                nearbyCoverUri = details.coverUri
+                nearbyCoverUri = details.coverUri,
+                sourceStableKey = details.sourceStableKey
             ),
             unknownArtistLabel = context.getString(R.string.music_unknown_artist)
         )
@@ -763,14 +833,22 @@ object LocalAudioImportManager {
             ?: runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
     }
 
-    private fun buildQuickImportedSong(context: Context, uri: Uri): SongItem {
+    private fun buildQuickImportedSong(
+        context: Context,
+        uri: Uri,
+        resolveNearbyCover: Boolean = true
+    ): SongItem {
         val resolvedFile = resolveSourceFile(context, uri)
         val queryInfo = queryQuickImportedAudioInfo(context, uri)
         val displayName = resolvedFile?.name
             ?: queryInfo.displayName
             ?: uri.lastPathSegment
             ?: uri.toString()
-        val nearbyCoverUri = LocalMediaSupport.findNearbyCover(resolvedFile)?.toURI()?.toString()
+        val nearbyCoverUri = if (resolveNearbyCover) {
+            LocalMediaSupport.findNearbyCover(resolvedFile)?.toURI()?.toString()
+        } else {
+            null
+        }
 
         return buildQuickImportedSong(
             seed = QuickImportedSongSeed(
@@ -842,7 +920,12 @@ object LocalAudioImportManager {
         }
 
         val resolver = context.contentResolver
-        val displayName = runCatching {
+        val copyInfo = queryExternalAudioCopyInfo(context, uri)
+        copyInfo.sizeBytes?.takeIf { it > MAX_EXTERNAL_IMPORT_BYTES }?.let { sizeBytes ->
+            error("External audio is too large: $sizeBytes bytes")
+        }
+
+        val displayName = copyInfo.displayName ?: runCatching {
             resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (column >= 0 && cursor.moveToFirst()) {
@@ -875,10 +958,8 @@ object LocalAudioImportManager {
             "${baseName.take(48)}_${stableKey(uri.toString()).take(12)}.$extension"
         )
 
-        if (!targetFile.exists()) {
-            resolver.openInputStream(uri)?.use { input ->
-                targetFile.outputStream().use { output -> input.copyTo(output) }
-            } ?: error("Unable to open external audio stream")
+        if (shouldCopyExternalAudio(targetFile, copyInfo.sizeBytes)) {
+            copyExternalAudioToTarget(context, uri, targetFile, copyInfo.sizeBytes)
         }
 
         resolveSourceFile(context, uri)?.let { sourceFile ->
@@ -886,6 +967,80 @@ object LocalAudioImportManager {
         }
 
         return Uri.fromFile(targetFile)
+    }
+
+    private fun queryExternalAudioCopyInfo(context: Context, uri: Uri): ExternalAudioCopyInfo {
+        return runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) {
+                    return@use null
+                }
+                val displayNameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                ExternalAudioCopyInfo(
+                    displayName = displayNameIndex.takeIf { it >= 0 && !cursor.isNull(it) }
+                        ?.let(cursor::getString),
+                    sizeBytes = sizeIndex.takeIf { it >= 0 && !cursor.isNull(it) }
+                        ?.let(cursor::getLong)
+                        ?.takeIf { it >= 0L }
+                )
+            }
+        }.getOrNull() ?: ExternalAudioCopyInfo(displayName = null, sizeBytes = null)
+    }
+
+    private fun shouldCopyExternalAudio(targetFile: File, expectedBytes: Long?): Boolean {
+        if (!targetFile.exists()) return true
+        if (!targetFile.isFile) return true
+        return expectedBytes != null && targetFile.length() != expectedBytes
+    }
+
+    private fun copyExternalAudioToTarget(
+        context: Context,
+        uri: Uri,
+        targetFile: File,
+        expectedBytes: Long?
+    ) {
+        val partialFile = File(
+            targetFile.parentFile ?: error("Import target has no parent"),
+            ".${targetFile.name}.${stableKey(uri.toString()).take(8)}.partial"
+        )
+        partialFile.delete()
+        var copiedBytes = 0L
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                partialFile.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        copiedBytes += read
+                        if (copiedBytes > MAX_EXTERNAL_IMPORT_BYTES) {
+                            error("External audio exceeds import limit")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                    output.fd.sync()
+                }
+            } ?: error("Unable to open external audio stream")
+            if (expectedBytes != null && copiedBytes != expectedBytes) {
+                error("External audio copy size mismatch: expected=$expectedBytes actual=$copiedBytes")
+            }
+            if (targetFile.exists() && !targetFile.delete()) {
+                error("Unable to replace stale import file: ${targetFile.name}")
+            }
+            if (!partialFile.renameTo(targetFile)) {
+                error("Unable to commit imported audio file: ${targetFile.name}")
+            }
+        } catch (error: Throwable) {
+            partialFile.delete()
+            throw error
+        }
     }
 
     private fun resolveSourceFile(context: Context, uri: Uri): File? {

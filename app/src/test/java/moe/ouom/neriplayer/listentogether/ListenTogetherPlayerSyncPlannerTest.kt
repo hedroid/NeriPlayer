@@ -1,5 +1,9 @@
 package moe.ouom.neriplayer.listentogether
 
+import moe.ouom.neriplayer.listentogether.playback.shouldReloadListenTogetherAuthoritativeStream
+import moe.ouom.neriplayer.listentogether.playback.shouldWaitForListenTogetherAuthoritativeStreamPlayback
+import moe.ouom.neriplayer.listentogether.playback.sync.ListenTogetherPlayerSyncContext
+import moe.ouom.neriplayer.listentogether.playback.sync.resolveListenTogetherPlayerSyncPlan
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
@@ -84,6 +88,31 @@ class ListenTogetherPlayerSyncPlannerTest {
         assertTrue(plan.shouldForcePauseAfterRemoteLoad)
         assertFalse(plan.shouldSeek)
         assertFalse(plan.shouldIssuePlay)
+        assertTrue(plan.shouldIssuePause)
+    }
+
+    @Test
+    fun `paused room still cancels pending local playback start`() {
+        val plan = resolveListenTogetherPlayerSyncPlan(
+            ListenTogetherPlayerSyncContext(
+                playbackContextChanged = false,
+                targetIndexChanged = false,
+                desiredPlaying = false,
+                localPlaying = false,
+                localPlaybackAlreadyStarting = true,
+                awaitingAuthoritativeStream = false,
+                expectedPositionMs = 0L,
+                localPositionMs = 0L,
+                ignoreUnexpectedZeroPositionRollback = false,
+                causeType = "JOIN_AUTO_PAUSE",
+                trackSwitchForceSyncMs = 500L,
+                heartbeatDriftForceSyncMs = 5_000L,
+                playingDriftForceSyncMs = 2_500L,
+                pausedDriftForceSyncMs = 800L
+            )
+        )
+
+        assertTrue(plan.shouldIssuePause)
     }
 
     @Test

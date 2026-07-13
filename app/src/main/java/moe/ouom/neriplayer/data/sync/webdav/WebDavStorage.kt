@@ -8,7 +8,7 @@ import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import moe.ouom.neriplayer.data.config.WebDavSyncConfigSnapshot
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 
 class WebDavStorage(private val context: Context) {
     private val encryptedPrefs: SharedPreferences = openEncryptedPrefsWithRecovery()
@@ -131,7 +131,11 @@ class WebDavStorage(private val context: Context) {
 
     fun restore(snapshot: WebDavSyncConfigSnapshot) {
         encryptedPrefs.edit {
-            clear()
+            remove(KEY_SERVER_URL)
+            remove(KEY_BASE_PATH)
+            remove(KEY_USERNAME)
+            remove(KEY_PASSWORD)
+            remove(KEY_AUTO_SYNC_ENABLED)
 
             val normalizedServerUrl = normalizeServerUrl(snapshot.serverUrl)
             val normalizedBasePath = normalizeBasePath(snapshot.basePath)

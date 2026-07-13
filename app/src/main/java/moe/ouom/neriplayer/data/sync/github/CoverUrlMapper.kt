@@ -26,7 +26,7 @@ package moe.ouom.neriplayer.data.sync.github
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import java.io.File
 
 /**
@@ -40,7 +40,7 @@ class CoverUrlMapper private constructor(private val storageDir: File) {
     private val file: File = File(storageDir, "cover_url_mapping.json")
 
     // 本地地址 -> 网络地址的映射
-    private val mapping = mutableMapOf<String, String>()
+    private val mapping = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
         loadFromDisk()

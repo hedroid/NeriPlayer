@@ -40,8 +40,8 @@ import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicLibraryPlaylist
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.data.local.playlist.model.LocalPlaylist
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.core.logging.NPLogger
 import org.json.JSONObject
 import java.io.IOException
 

@@ -448,8 +448,13 @@
     <string name="local_playlist_scan_preview_title">Preview Local Files</string>
     <string name="local_playlist_scan_preview_search">Search local files</string>
     <string name="local_playlist_scan_preview_apply">Import Selected Songs</string>
+    <string name="local_playlist_scan_filter_metadata">Hide tracks without metadata</string>
+    <string name="local_playlist_scan_metadata_empty">No local audio with metadata</string>
     <string name="local_playlist_import_audio_no_new">No new local tracks to import</string>
     <string name="local_playlist_add_scanned_no_new">Selected tracks are already in the target playlist</string>
+    <string name="local_playlist_metadata_processing_title">Processing song info</string>
+    <string name="local_playlist_metadata_processing_message">Reading local titles, artists, and albums (%1$d/%2$d)</string>
+    <string name="local_playlist_metadata_processing_message_unknown">Reading local titles, artists, and albums</string>
     <string name="local_playlist_rename">Rename Playlist</string>
     <string name="local_playlist_delete">Delete Playlist</string>
     <string name="local_playlist_delete_confirm">Are you sure you want to delete this playlist? This action cannot be undone!</string>
@@ -567,6 +572,7 @@
     <string name="search_video">Search Videos</string>
     <string name="search_netease">Search NetEase</string>
     <string name="search_playlist">Search in Playlist</string>
+    <string name="search_artist_songs">Search artist songs</string>
     <string name="search_favorite">Search in Favorites</string>
     <string name="search_result_play_keep_queue">Play (Keep Queue)</string>
     <string name="search_result_add_to_current_queue">Add to Current Queue</string>
@@ -1112,6 +1118,8 @@
     <string name="settings_nowplaying_audio_reactive_desc">Enable audio-reactive motion in Now Playing</string>
     <string name="settings_nowplaying_dynamic_background">Now Playing Dynamic Background</string>
     <string name="settings_nowplaying_dynamic_background_desc">Enable animated background in Now Playing</string>
+    <string name="settings_nowplaying_disable_cover_blur_required">Turn off Cover Blur first</string>
+    <string name="settings_nowplaying_dynamic_background_required">Turn on Now Playing Dynamic Background first</string>
     <string name="theme_color_tech_blue">Tech Blue</string>
     <string name="theme_color_soft_purple">Soft Purple</string>
     <string name="theme_color_passion_red">Passion Red</string>
@@ -1483,6 +1491,7 @@
     <string name="listen_together_member_list_title">Members</string>
     <string name="listen_together_error_member_control_disabled">The controller disabled member playback control.</string>
     <string name="listen_together_error_controller_offline">The controller is offline. Try again after reconnection.</string>
+    <string name="listen_together_error_controller_offline_link">The controller is offline, so the playable link cannot be fetched.</string>
     <string name="listen_together_error_local_playback_blocked">Local playback is disabled while Listen Together is active.</string>
     <string name="listen_together_error_unauthorized">Room credentials expired. Please join Listen Together again.</string>
     <string name="listen_together_error_room_not_found">The room no longer exists or is unavailable.</string>
@@ -1543,6 +1552,12 @@
     <string name="settings_listen_together_server_input_placeholder">Leave empty to use the built-in default server</string>
     <string name="settings_listen_together_server_input_invalid">Invalid server address. Enter a full http:// or https:// address.</string>
     <string name="listen_together_invite_server_invalid">The invite contains an invalid server address, so this room cannot be joined.</string>
+    <string name="listen_together_error_room_id_length">Room ID must be %1$d characters.</string>
+    <string name="listen_together_error_room_id_chars">Room ID only supports uppercase letters and digits.</string>
+    <string name="listen_together_error_user_uuid_required">User UUID is required.</string>
+    <string name="listen_together_error_user_uuid_invalid">User UUID format is invalid.</string>
+    <string name="listen_together_error_nickname_length">Nickname length must be %1$d-%2$d characters.</string>
+    <string name="listen_together_error_nickname_chars">Nickname only supports Chinese characters, letters, and digits.</string>
     <string name="settings_listen_together_server_test">Test Availability</string>
     <string name="settings_listen_together_server_saved">Listen Together server setting saved.</string>
     <string name="settings_listen_together_server_reset_done">Reverted to the built-in default server.</string>

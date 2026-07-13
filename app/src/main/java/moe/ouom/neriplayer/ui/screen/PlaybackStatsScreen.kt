@@ -26,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.data.stats.PlaybackStatsPeriod
@@ -43,9 +43,9 @@ import moe.ouom.neriplayer.data.stats.TrackStat
 import moe.ouom.neriplayer.data.stats.aggregatePlaybackStatBucketsForPeriod
 import moe.ouom.neriplayer.data.stats.aggregatePlaybackStatsCompatForPeriod
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.HapticTextButton
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticTextButton
 
 internal enum class StatsSortMode {
     PLAY_COUNT, LISTEN_TIME, RECENT, FIRST_PLAYED
@@ -58,8 +58,8 @@ fun PlaybackStatsScreen(
     onSongClick: (List<SongItem>, Int) -> Unit = { _, _ -> },
     offlineMode: Boolean = false
 ) {
-    val stats by AppContainer.playbackStatsRepo.statsFlow.collectAsState()
-    val dailyStats by AppContainer.playbackStatsRepo.dailyStatsFlow.collectAsState()
+    val stats by AppContainer.playbackStatsRepo.statsFlow.collectAsStateWithLifecycle()
+    val dailyStats by AppContainer.playbackStatsRepo.dailyStatsFlow.collectAsStateWithLifecycle()
     val mini = LocalMiniPlayerHeight.current
     var selectedPeriod by remember { mutableStateOf(PlaybackStatsPeriod.ALL) }
     var sortMode by remember { mutableStateOf(StatsSortMode.PLAY_COUNT) }

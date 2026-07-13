@@ -81,41 +81,52 @@
             </intent-filter>
         </activity>
         <activity
-            android:name=".activity.NeteaseWebLoginActivity"
+            android:name=".activity.auth.NeteaseWebLoginActivity"
             android:exported="false"
             android:process=":netease_login"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar"
         />
         <activity
-            android:name=".activity.NeteaseQrLoginActivity"
+            android:name=".activity.auth.NeteaseQrLoginActivity"
             android:exported="false"
             android:process=":netease_login"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar"
         />
         <activity
-            android:name="moe.ouom.neriplayer.activity.BiliWebLoginActivity"
+            android:name=".activity.auth.BiliWebLoginActivity"
             android:exported="false"
             android:process=":bili_web_login"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar"
             />
         <activity
-            android:name="moe.ouom.neriplayer.activity.BiliQrLoginActivity"
+            android:name=".activity.auth.BiliQrLoginActivity"
             android:exported="false"
             android:process=":bili_web_login"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar"
             />
         <activity
-            android:name=".activity.YouTubeWebLoginActivity"
+            android:name=".activity.auth.YouTubeWebLoginActivity"
             android:exported="false"
             android:process=":youtube_web_login"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar"
             />
         <service
-            android:name="moe.ouom.neriplayer.core.player.AudioPlayerService"
+            android:name="moe.ouom.neriplayer.core.player.service.AudioPlayerService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="mediaPlayback"
-            />
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         
         <!-- FileProvider for sharing downloaded music files -->
         <provider

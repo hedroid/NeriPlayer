@@ -45,9 +45,10 @@ import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.sync.NeteaseLikeSyncResult
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.model.SongIdentity
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.data.model.identity
 import moe.ouom.neriplayer.data.model.stableKey
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 
 data class LocalPlaylistDetailUiState(
     val playlist: LocalPlaylist? = null,
@@ -65,7 +66,15 @@ data class LocalScanPreviewState(
     val isScanning: Boolean = false,
     val songs: List<SongItem> = emptyList(),
     val query: String = "",
+    val metadataOnly: Boolean = false,
     val selectedKeys: Set<String> = emptySet()
+)
+
+data class LocalMetadataProcessingState(
+    val isProcessing: Boolean = false,
+    val playlistId: Long? = null,
+    val processedCount: Int = 0,
+    val totalCount: Int = 0
 )
 
 @Suppress("unused")
@@ -83,9 +92,14 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
     private val _scanPreviewState = MutableStateFlow(LocalScanPreviewState())
     val scanPreviewState: StateFlow<LocalScanPreviewState> = _scanPreviewState
 
+    private val _metadataProcessingState = MutableStateFlow(LocalMetadataProcessingState())
+    val metadataProcessingState: StateFlow<LocalMetadataProcessingState> = _metadataProcessingState
+
     private var playlistId: Long = 0L
     private var playlistCollectJob: Job? = null
     private var scanJob: Job? = null
+    private var metadataRefreshJob: Job? = null
+    private var metadataRefreshSessionId: Long = 0L
     private var scanSessionId: Long = 0L
 
     fun start(id: Long) {
@@ -206,6 +220,24 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         _scanPreviewState.value = _scanPreviewState.value.copy(selectedKeys = selectedKeys)
     }
 
+    fun updateScanPreviewMetadataOnly(metadataOnly: Boolean) {
+        val current = _scanPreviewState.value
+        if (current.metadataOnly == metadataOnly) return
+        val selectedKeys = if (metadataOnly) {
+            val metadataKeys = current.songs
+                .asSequence()
+                .filter(::hasMeaningfulScanMetadata)
+                .mapTo(LinkedHashSet()) { it.stableKey() }
+            current.selectedKeys.intersect(metadataKeys)
+        } else {
+            current.selectedKeys
+        }
+        _scanPreviewState.value = current.copy(
+            metadataOnly = metadataOnly,
+            selectedKeys = selectedKeys
+        )
+    }
+
     fun clearScanPreview(cancelScan: Boolean) {
         if (cancelScan) {
             cancelDeviceSongScan()
@@ -218,7 +250,8 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         onResult: (LocalAudioImportUiResult) -> Unit
     ) {
         viewModelScope.launch {
-            val importedCount = repo.addSongsToLocalFilesPlaylistAndCount(songs)
+            val importedCount = repo.addScannedSongsToLocalFilesPlaylistAndCount(songs)
+            scheduleScannedMetadataRefresh(LocalFilesPlaylist.SYSTEM_ID, songs)
             onResult(
                 LocalAudioImportUiResult(
                     importedCount = importedCount,
@@ -234,7 +267,8 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         onResult: (LocalAudioImportUiResult) -> Unit
     ) {
         viewModelScope.launch {
-            val playlist = repo.createPlaylistWithSongs(name, songs)
+            val playlist = repo.createPlaylistWithScannedSongs(name, songs)
+            scheduleScannedMetadataRefresh(playlist.id, songs)
             onResult(
                 LocalAudioImportUiResult(
                     importedCount = playlist.songs.size,
@@ -250,7 +284,8 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         onResult: (LocalAudioImportUiResult) -> Unit
     ) {
         viewModelScope.launch {
-            val importedCount = repo.addSongsToPlaylistAndCount(targetPlaylistId, songs)
+            val importedCount = repo.addScannedSongsToPlaylistAndCount(targetPlaylistId, songs)
+            scheduleScannedMetadataRefresh(targetPlaylistId, songs)
             onResult(
                 LocalAudioImportUiResult(
                     importedCount = importedCount,
@@ -313,6 +348,46 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         return scanJob === currentJob && scanSessionId == sessionId
     }
 
+    private fun scheduleScannedMetadataRefresh(targetPlaylistId: Long, songs: List<SongItem>) {
+        val localSongs = songs.filter { LocalSongSupport.isLocalSong(it, app) }
+        if (localSongs.isEmpty()) {
+            if (_metadataProcessingState.value.playlistId == targetPlaylistId) {
+                _metadataProcessingState.value = LocalMetadataProcessingState()
+            }
+            return
+        }
+
+        metadataRefreshJob?.cancel()
+        val sessionId = ++metadataRefreshSessionId
+        _metadataProcessingState.value = LocalMetadataProcessingState(
+            isProcessing = true,
+            playlistId = targetPlaylistId,
+            processedCount = 0,
+            totalCount = localSongs.size
+        )
+        metadataRefreshJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repo.refreshScannedLocalSongMetadata(
+                    songs = localSongs,
+                    includeEmbeddedAssets = false
+                ) { processed, total ->
+                    if (metadataRefreshSessionId == sessionId) {
+                        _metadataProcessingState.value = LocalMetadataProcessingState(
+                            isProcessing = processed < total,
+                            playlistId = targetPlaylistId,
+                            processedCount = processed,
+                            totalCount = total
+                        )
+                    }
+                }
+            } finally {
+                if (metadataRefreshSessionId == sessionId) {
+                    _metadataProcessingState.value = LocalMetadataProcessingState()
+                }
+            }
+        }
+    }
+
     private fun prepareScannedSongs(songs: List<SongItem>): List<SongItem> {
         return songs.sortedWith(localScanSongComparator())
     }
@@ -359,6 +434,21 @@ class LocalPlaylistDetailViewModel(application: Application) : AndroidViewModel(
         }
 
         return score
+    }
+
+    private fun hasMeaningfulScanMetadata(song: SongItem): Boolean {
+        val unknownArtist = app.getString(moe.ouom.neriplayer.R.string.music_unknown_artist)
+        val fileTitle = song.localFileName
+            ?.substringBeforeLast('.', song.localFileName)
+            ?.trim()
+            .orEmpty()
+        val hasTitleMetadata = song.name.isNotBlank() &&
+            (fileTitle.isBlank() || !song.name.equals(fileTitle, ignoreCase = true))
+        return hasTitleMetadata ||
+            song.artist.isMeaningfulMetadata(unknownArtist) ||
+            song.album.isMeaningfulAlbum(app) ||
+            !song.coverUrl.isNullOrBlank() ||
+            !song.originalCoverUrl.isNullOrBlank()
     }
 }
 

@@ -124,26 +124,26 @@ import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.local.media.isLocalSong
 import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
-import moe.ouom.neriplayer.ui.component.AdvancedLyricsView
-import moe.ouom.neriplayer.ui.component.AppleMusicLyric
-import moe.ouom.neriplayer.ui.component.buildPhoneticLyricEntries
-import moe.ouom.neriplayer.ui.component.flattenWordTimedEntries
-import moe.ouom.neriplayer.ui.component.LyricEntry
-import moe.ouom.neriplayer.ui.component.LyricShareSheet
-import moe.ouom.neriplayer.ui.component.LocalSongDetailsDialog
-import moe.ouom.neriplayer.ui.component.LocalSongSyncConfirmDialog
-import moe.ouom.neriplayer.ui.component.LyricVisualSpec
-import moe.ouom.neriplayer.ui.component.WaveformSlider
-import moe.ouom.neriplayer.ui.component.bottomSheetScrollGuard
-import moe.ouom.neriplayer.ui.component.rememberLyricSeekHapticFeedback
+import moe.ouom.neriplayer.ui.component.lyrics.AdvancedLyricsView
+import moe.ouom.neriplayer.ui.component.lyrics.SyncedLyricsView
+import moe.ouom.neriplayer.ui.component.lyrics.buildPhoneticLyricEntries
+import moe.ouom.neriplayer.ui.component.lyrics.flattenWordTimedEntries
+import moe.ouom.neriplayer.ui.component.lyrics.LyricEntry
+import moe.ouom.neriplayer.ui.component.lyrics.LyricShareSheet
+import moe.ouom.neriplayer.ui.component.local.LocalSongDetailsDialog
+import moe.ouom.neriplayer.ui.component.local.LocalSongSyncConfirmDialog
+import moe.ouom.neriplayer.ui.component.lyrics.LyricVisualSpec
+import moe.ouom.neriplayer.ui.component.playback.WaveformSlider
+import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
+import moe.ouom.neriplayer.ui.component.lyrics.rememberLyricSeekHapticFeedback
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
-import moe.ouom.neriplayer.util.HapticFeedbackEffect
-import moe.ouom.neriplayer.util.HapticFilledIconButton
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.formatDuration
-import moe.ouom.neriplayer.util.offlineCachedImageRequest
-import moe.ouom.neriplayer.util.performHapticFeedback
+import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.ui.haptic.HapticFeedbackEffect
+import moe.ouom.neriplayer.ui.haptic.HapticFilledIconButton
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
+import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, androidx.compose.animation.ExperimentalSharedTransitionApi::class)
@@ -844,7 +844,7 @@ fun LyricsScreen(
 
             // 定时器对话框
             if (showSleepTimerDialog) {
-                moe.ouom.neriplayer.ui.component.SleepTimerDialog(
+                moe.ouom.neriplayer.ui.component.playback.SleepTimerDialog(
                     onDismiss = { showSleepTimerDialog = false }
                 )
             }
@@ -1121,7 +1121,7 @@ private fun LyricsContentPane(
         return
     }
 
-    AppleMusicLyric(
+    SyncedLyricsView(
         lyrics = plainLyrics,
         currentTimeMs = effectiveLyricTimeMs,
         modifier = Modifier.fillMaxSize(),
@@ -1144,6 +1144,9 @@ private fun LyricsContentPane(
         onLyricLongClick = onLyricLongClick,
         translatedLyrics = if (showLyricTranslation) effectivePlainTranslatedLyrics else null,
         translationFontSize = scaledLyricFontSize(16f, lyricFontScale).sp,
+        isPlaying = shouldAnimateFromPlayback,
+        playbackSpeed = playbackSpeed,
+        interpolatePlaybackPosition = true
     )
 }
 

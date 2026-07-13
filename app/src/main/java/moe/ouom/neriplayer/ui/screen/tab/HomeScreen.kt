@@ -76,7 +76,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -99,6 +98,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -121,7 +121,7 @@ import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.platform.youtube.stableYouTubeMusicId
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
-import moe.ouom.neriplayer.ui.viewmodel.playlist.SongItem
+import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.HomeSectionState
 import moe.ouom.neriplayer.ui.viewmodel.tab.HomeViewModel
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
@@ -131,9 +131,9 @@ import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicHomeShelf
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicHomeItem
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicParser
-import moe.ouom.neriplayer.util.HapticIconButton
-import moe.ouom.neriplayer.util.fastScrollableImageRequest
-import moe.ouom.neriplayer.util.formatPlayCount
+import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
+import moe.ouom.neriplayer.util.format.formatPlayCount
 import kotlin.math.ceil
 import kotlin.math.min
 import java.util.Locale
@@ -161,12 +161,14 @@ fun HomeScreen(
             }
         }
     )
-    val ui by vm.uiState.collectAsState()
-    val usage by AppContainer.playlistUsageRepo.frequentPlaylistsFlow.collectAsState(initial = emptyList())
+    val ui by vm.uiState.collectAsStateWithLifecycle()
+    val usage by AppContainer.playlistUsageRepo.frequentPlaylistsFlow.collectAsStateWithLifecycle(
+        initialValue = emptyList()
+    )
     val localPlaylistRepo = remember(context) { LocalPlaylistRepository.getInstance(context) }
-    val localPlaylists by localPlaylistRepo.playlists.collectAsState()
+    val localPlaylists by localPlaylistRepo.playlists.collectAsStateWithLifecycle()
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
-    val favorites by favoriteRepo.favorites.collectAsState()
+    val favorites by favoriteRepo.favorites.collectAsStateWithLifecycle()
     val favoriteKeys = remember(favorites) {
         favorites.mapTo(mutableSetOf()) { "${it.source}:${it.id}" }
     }

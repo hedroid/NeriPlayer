@@ -31,7 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.di.AppContainer
-import moe.ouom.neriplayer.util.NPLogger
+import moe.ouom.neriplayer.core.logging.NPLogger
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -74,6 +74,7 @@ class GitHubApiClient(
     companion object {
         private const val TAG = "GitHubApiClient"
         private const val GITHUB_API_BASE = "https://api.github.com"
+        private const val MAX_SYNC_FILE_BYTES = 12 * 1024 * 1024
     }
 
     /** GitHub API响应 - 文件内容 */
@@ -224,6 +225,9 @@ class GitHubApiClient(
                     val body = response.body?.string()
                         ?: return@withContext Result.failure(IOException("Empty response"))
                     val fileResponse = gson.fromJson(body, GitHubFileResponse::class.java)
+                    if (fileResponse.size > MAX_SYNC_FILE_BYTES) {
+                        return@withContext Result.failure(IOException("Remote backup file is too large"))
+                    }
 
                     // 解码Base64内容
                     val decodedContent = String(
@@ -255,6 +259,9 @@ class GitHubApiClient(
                     val body = response.body?.string()
                         ?: return@withContext Result.failure(IOException("Empty response"))
                     val fileResponse = gson.fromJson(body, GitHubFileResponse::class.java)
+                    if (fileResponse.size > MAX_SYNC_FILE_BYTES) {
+                        return@withContext Result.failure(IOException("Remote backup file is too large"))
+                    }
                     val decodedContent = String(
                         Base64.decode(fileResponse.content.replace("\n", ""), Base64.DEFAULT)
                     )
