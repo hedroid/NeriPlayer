@@ -60,9 +60,37 @@ jobs:
         run: |
           git merge --no-ff --no-edit -m "[skip ci] Sync upstream cwuom/NeriPlayer" upstream/master
 
+      - name: Detect workflow file changes
+        if: steps.upstream.outputs.has_changes == 'true'
+        id: workflow_changes
+        run: |
+          set -euo pipefail
+
+          if git diff --name-only HEAD~1 HEAD | grep -q '^\.github/workflows/'; then
+            echo "has_workflow_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_workflow_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require workflow push token when workflow files changed
+        if: steps.upstream.outputs.has_changes == 'true' && steps.workflow_changes.outputs.has_workflow_changes == 'true' && secrets.SYNC_PUSH_TOKEN == ''
+        run: |
+          echo "Upstream sync changed .github/workflows files, but SYNC_PUSH_TOKEN is not configured."
+          echo "Please add a GitHub token with repo + workflow permissions as repository secret SYNC_PUSH_TOKEN."
+          exit 1
+
       - name: Push merged master
         if: steps.upstream.outputs.has_changes == 'true'
-        run: git push origin HEAD:master
+        env:
+          SYNC_PUSH_TOKEN: ${{ secrets.SYNC_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${SYNC_PUSH_TOKEN}" ]; then
+            git remote set-url origin "https://x-access-token:${SYNC_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          git push origin HEAD:master
 
       - name: Set up JDK 17
         if: steps.upstream.outputs.has_changes == 'true'
