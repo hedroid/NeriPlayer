@@ -13,8 +13,14 @@ plugins {
 }
 
 val isGithubPullRequest = providers.environmentVariable("GITHUB_EVENT_NAME").orNull == "pull_request"
+val isIdeBuild = listOf("android.injected.invoked.from.ide", "idea.active").any { propertyName ->
+    (project.findProperty(propertyName) as String?)?.toBoolean() == true ||
+        providers.systemProperty(propertyName).orNull?.toBoolean() == true
+}
 val allowUnsignedRelease =
-    (project.findProperty("allowUnsignedRelease") as String?)?.toBoolean() == true || isGithubPullRequest
+    (project.findProperty("allowUnsignedRelease") as String?)?.toBoolean() == true ||
+        isGithubPullRequest ||
+        isIdeBuild
 val releaseKeystorePath = project.findProperty("KEYSTORE_FILE") as String? ?: "neri.jks"
 val releaseKeystoreFile = project.file(releaseKeystorePath)
 val releaseStorePassword = project.findProperty("KEYSTORE_PASSWORD") as String?
@@ -74,7 +80,7 @@ android {
                     "-frtti"
                 )
                 arguments += listOf(
-                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_STL=c++_static",
                     "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
                 )
             }
@@ -130,6 +136,14 @@ android {
             // Compose instrumentation 依赖 kotlinx.coroutines 的 ServiceLoader，
             // androidTest APK 需要合并同名 service 文件，避免只保留单个实现
             merges += "META-INF/services/*"
+            excludes += setOf(
+                "META-INF/*.version",
+                "META-INF/**/LICENSE*",
+                "META-INF/**/NOTICE*",
+                "google/protobuf/*.proto",
+                "org/mozilla/javascript/resources/Messages_*.properties",
+                "DebugProbesKt.bin"
+            )
         }
     }
 

@@ -40,9 +40,11 @@ import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
 import moe.ouom.neriplayer.data.sync.webdav.WebDavSyncWorker
 import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.io.writeTextAtomically
 import java.io.File
 
 const val FAVORITE_SOURCE_NETEASE_ARTIST = "neteaseArtist"
+private const val TAG = "FavoritePlaylistRepo"
 
 data class FavoritePlaylist(
     val id: Long,
@@ -64,6 +66,7 @@ class FavoritePlaylistRepository private constructor(private val context: Contex
     private val gson = Gson()
     private val file = File(context.filesDir, "favorite_playlists.json")
     private val mutex = Mutex()
+    private val syncStorage by lazy { SecureTokenStorage(context) }
 
     private val _snapshots = MutableStateFlow<List<FavoritePlaylist>>(emptyList())
     private val _favorites = MutableStateFlow<List<FavoritePlaylist>>(emptyList())
@@ -87,20 +90,12 @@ class FavoritePlaylistRepository private constructor(private val context: Contex
         publish(list, triggerSync = false)
     }
 
-    private fun saveToDisk(triggerSync: Boolean = true) {
-        runCatching {
-            val json = gson.toJson(_snapshots.value)
-            val parent = file.parentFile ?: context.filesDir
-            val tmp = File(parent, "${file.name}.tmp")
-            tmp.writeText(json)
-            if (!tmp.renameTo(file)) {
-                file.writeText(json)
-                tmp.delete()
-            }
-        }
-        if (triggerSync) {
-            triggerAutoSync()
-        }
+    private fun saveToDisk(favorites: List<FavoritePlaylist>): Boolean {
+        return runCatching {
+            file.writeTextAtomically(gson.toJson(favorites))
+        }.onFailure { error ->
+            NPLogger.e(TAG, "保存收藏歌单失败", error)
+        }.isSuccess
     }
 
     private fun publish(favorites: List<FavoritePlaylist>, triggerSync: Boolean = true) {
@@ -119,7 +114,15 @@ class FavoritePlaylistRepository private constructor(private val context: Contex
             .sortedWith(compareByDescending<FavoritePlaylist> { it.sortOrder }.thenByDescending {
                 maxOf(it.modifiedAt, it.addedTime)
             })
-        saveToDisk(triggerSync)
+        val persisted = saveToDisk(normalized)
+        if (triggerSync) {
+            if (persisted) {
+                syncStorage.markSyncMutation()
+                triggerAutoSync()
+            } else {
+                NPLogger.w(TAG, "收藏歌单未成功落盘，跳过自动同步")
+            }
+        }
     }
 
     private fun FavoritePlaylist.normalizeSortOrder(): FavoritePlaylist {
@@ -132,12 +135,10 @@ class FavoritePlaylistRepository private constructor(private val context: Contex
 
     private fun triggerAutoSync() {
         try {
-            val storage = SecureTokenStorage(context)
-            storage.markSyncMutation()
             GitHubSyncWorker.scheduleDelayedSync(context, triggerByUserAction = false)
             WebDavSyncWorker.scheduleDelayedSync(context, triggerByUserAction = false)
         } catch (e: Exception) {
-            NPLogger.e("FavoritePlaylistRepo", "Failed to schedule sync", e)
+            NPLogger.e(TAG, "Failed to schedule sync", e)
         }
     }
 
@@ -300,6 +301,21 @@ class FavoritePlaylistRepository private constructor(private val context: Contex
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 publish(favorites, triggerSync = false)
+            }
+        }
+    }
+
+    suspend fun replaceFavoritesFromSyncIfUnchanged(
+        favorites: List<FavoritePlaylist>,
+        expectedMutationVersion: Long
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            mutex.withLock {
+                if (syncStorage.getSyncMutationVersion() != expectedMutationVersion) {
+                    return@withLock false
+                }
+                publish(favorites, triggerSync = false)
+                true
             }
         }
     }

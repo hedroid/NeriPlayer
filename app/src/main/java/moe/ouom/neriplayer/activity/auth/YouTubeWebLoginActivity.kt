@@ -56,9 +56,11 @@ import moe.ouom.neriplayer.data.auth.web.ForegroundWebLoginGuard
 import moe.ouom.neriplayer.data.auth.web.shouldAutoCompleteYouTubeWebLogin
 import moe.ouom.neriplayer.data.auth.youtube.applyYouTubeWebCookies
 import moe.ouom.neriplayer.data.auth.youtube.clearYouTubeWebCookies
+import moe.ouom.neriplayer.data.auth.youtube.collectObservedYouTubeAuthCookies
 import moe.ouom.neriplayer.data.auth.youtube.collectYouTubeWebCookies
 import moe.ouom.neriplayer.data.auth.youtube.hasMeaningfulYouTubeAuthChange
 import moe.ouom.neriplayer.data.auth.youtube.mergeYouTubeAuthBundle
+import moe.ouom.neriplayer.data.auth.youtube.preserveMatchingYouTubeAuthCookies
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthBundle
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthRepository
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeBootstrapSessionState
@@ -101,6 +103,7 @@ class YouTubeWebLoginActivity : ComponentActivity() {
     }
 
     private data class CapturedRequestHeaders(
+        val cookieHeader: String = "",
         val authorization: String = "",
         val xGoogAuthUser: String = "",
         val origin: String = YOUTUBE_MUSIC_ORIGIN,
@@ -389,15 +392,24 @@ class YouTubeWebLoginActivity : ComponentActivity() {
         savedAt: Long = System.currentTimeMillis()
     ): YouTubeAuthBundle {
         val snapshot = capturedHeaders
-        return mergeYouTubeAuthBundle(
+        val observedCookies = collectObservedYouTubeAuthCookies(
+            snapshotCookies = collectYouTubeWebCookies(CookieManager.getInstance()),
+            requestCookieHeader = snapshot?.cookieHeader.orEmpty()
+        )
+        val merged = mergeYouTubeAuthBundle(
             base = persistedAuthBaseline,
-            observedCookies = collectYouTubeWebCookies(CookieManager.getInstance()),
+            observedCookies = observedCookies,
+            observedCookiesAreSnapshot = true,
             authorization = snapshot?.authorization.orEmpty(),
             xGoogAuthUser = snapshot?.xGoogAuthUser.orEmpty()
                 .ifBlank { observedPageSessionState.sessionIndex },
             origin = snapshot?.origin.orEmpty().ifBlank { YOUTUBE_MUSIC_ORIGIN },
             userAgent = snapshot?.userAgent.orEmpty().ifBlank { webViewUserAgent },
             savedAt = savedAt
+        )
+        return preserveMatchingYouTubeAuthCookies(
+            previous = persistedAuthBaseline,
+            current = merged
         )
     }
 
@@ -586,6 +598,7 @@ class YouTubeWebLoginActivity : ComponentActivity() {
         }
 
         capturedHeaders = CapturedRequestHeaders(
+            cookieHeader = cookieHeader,
             authorization = authorization,
             xGoogAuthUser = xGoogAuthUser,
             origin = origin,

@@ -101,10 +101,11 @@ internal fun shouldAcceptYouTubeRefreshResult(
     if (hasLiveSessionSignal) {
         return true
     }
-    if (pageReady && hasYtcfg) {
-        return false
+    if (!pageReady || !hasYtcfg) {
+        return authChanged || recoveredActiveSession
     }
-    return authChanged || recoveredActiveSession
+    // 页面和 ytcfg 都稳定了却还没确认登录，说明这份 cookie 快照大概率是游客态
+    return recoveredActiveSession
 }
 
 internal fun resolveObservedYouTubeAuthUser(
@@ -142,6 +143,7 @@ class YouTubeAuthAutoRefreshManager(
     }
 
     private data class CapturedRequestHeaders(
+        val cookieHeader: String = "",
         val authorization: String = "",
         val xGoogAuthUser: String = "",
         val origin: String = YOUTUBE_MUSIC_ORIGIN,
@@ -531,14 +533,18 @@ class YouTubeAuthAutoRefreshManager(
     ): YouTubeAuthBundle {
         CookieManager.getInstance().flush()
         val headers = capturedHeaders
-        val observedCookies = collectYouTubeWebCookies(CookieManager.getInstance())
+        val observedCookies = collectObservedYouTubeAuthCookies(
+            snapshotCookies = collectYouTubeWebCookies(CookieManager.getInstance()),
+            requestCookieHeader = headers?.cookieHeader.orEmpty()
+        )
         NPLogger.d(
             TAG,
             "refresh observed cookies keys=${observedCookies.keys.joinToString()}"
         )
-        return mergeYouTubeAuthBundle(
+        val merged = mergeYouTubeAuthBundle(
             base = base,
             observedCookies = observedCookies,
+            observedCookiesAreSnapshot = true,
             authorization = headers?.authorization.orEmpty(),
             // 隐藏刷新页不一定会主动发 youtubei 请求，这里回退到页面公开的 SESSION_INDEX
             xGoogAuthUser = resolveObservedYouTubeAuthUser(
@@ -548,6 +554,10 @@ class YouTubeAuthAutoRefreshManager(
             origin = headers?.origin.orEmpty().ifBlank { YOUTUBE_MUSIC_ORIGIN },
             userAgent = headers?.userAgent.orEmpty().ifBlank { webViewUserAgent },
             savedAt = System.currentTimeMillis()
+        )
+        return preserveMatchingYouTubeAuthCookies(
+            previous = base,
+            current = merged
         )
     }
 
@@ -576,6 +586,7 @@ class YouTubeAuthAutoRefreshManager(
         }
 
         capturedHeaders = CapturedRequestHeaders(
+            cookieHeader = cookieHeader,
             authorization = authorization,
             xGoogAuthUser = xGoogAuthUser,
             origin = origin,

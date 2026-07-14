@@ -1,8 +1,31 @@
 package moe.ouom.neriplayer.data.auth.youtube
 
+private val YOUTUBE_AUTH_OBSERVER_IDENTITY_COOKIE_KEYS: List<String> = listOf(
+    "SID",
+    "HSID",
+    "SSID",
+    "LSID",
+    "LOGIN_INFO",
+    "__Secure-1PSID",
+    "__Secure-3PSID"
+)
+
+fun collectObservedYouTubeAuthCookies(
+    snapshotCookies: Map<String, String>,
+    requestCookieHeader: String = ""
+): LinkedHashMap<String, String> {
+    return linkedMapOf<String, String>().apply {
+        putAll(snapshotCookies.filterKeys { it.isNotBlank() })
+        putAll(
+            parseCookieHeader(requestCookieHeader).filterKeys { it.isNotBlank() }
+        )
+    }
+}
+
 fun mergeYouTubeAuthBundle(
     base: YouTubeAuthBundle,
     observedCookies: Map<String, String>,
+    observedCookiesAreSnapshot: Boolean = false,
     authorization: String = "",
     xGoogAuthUser: String = "",
     origin: String = "",
@@ -11,11 +34,13 @@ fun mergeYouTubeAuthBundle(
 ): YouTubeAuthBundle {
     val normalizedBase = base.normalized(savedAt = base.savedAt)
     val mergedCookies = linkedMapOf<String, String>().apply {
-        putAll(
-            normalizedBase.cookies.ifEmpty {
-                parseCookieHeader(normalizedBase.cookieHeader)
-            }
-        )
+        if (!observedCookiesAreSnapshot) {
+            putAll(
+                normalizedBase.cookies.ifEmpty {
+                    parseCookieHeader(normalizedBase.cookieHeader)
+                }
+            )
+        }
         observedCookies.forEach { (key, value) ->
             if (key.isNotBlank() && value.isNotBlank()) {
                 put(key, value)
@@ -41,6 +66,86 @@ fun hasMeaningfulYouTubeAuthChange(
     val normalizedPrevious = previous.normalized(savedAt = 0L).copy(savedAt = 0L)
     val normalizedCurrent = current.normalized(savedAt = 0L).copy(savedAt = 0L)
     return normalizedPrevious != normalizedCurrent
+}
+
+fun preserveMatchingYouTubeAuthCookies(
+    previous: YouTubeAuthBundle,
+    current: YouTubeAuthBundle
+): YouTubeAuthBundle {
+    val normalizedPrevious = previous.normalized(savedAt = previous.savedAt)
+    val normalizedCurrent = current.normalized(savedAt = current.savedAt)
+    val previousCookies = normalizedPrevious.cookies.ifEmpty {
+        parseCookieHeader(normalizedPrevious.cookieHeader)
+    }
+    val currentCookies = normalizedCurrent.cookies.ifEmpty {
+        parseCookieHeader(normalizedCurrent.cookieHeader)
+    }
+    if (previousCookies.isEmpty() || currentCookies.isEmpty()) {
+        return normalizedCurrent
+    }
+
+    val sharedIdentityCookie = YOUTUBE_AUTH_OBSERVER_IDENTITY_COOKIE_KEYS.any { key ->
+        val previousValue = previousCookies[key].orEmpty()
+        previousValue.isNotBlank() && previousValue == currentCookies[key].orEmpty()
+    }
+    if (!sharedIdentityCookie) {
+        return normalizedCurrent
+    }
+
+    val hasConflictingIdentityCookie = YOUTUBE_AUTH_OBSERVER_IDENTITY_COOKIE_KEYS.any { key ->
+        val previousValue = previousCookies[key].orEmpty()
+        val currentValue = currentCookies[key].orEmpty()
+        previousValue.isNotBlank() &&
+            currentValue.isNotBlank() &&
+            previousValue != currentValue
+    }
+    if (hasConflictingIdentityCookie) {
+        return normalizedCurrent
+    }
+
+    val retainedCookieKeys = (
+        YouTubeCookieSupport.importantLoginCookieKeys +
+            YouTubeCookieSupport.activeSessionCookieKeys
+        ).distinct()
+    val missingRetainedCookie = retainedCookieKeys.any { key ->
+        !previousCookies[key].isNullOrBlank() && currentCookies[key].isNullOrBlank()
+    }
+    if (!missingRetainedCookie) {
+        return normalizedCurrent
+    }
+
+    val mergedCookies = linkedMapOf<String, String>().apply {
+        putAll(previousCookies)
+        putAll(currentCookies)
+    }
+    return normalizedCurrent.copy(
+        cookieHeader = mergedCookies.entries.joinToString("; ") { (key, value) -> "$key=$value" },
+        cookies = mergedCookies
+    ).normalized(savedAt = normalizedCurrent.savedAt)
+}
+
+fun YouTubeAuthBundle.buildRefreshObserverFingerprint(): String {
+    val normalized = normalized(savedAt = 0L)
+    val cookies = normalized.cookies.ifEmpty { parseCookieHeader(normalized.cookieHeader) }
+    val trackedCookieKeys = YOUTUBE_AUTH_OBSERVER_IDENTITY_COOKIE_KEYS
+        .filter { key -> !cookies[key].isNullOrBlank() }
+        .ifEmpty {
+            YouTubeCookieSupport.importantLoginCookieKeys.filter { key ->
+                !cookies[key].isNullOrBlank()
+            }
+        }
+    return buildString {
+        trackedCookieKeys.forEach { key ->
+            append(key)
+            append('=')
+            append(cookies[key].orEmpty())
+            append(';')
+        }
+        append('|')
+        append(normalized.authorization.trim())
+        append('|')
+        append(normalized.xGoogAuthUser.trim())
+    }
 }
 
 fun mergeYouTubeAuthCookieUpdates(

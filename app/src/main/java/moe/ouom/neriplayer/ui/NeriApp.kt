@@ -176,6 +176,7 @@ import moe.ouom.neriplayer.data.traffic.TrafficNetworkType
 import moe.ouom.neriplayer.navigation.Destinations
 import moe.ouom.neriplayer.ui.component.navigation.NeriBottomBar
 import moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayer
+import moe.ouom.neriplayer.ui.component.playback.resolvePlaybackWaiting
 import moe.ouom.neriplayer.ui.component.common.ThemeRevealOverlay
 import moe.ouom.neriplayer.ui.component.common.blockUnderlyingTouches
 import moe.ouom.neriplayer.ui.screen.DownloadManagerScreen
@@ -1125,7 +1126,7 @@ private fun NeriAppContent(
     )
     val hazeState = remember { HazeState() }
     val preferredQuality by repo.audioQualityFlow.collectAsStateWithLifecycle(initialValue = "exhigh")
-    val youtubePreferredQuality by repo.youtubeAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "very_high")
+    val youtubePreferredQuality by repo.youtubeAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "high")
     val biliPreferredQuality by repo.biliAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "high")
     val mobileDataFollowDefaultAudioQuality by repo.mobileDataFollowDefaultAudioQualityFlow.collectAsStateWithLifecycle(
         initialValue = startupPlaybackPreferences.mobileDataFollowDefaultAudioQuality
@@ -1504,8 +1505,14 @@ private fun NeriAppContent(
 
                 val isMiniPlayerVisible = currentSong != null && !showNowPlaying
                 val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsStateWithLifecycle()
+                val isPlaying by PlayerManager.isPlayingFlow.collectAsStateWithLifecycle()
                 val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow
                     .collectAsStateWithLifecycle()
+                val isPlaybackWaiting = resolvePlaybackWaiting(
+                    playbackRequested = isPlaybackControlPlaying,
+                    isPlaying = isPlaying,
+                    usbPlaybackPreparing = usbPlaybackPreparing
+                )
                 val reservedMiniPlayerHeightDp = if (isMiniPlayerVisible) {
                     moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayerDefaults.Height
                 } else {
@@ -2443,7 +2450,8 @@ private fun NeriAppContent(
                                     onExpand = { showNowPlaying = true },
                                     hazeState = hazeState,
                                     enableHaze = effectiveAdvancedBlurEnabled,
-                                    offlineMode = offlineMode
+                                    offlineMode = offlineMode,
+                                    isPlaybackWaiting = isPlaybackWaiting
                                 )
                             }
 

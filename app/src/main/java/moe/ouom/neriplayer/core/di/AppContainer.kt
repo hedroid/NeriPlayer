@@ -27,6 +27,7 @@ import android.app.Application
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -71,11 +72,44 @@ import moe.ouom.neriplayer.data.platform.youtube.buildYouTubeStreamRequestHeader
 import moe.ouom.neriplayer.data.platform.youtube.isTrustedYouTubeHost
 import moe.ouom.neriplayer.data.platform.youtube.isYouTubeGoogleVideoHost
 import moe.ouom.neriplayer.data.platform.youtube.isYouTubeInnertubeHost
+import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.network.DynamicProxySelector
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.LazyThreadSafetyMode
+
+private const val SHARED_HTTP_CONNECT_TIMEOUT_MS = 8_000L
+private const val SHARED_HTTP_READ_TIMEOUT_MS = 20_000L
+private const val SHARED_HTTP_CALL_TIMEOUT_MS = 0L
+private const val SHARED_HTTP_MAX_IDLE_CONNECTIONS = 8
+private const val SHARED_HTTP_KEEP_ALIVE_MINUTES = 5L
+
+internal fun configureSharedOkHttpClient(
+    builder: OkHttpClient.Builder,
+    connectionPool: ConnectionPool = ConnectionPool(
+        SHARED_HTTP_MAX_IDLE_CONNECTIONS,
+        SHARED_HTTP_KEEP_ALIVE_MINUTES,
+        TimeUnit.MINUTES
+    )
+): OkHttpClient.Builder {
+    assert(SHARED_HTTP_CONNECT_TIMEOUT_MS > 0L) { "connect timeout must be positive" }
+    assert(SHARED_HTTP_READ_TIMEOUT_MS >= SHARED_HTTP_CONNECT_TIMEOUT_MS) {
+        "read timeout must not be shorter than connect timeout"
+    }
+    assert(SHARED_HTTP_CALL_TIMEOUT_MS == 0L) {
+        "shared client call timeout must stay disabled"
+    }
+
+    return builder
+        .connectTimeout(SHARED_HTTP_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .readTimeout(SHARED_HTTP_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        // 播放、同步与 WebSocket 共用此客户端，不能用总时限截断长请求
+        .callTimeout(SHARED_HTTP_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .connectionPool(connectionPool)
+        .retryOnConnectionFailure(true)
+}
 
 internal fun resolveInitialBypassProxy(
     currentValue: Boolean,
@@ -132,6 +166,26 @@ internal fun warmYouTubePlaybackIfAuthorized(
     }
 }
 
+private data class YouTubeAuthWarmBootstrapKey(
+    val hasEffectiveAuth: Boolean,
+    val authorization: String,
+    val xGoogAuthUser: String,
+    val origin: String,
+    val userAgent: String,
+)
+
+private fun moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthBundle.toWarmBootstrapKey():
+    YouTubeAuthWarmBootstrapKey {
+    val normalized = normalized()
+    return YouTubeAuthWarmBootstrapKey(
+        hasEffectiveAuth = normalized.hasEffectiveAuth(),
+        authorization = normalized.authorization,
+        xGoogAuthUser = normalized.xGoogAuthUser,
+        origin = normalized.origin,
+        userAgent = normalized.userAgent
+    )
+}
+
 /**
  * 全局依赖容器，使用 Service Locator 模式管理 App 的单例
  */
@@ -184,7 +238,7 @@ object AppContainer {
 
     // 共享 OkHttpClient：受 DynamicProxySelector 管理
     val sharedOkHttpClient by lazy {
-        OkHttpClient.Builder()
+        val clientBuilder = OkHttpClient.Builder()
             .proxySelector(DynamicProxySelector)
             .addInterceptor { chain ->
                 val request = chain.request()
@@ -229,9 +283,18 @@ object AppContainer {
                 resolvedHeaders.forEach { (name, value) ->
                     builder.header(name, value)
                 }
-                chain.proceed(builder.build())
+                val response = chain.proceed(builder.build())
+                val setCookieHeaders = response.headers.values("Set-Cookie")
+                if (setCookieHeaders.isNotEmpty()) {
+                    runCatching {
+                        youtubeAuthRepo.mergeCookieUpdates(setCookieHeaders)
+                    }.onFailure { error ->
+                        NPLogger.w("AppContainer", "Failed to merge YouTube Set-Cookie headers", error)
+                    }
+                }
+                response
             }
-            .build()
+        configureSharedOkHttpClient(clientBuilder).build()
     }
 
     // 网络客户端
@@ -339,6 +402,7 @@ object AppContainer {
     private fun startYouTubeAuthObserver() {
         youtubeAuthRepo.authFlow
             .drop(1)
+            .distinctUntilChangedBy { bundle -> bundle.toWarmBootstrapKey() }
             .onEach { bundle ->
                 handleYouTubeAuthStateChanged(
                     bundle = bundle,

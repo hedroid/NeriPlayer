@@ -111,6 +111,71 @@ class YouTubeMusicSupportTest {
     }
 
     @Test
+    fun buildBootstrapAuthFingerprint_ignoresVisitorCookieChurnWhenSessionCookiesStayStable() {
+        val base = YouTubeAuthBundle(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value; VISITOR_INFO1_LIVE=visitor-a; YSC=ysc-a",
+            xGoogAuthUser = "0",
+            userAgent = YOUTUBE_DEFAULT_WEB_USER_AGENT
+        )
+        val changedNoise = base.copy(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value; VISITOR_INFO1_LIVE=visitor-b; YSC=ysc-b"
+        )
+
+        assertEquals(
+            base.buildBootstrapAuthFingerprint(),
+            changedNoise.buildBootstrapAuthFingerprint()
+        )
+    }
+
+    @Test
+    fun buildBootstrapAuthFingerprint_changesWhenStableSessionCookieChanges() {
+        val base = YouTubeAuthBundle(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value; VISITOR_INFO1_LIVE=visitor-a",
+            xGoogAuthUser = "0",
+            userAgent = YOUTUBE_DEFAULT_WEB_USER_AGENT
+        )
+        val changedSession = base.copy(
+            cookieHeader = "SAPISID=new-sap-value; SID=sid-value; VISITOR_INFO1_LIVE=visitor-b"
+        )
+
+        assertNotEquals(
+            base.buildBootstrapAuthFingerprint(),
+            changedSession.buildBootstrapAuthFingerprint()
+        )
+    }
+
+    @Test
+    fun buildBootstrapAuthFingerprint_ignoresLoginInfoAndSidccCookieChurn() {
+        val base = YouTubeAuthBundle(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value; LOGIN_INFO=login-a; SIDCC=sidcc-a",
+            xGoogAuthUser = "0",
+            userAgent = YOUTUBE_DEFAULT_WEB_USER_AGENT
+        )
+        val changedNoise = base.copy(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value; LOGIN_INFO=login-b; SIDCC=sidcc-b"
+        )
+
+        assertEquals(
+            base.buildBootstrapAuthFingerprint(),
+            changedNoise.buildBootstrapAuthFingerprint()
+        )
+    }
+
+    @Test
+    fun buildBootstrapAuthFingerprint_normalizesYoutubePageOrigin() {
+        val auth = YouTubeAuthBundle(
+            cookieHeader = "SAPISID=sap-value; SID=sid-value",
+            xGoogAuthUser = "0",
+            userAgent = YOUTUBE_DEFAULT_WEB_USER_AGENT
+        )
+
+        assertEquals(
+            auth.buildBootstrapAuthFingerprint(origin = YOUTUBE_MUSIC_ORIGIN),
+            auth.buildBootstrapAuthFingerprint(origin = YOUTUBE_WEB_ORIGIN)
+        )
+    }
+
+    @Test
     fun buildYouTubeInnertubeRequestHeaders_doesNotAttachOriginHeaders() {
         val headers = YouTubeAuthBundle(
             cookieHeader = "SAPISID=sap-value; SID=sid-value",

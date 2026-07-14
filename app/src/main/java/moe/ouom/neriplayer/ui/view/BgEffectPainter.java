@@ -84,6 +84,7 @@ public class BgEffectPainter {
     private float uColorPulse = 0f;
     private final float[] uGlobalMotion = {0f, 0f};
     private final float[] uAnimatedPoints = new float[POINT_COUNT * POINT_STRIDE];
+    private boolean reactiveUniformsDirty = true;
 
 
     public BgEffectPainter(Context context) {
@@ -98,22 +99,32 @@ public class BgEffectPainter {
         mBgRuntimeShader.setFloatUniform("uLightOffset", uLightOffset);
         mBgRuntimeShader.setFloatUniform("uResolution", uResolution);
         updateReactiveUniforms();
+        updateGlobalMotionUniform();
         updateAnimatedPoints();
     }
 
     public void setReactive(float level, float beat) {
-        this.uMusicLevel = Math.max(0f, Math.min(1f, level));
-        this.uBeat = Math.max(0f, Math.min(1f, beat));
-    }
-
-    public RenderEffect getRenderEffect() {
-        return RenderEffect.createRuntimeShaderEffect(mBgRuntimeShader, "uTex");
+        float boundedLevel = Math.max(0f, Math.min(1f, level));
+        float boundedBeat = Math.max(0f, Math.min(1f, beat));
+        if (Float.compare(uMusicLevel, boundedLevel) == 0 && Float.compare(uBeat, boundedBeat) == 0) {
+            return;
+        }
+        uMusicLevel = boundedLevel;
+        uBeat = boundedBeat;
+        reactiveUniformsDirty = true;
     }
 
     public void updateMaterials() {
         mBgRuntimeShader.setFloatUniform("uAnimTime", uAnimTime);
-        updateReactiveUniforms();
+        if (reactiveUniformsDirty) {
+            updateReactiveUniforms();
+        }
+        updateGlobalMotionUniform();
         updateAnimatedPoints();
+    }
+
+    public RenderEffect getRenderEffect() {
+        return RenderEffect.createRuntimeShaderEffect(mBgRuntimeShader, "uTex");
     }
 
     public void setAnimTime(float f) {
@@ -208,13 +219,20 @@ public class BgEffectPainter {
         uMotionEase = clamp01(0.42f * uLevelEase + 0.82f * uBeatEase);
         uZoom = 1.0f + 0.024f * uLevelEase + 0.105f * uBeatEase;
         uColorPulse = clamp01(0.68f * uLevelEase + 0.32f * uBeatEase);
-        uGlobalMotion[0] = uMotionEase * 0.0060f * (float) Math.sin(uAnimTime * 1.9f);
-        uGlobalMotion[1] = uMotionEase * 0.0060f * (float) Math.cos(uAnimTime * 1.6f);
         mBgRuntimeShader.setFloatUniform("uLevelEase", uLevelEase);
         mBgRuntimeShader.setFloatUniform("uBeatEase", uBeatEase);
         mBgRuntimeShader.setFloatUniform("uMotionEase", uMotionEase);
         mBgRuntimeShader.setFloatUniform("uZoom", uZoom);
         mBgRuntimeShader.setFloatUniform("uColorPulse", uColorPulse);
+        reactiveUniformsDirty = false;
+    }
+
+    private void updateGlobalMotionUniform() {
+        if (uMotionEase == 0f && uGlobalMotion[0] == 0f && uGlobalMotion[1] == 0f) {
+            return;
+        }
+        uGlobalMotion[0] = uMotionEase * 0.0060f * (float) Math.sin(uAnimTime * 1.9f);
+        uGlobalMotion[1] = uMotionEase * 0.0060f * (float) Math.cos(uAnimTime * 1.6f);
         mBgRuntimeShader.setFloatUniform("uGlobalMotion", uGlobalMotion);
     }
 

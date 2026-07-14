@@ -155,8 +155,50 @@ fun YouTubeAuthBundle.buildBootstrapAuthFingerprint(
 ): String {
     return buildAuthCacheFingerprint(
         userAgent = resolveBootstrapUserAgent(),
-        origin = origin
+        origin = normalizeBootstrapFingerprintOrigin(origin)
     )
+}
+
+private fun normalizeBootstrapFingerprintOrigin(origin: String): String {
+    val normalizedOrigin = origin.trim().removeSuffix("/").ifBlank { YOUTUBE_MUSIC_ORIGIN }
+    val normalizedHost = runCatching { URI(normalizedOrigin).host }.getOrNull()
+    return if (isYouTubePageHost(normalizedHost)) {
+        YOUTUBE_MUSIC_ORIGIN
+    } else {
+        normalizedOrigin
+    }
+}
+
+// LOGIN_INFO 和 SIDCC 经常会抖，放进 fingerprint 会把可复用的播放缓存也清掉
+private val YOUTUBE_AUTH_CACHE_STABLE_COOKIE_KEYS: List<String> = listOf(
+    "SAPISID",
+    "APISID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "SID",
+    "HSID",
+    "SSID",
+    "LSID",
+    "__Secure-1PSID",
+    "__Secure-3PSID"
+)
+
+private fun YouTubeAuthBundle.stableAuthCacheCookieHeader(): String {
+    val normalized = normalized(savedAt = savedAt)
+    val cookieMap = normalized.cookies.ifEmpty { parseCookieHeader(normalized.cookieHeader) }
+    if (cookieMap.isEmpty()) {
+        return normalized.cookieHeader.trim()
+    }
+    val stableCookies = linkedMapOf<String, String>()
+    YOUTUBE_AUTH_CACHE_STABLE_COOKIE_KEYS.forEach { key ->
+        cookieMap[key]
+            ?.takeIf(String::isNotBlank)
+            ?.let { value -> stableCookies[key] = value }
+    }
+    if (stableCookies.isEmpty()) {
+        return effectiveCookieHeader()
+    }
+    return stableCookies.entries.joinToString("; ") { (key, value) -> "$key=$value" }
 }
 
 fun YouTubeAuthBundle.buildAuthCacheFingerprint(
@@ -164,7 +206,7 @@ fun YouTubeAuthBundle.buildAuthCacheFingerprint(
     origin: String = this.origin.ifBlank { YOUTUBE_MUSIC_ORIGIN }
 ): String {
     return buildString {
-        append(effectiveCookieHeader())
+        append(stableAuthCacheCookieHeader())
         append('|')
         append(resolveXGoogAuthUser())
         append('|')
