@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -155,7 +156,7 @@ fun AdvancedLyricsView(
             blurDelta = if (lowPowerRendering) blurDelta * 0.55f else blurDelta,
             topFadeLength = topFadeLength,
             bottomFadeLength = bottomFadeLength,
-            useAdditiveBlend = !lowPowerRendering
+            blendMode = if (lowPowerRendering) BlendMode.SrcOver else BlendMode.Plus
         )
     }
 }
