@@ -26,6 +26,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - name: Set up Git identity
         run: |
@@ -91,6 +92,7 @@ jobs:
           set -euo pipefail
 
           if [ -n "${SYNC_PUSH_TOKEN}" ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
             git remote set-url origin "https://x-access-token:${SYNC_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
 
