@@ -38,11 +38,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BluetoothAudio
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.SurroundSound
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material3.Icon
@@ -62,8 +66,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.core.player.model.MAX_PLAYBACK_VOLUME_BALANCE
+import moe.ouom.neriplayer.core.player.model.MIN_PLAYBACK_VOLUME_BALANCE
+import moe.ouom.neriplayer.core.player.model.normalizePlaybackVolumeBalance
 import moe.ouom.neriplayer.data.settings.generated.AutoSettingInfo
 import moe.ouom.neriplayer.data.settings.generated.AutoSettingsKeys
 import moe.ouom.neriplayer.data.settings.generated.AutoSettingsListItem
@@ -81,6 +89,8 @@ internal fun SettingsPlaybackSection(
     onPlaybackFadeInChange: (Boolean) -> Unit,
     playbackCrossfadeNext: Boolean,
     onPlaybackCrossfadeNextChange: (Boolean) -> Unit,
+    sleepTimerFinishCurrentOnExpiry: Boolean,
+    onSleepTimerFinishCurrentOnExpiryChange: (Boolean) -> Unit,
     playbackFadeInDurationMs: Long,
     onPlaybackFadeInDurationMsChange: (Long) -> Unit,
     playbackFadeOutDurationMs: Long,
@@ -89,6 +99,12 @@ internal fun SettingsPlaybackSection(
     onPlaybackCrossfadeInDurationMsChange: (Long) -> Unit,
     playbackCrossfadeOutDurationMs: Long,
     onPlaybackCrossfadeOutDurationMsChange: (Long) -> Unit,
+    playbackVolumeNormalizationEnabled: Boolean,
+    onPlaybackVolumeNormalizationEnabledChange: (Boolean) -> Unit,
+    playbackHighResolutionOutputEnabled: Boolean,
+    onPlaybackHighResolutionOutputEnabledChange: (Boolean) -> Unit,
+    playbackVolumeBalance: Float,
+    onPlaybackVolumeBalanceChange: (Float) -> Unit,
     keepLastPlaybackProgress: Boolean,
     onKeepLastPlaybackProgressChange: (Boolean) -> Unit,
     keepPlaybackModeState: Boolean,
@@ -196,6 +212,80 @@ internal fun SettingsPlaybackSection(
                     )
                 }
             }
+
+            PlaybackSwitchItem(
+                setting = AutoSettingsMetadata.requireSetting(
+                    AutoSettingsKeys.PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY
+                ),
+                checked = sleepTimerFinishCurrentOnExpiry,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Timer,
+                        contentDescription = stringResource(
+                            R.string.settings_playback_sleep_timer_finish_current_on_expiry
+                        ),
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                onToggle = {
+                    onSleepTimerFinishCurrentOnExpiryChange(
+                        !sleepTimerFinishCurrentOnExpiry
+                    )
+                },
+                onCheckedChange = onSleepTimerFinishCurrentOnExpiryChange
+            )
+
+            PlaybackSwitchItem(
+                setting = AutoSettingsMetadata.requireSetting(
+                    AutoSettingsKeys.PLAYBACK_HIGH_RESOLUTION_OUTPUT_ENABLED
+                ),
+                checked = playbackHighResolutionOutputEnabled,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.HighQuality,
+                        contentDescription = stringResource(
+                            R.string.settings_playback_high_resolution_output
+                        ),
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                onToggle = {
+                    onPlaybackHighResolutionOutputEnabledChange(
+                        !playbackHighResolutionOutputEnabled
+                    )
+                },
+                onCheckedChange = onPlaybackHighResolutionOutputEnabledChange
+            )
+
+            PlaybackSwitchItem(
+                setting = AutoSettingsMetadata.requireSetting(
+                    AutoSettingsKeys.PLAYBACK_VOLUME_NORMALIZATION_ENABLED
+                ),
+                checked = playbackVolumeNormalizationEnabled,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.BarChart,
+                        contentDescription = stringResource(
+                            R.string.settings_playback_volume_normalization
+                        ),
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                onToggle = {
+                    onPlaybackVolumeNormalizationEnabledChange(
+                        !playbackVolumeNormalizationEnabled
+                    )
+                },
+                onCheckedChange = onPlaybackVolumeNormalizationEnabledChange
+            )
+
+            VolumeBalanceSliderListItem(
+                balance = playbackVolumeBalance,
+                onBalanceChange = onPlaybackVolumeBalanceChange
+            )
 
             PlaybackSwitchItem(
                 setting = AutoSettingsMetadata.requireSetting(AutoSettingsKeys.KEEP_LAST_PLAYBACK_PROGRESS),
@@ -323,6 +413,66 @@ private fun UsbExclusiveSettingsEntry(
         },
         onClick = onClick
     )
+}
+
+@Composable
+private fun VolumeBalanceSliderListItem(
+    balance: Float,
+    onBalanceChange: (Float) -> Unit
+) {
+    val normalizedBalance = normalizePlaybackVolumeBalance(balance)
+    var pendingBalance by remember { mutableFloatStateOf(normalizedBalance) }
+
+    LaunchedEffect(normalizedBalance) {
+        if ((pendingBalance - normalizedBalance).absoluteValue > 0.01f) {
+            pendingBalance = normalizedBalance
+        }
+    }
+
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.settings_playback_volume_balance)) },
+        supportingContent = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    text = volumeBalanceLabel(pendingBalance),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                MiuixSettingsSlider(
+                    value = pendingBalance,
+                    onValueChange = { pendingBalance = it },
+                    onValueChangeFinished = {
+                        onBalanceChange(normalizePlaybackVolumeBalance(pendingBalance))
+                    },
+                    valueRange = MIN_PLAYBACK_VOLUME_BALANCE..MAX_PLAYBACK_VOLUME_BALANCE,
+                    steps = 39
+                )
+            }
+        },
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Outlined.SurroundSound,
+                contentDescription = stringResource(R.string.settings_playback_volume_balance),
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
+}
+
+@Composable
+private fun volumeBalanceLabel(balance: Float): String {
+    val normalizedBalance = normalizePlaybackVolumeBalance(balance)
+    val percent = (normalizedBalance.absoluteValue * 100f).roundToInt()
+    return when {
+        percent == 0 -> stringResource(R.string.settings_playback_volume_balance_center)
+        normalizedBalance < 0f -> stringResource(
+            R.string.settings_playback_volume_balance_left,
+            percent
+        )
+        else -> stringResource(R.string.settings_playback_volume_balance_right, percent)
+    }
 }
 
 @Composable

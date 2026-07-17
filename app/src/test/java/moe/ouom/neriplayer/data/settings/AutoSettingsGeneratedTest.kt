@@ -55,6 +55,14 @@ class AutoSettingsGeneratedTest {
             "max_cache_size_bytes" in longKeyNames
         )
         assertTrue(
+            "volume normalization should be exportable",
+            "playback_volume_normalization_enabled" in booleanKeyNames
+        )
+        assertTrue(
+            "high resolution output should be exportable",
+            "playback_high_resolution_output_enabled" in booleanKeyNames
+        )
+        assertTrue(
             "theme string should be exportable",
             "theme_color_palette_v2" in stringKeyNames
         )
@@ -157,6 +165,13 @@ class AutoSettingsGeneratedTest {
         assertEquals(SettingAccessMode.KeyOnly, playbackFade?.access)
         assertEquals(R.string.settings_playback_fade_in, playbackFade?.titleRes)
 
+        val highResolutionOutput =
+            AutoSettingsMetadata.setting("playback_high_resolution_output_enabled")
+        assertEquals(SettingValueType.Boolean, highResolutionOutput?.valueType)
+        assertEquals(SettingUiType.Custom, highResolutionOutput?.ui)
+        assertEquals(SettingAccessMode.KeyOnly, highResolutionOutput?.access)
+        assertEquals(AutoSettingsSections.playback, highResolutionOutput?.section)
+
         val audioQuality = AutoSettingsMetadata.setting("audio_quality")
         assertEquals(SettingValueType.String, audioQuality?.valueType)
         assertEquals(SettingUiType.Custom, audioQuality?.ui)
@@ -176,6 +191,14 @@ class AutoSettingsGeneratedTest {
         assertTrue(
             "lyrics metadata should include Lyricon switch",
             lyricsSettings.any { it.keyName == "lyricon_enabled" && it.ui == SettingUiType.Switch }
+        )
+        assertTrue(
+            "lyrics metadata should include AMLL lyrics switch",
+            lyricsSettings.any {
+                it.keyName == "amll_lyrics_enabled" &&
+                    it.valueType == SettingValueType.Boolean &&
+                    it.ui == SettingUiType.Switch
+            }
         )
         assertTrue(
             "lyrics metadata should include status bar lyrics switch",

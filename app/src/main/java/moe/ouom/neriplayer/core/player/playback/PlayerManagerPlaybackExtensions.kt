@@ -158,6 +158,12 @@ internal fun PlayerManager.restorePlaybackAfterTransientAudioRouteLoss(reason: S
 }
 
 internal fun PlayerManager.pauseForAudioRouteLoss(reason: String) {
+    _playWhenReadyFlow.value = false
+    _isPlayingFlow.value = false
+    if (lyriconEnabled) {
+        LyriconManager.setPlaybackState(false)
+    }
+    syncPlaybackControlPlayingState()
     pauseImpl(
         forcePersist = false,
         commandSource = PlaybackCommandSource.LOCAL,
@@ -810,6 +816,9 @@ private fun PlayerManager.maybeAutoMatchYouTubeMusicLyrics(song: SongItem, reque
             SearchManager.findBestSearchCandidate(song.name, song.artist) ?: return@launch
         val latestSong = _currentSongFlow.value ?: return@launch
         if (requestToken != playbackRequestToken || !latestSong.sameIdentityAs(song)) {
+            return@launch
+        }
+        if (!shouldAutoMatchExternalLyrics(latestSong, isYouTubeMusicTrack(latestSong))) {
             return@launch
         }
 

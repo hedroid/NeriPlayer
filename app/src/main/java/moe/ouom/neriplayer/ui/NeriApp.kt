@@ -862,10 +862,25 @@ private fun NeriAppContent(
     val showHomeRecommendedCard by repo.homeCardRecommendedFlow.collectAsStateWithLifecycle(initialValue = true)
     val playbackFadeIn by repo.playbackFadeInFlow.collectAsStateWithLifecycle(initialValue = false)
     val playbackCrossfadeNext by repo.playbackCrossfadeNextFlow.collectAsStateWithLifecycle(initialValue = false)
+    val sleepTimerFinishCurrentOnExpiry by repo.sleepTimerFinishCurrentOnExpiryFlow
+        .collectAsStateWithLifecycle(
+            initialValue = startupPlaybackPreferences.sleepTimerFinishCurrentOnExpiry
+        )
     val playbackFadeInDurationMs by repo.playbackFadeInDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
     val playbackFadeOutDurationMs by repo.playbackFadeOutDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
     val playbackCrossfadeInDurationMs by repo.playbackCrossfadeInDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
     val playbackCrossfadeOutDurationMs by repo.playbackCrossfadeOutDurationMsFlow.collectAsStateWithLifecycle(initialValue = 500L)
+    val playbackVolumeNormalizationEnabled by repo.playbackVolumeNormalizationEnabledFlow
+        .collectAsStateWithLifecycle(
+            initialValue = startupPlaybackPreferences.playbackVolumeNormalizationEnabled
+        )
+    val playbackHighResolutionOutputEnabled by repo.playbackHighResolutionOutputEnabledFlow
+        .collectAsStateWithLifecycle(
+            initialValue = startupPlaybackPreferences.playbackHighResolutionOutputEnabled
+        )
+    val playbackVolumeBalance by repo.playbackVolumeBalanceFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.playbackVolumeBalance
+    )
     val keepLastPlaybackProgress by repo.keepLastPlaybackProgressFlow.collectAsStateWithLifecycle(initialValue = true)
     val keepPlaybackModeState by repo.keepPlaybackModeStateFlow.collectAsStateWithLifecycle(initialValue = true)
     val neteaseAutoSourceSwitch by repo.neteaseAutoSourceSwitchFlow.collectAsStateWithLifecycle(
@@ -2157,6 +2172,13 @@ private fun NeriAppContent(
                                         onPlaybackCrossfadeNextChange = { enabled ->
                                             scope.launch { repo.setPlaybackCrossfadeNext(enabled) }
                                         },
+                                        sleepTimerFinishCurrentOnExpiry =
+                                            sleepTimerFinishCurrentOnExpiry,
+                                        onSleepTimerFinishCurrentOnExpiryChange = { enabled ->
+                                            scope.launch {
+                                                repo.setSleepTimerFinishCurrentOnExpiry(enabled)
+                                            }
+                                        },
                                         playbackFadeInDurationMs = playbackFadeInDurationMs,
                                         onPlaybackFadeInDurationMsChange = { duration ->
                                             scope.launch { repo.setPlaybackFadeInDurationMs(duration) }
@@ -2172,6 +2194,22 @@ private fun NeriAppContent(
                                         playbackCrossfadeOutDurationMs = playbackCrossfadeOutDurationMs,
                                         onPlaybackCrossfadeOutDurationMsChange = { duration ->
                                             scope.launch { repo.setPlaybackCrossfadeOutDurationMs(duration) }
+                                        },
+                                        playbackVolumeNormalizationEnabled =
+                                            playbackVolumeNormalizationEnabled,
+                                        onPlaybackVolumeNormalizationEnabledChange = { enabled ->
+                                            PlayerManager.setPlaybackVolumeNormalizationEnabled(enabled)
+                                        },
+                                        playbackHighResolutionOutputEnabled =
+                                            playbackHighResolutionOutputEnabled,
+                                        onPlaybackHighResolutionOutputEnabledChange = { enabled ->
+                                            PlayerManager.setPlaybackHighResolutionOutputEnabled(
+                                                enabled
+                                            )
+                                        },
+                                        playbackVolumeBalance = playbackVolumeBalance,
+                                        onPlaybackVolumeBalanceChange = { balance ->
+                                            PlayerManager.setPlaybackVolumeBalance(balance)
                                         },
                                         keepLastPlaybackProgress = keepLastPlaybackProgress,
                                         onKeepLastPlaybackProgressChange = { enabled ->

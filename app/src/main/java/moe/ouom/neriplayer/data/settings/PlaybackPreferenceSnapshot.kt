@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_PITCH
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_SPEED
+import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_VOLUME_BALANCE
 import moe.ouom.neriplayer.core.player.model.PlaybackEqualizerPresetId
 import moe.ouom.neriplayer.core.player.model.PlaybackSoundConfig
 import moe.ouom.neriplayer.core.player.model.decodePlaybackEqualizerBandLevels
@@ -40,6 +41,7 @@ import moe.ouom.neriplayer.core.player.model.encodePlaybackEqualizerBandLevels
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackSpeed
+import moe.ouom.neriplayer.core.player.model.normalizePlaybackVolumeBalance
 import androidx.core.content.edit
 
 private const val PLAYBACK_SNAPSHOT_PREFS = "playback_snapshot_cache"
@@ -63,6 +65,8 @@ private const val PLAYBACK_KEEP_MODE_STATE_KEY = "keep_playback_mode_state"
 private const val PLAYBACK_NETEASE_AUTO_SOURCE_SWITCH_KEY = "netease_auto_source_switch"
 private const val PLAYBACK_FADE_IN_KEY = "playback_fade_in"
 private const val PLAYBACK_CROSSFADE_NEXT_KEY = "playback_crossfade_next"
+private const val PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY_KEY =
+    "playback_sleep_timer_finish_current_on_expiry"
 private const val PLAYBACK_FADE_IN_DURATION_KEY = "playback_fade_in_duration_ms"
 private const val PLAYBACK_FADE_OUT_DURATION_KEY = "playback_fade_out_duration_ms"
 private const val PLAYBACK_CROSSFADE_IN_DURATION_KEY = "playback_crossfade_in_duration_ms"
@@ -70,6 +74,10 @@ private const val PLAYBACK_CROSSFADE_OUT_DURATION_KEY = "playback_crossfade_out_
 private const val PLAYBACK_SPEED_KEY = "playback_speed"
 private const val PLAYBACK_PITCH_KEY = "playback_pitch"
 private const val PLAYBACK_LOUDNESS_KEY = "playback_loudness_gain_mb"
+private const val PLAYBACK_VOLUME_BALANCE_KEY = "playback_volume_balance"
+private const val PLAYBACK_VOLUME_NORMALIZATION_KEY = "playback_volume_normalization_enabled"
+private const val PLAYBACK_HIGH_RESOLUTION_OUTPUT_KEY =
+    "playback_high_resolution_output_enabled"
 private const val PLAYBACK_EQUALIZER_ENABLED_KEY = "playback_equalizer_enabled"
 private const val PLAYBACK_EQUALIZER_PRESET_KEY = "playback_equalizer_preset"
 private const val PLAYBACK_EQUALIZER_LEVELS_KEY = "playback_equalizer_custom_band_levels"
@@ -82,6 +90,7 @@ private const val PLAYBACK_MAX_CACHE_SIZE_BYTES_KEY = "max_cache_size_bytes"
 private const val PLAYBACK_CLOUD_MUSIC_LYRIC_OFFSET_KEY = "cloud_music_lyric_default_offset_ms"
 private const val PLAYBACK_QQ_MUSIC_LYRIC_OFFSET_KEY = "qq_music_lyric_default_offset_ms"
 private const val PLAYBACK_LYRICON_ENABLED_KEY = "lyricon_enabled"
+private const val PLAYBACK_AMLL_LYRICS_ENABLED_KEY = "amll_lyrics_enabled"
 private const val DEFAULT_MAX_CACHE_SIZE_BYTES = 1024L * 1024 * 1024
 private val playbackPreferenceSnapshotWarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private val playbackPreferenceSnapshotWarmLock = Any()
@@ -102,6 +111,7 @@ data class PlaybackPreferenceSnapshot(
     val neteaseAutoSourceSwitch: Boolean = true,
     val playbackFadeIn: Boolean = false,
     val playbackCrossfadeNext: Boolean = false,
+    val sleepTimerFinishCurrentOnExpiry: Boolean = false,
     val playbackFadeInDurationMs: Long = 500L,
     val playbackFadeOutDurationMs: Long = 500L,
     val playbackCrossfadeInDurationMs: Long = 500L,
@@ -109,6 +119,9 @@ data class PlaybackPreferenceSnapshot(
     val playbackSpeed: Float = DEFAULT_PLAYBACK_SPEED,
     val playbackPitch: Float = DEFAULT_PLAYBACK_PITCH,
     val playbackLoudnessGainMb: Int = DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB,
+    val playbackVolumeBalance: Float = DEFAULT_PLAYBACK_VOLUME_BALANCE,
+    val playbackVolumeNormalizationEnabled: Boolean = false,
+    val playbackHighResolutionOutputEnabled: Boolean = false,
     val playbackEqualizerEnabled: Boolean = false,
     val playbackEqualizerPreset: String = PlaybackEqualizerPresetId.FLAT,
     val playbackEqualizerCustomBandLevels: List<Int> = emptyList(),
@@ -133,6 +146,7 @@ data class PlaybackPreferenceSnapshot(
     val cloudMusicLyricDefaultOffsetMs: Long = DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS,
     val qqMusicLyricDefaultOffsetMs: Long = DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS,
     val lyriconEnabled: Boolean = false,
+    val amllLyricsEnabled: Boolean = true,
     val maxCacheSizeBytes: Long = DEFAULT_MAX_CACHE_SIZE_BYTES
 ) {
     fun sanitized(): PlaybackPreferenceSnapshot {
@@ -153,6 +167,7 @@ data class PlaybackPreferenceSnapshot(
             playbackSpeed = normalizePlaybackSpeed(playbackSpeed),
             playbackPitch = normalizePlaybackPitch(playbackPitch),
             playbackLoudnessGainMb = normalizePlaybackLoudnessGainMb(playbackLoudnessGainMb),
+            playbackVolumeBalance = normalizePlaybackVolumeBalance(playbackVolumeBalance),
             playbackEqualizerPreset = playbackEqualizerPreset.trim()
                 .ifBlank { PlaybackEqualizerPresetId.FLAT },
             usbExclusiveSampleRateMode = UsbExclusiveSampleRateMode
@@ -186,6 +201,8 @@ data class PlaybackPreferenceSnapshot(
             speed = normalizedSnapshot.playbackSpeed,
             pitch = normalizedSnapshot.playbackPitch,
             loudnessGainMb = normalizedSnapshot.playbackLoudnessGainMb,
+            volumeBalance = normalizedSnapshot.playbackVolumeBalance,
+            volumeNormalizationEnabled = normalizedSnapshot.playbackVolumeNormalizationEnabled,
             equalizerEnabled = normalizedSnapshot.playbackEqualizerEnabled,
             presetId = normalizedSnapshot.playbackEqualizerPreset,
             customBandLevelsMb = normalizedSnapshot.playbackEqualizerCustomBandLevels
@@ -289,6 +306,10 @@ internal fun persistPlaybackPreferenceSnapshot(
                 )
                 .putBoolean(PLAYBACK_FADE_IN_KEY, normalizedSnapshot.playbackFadeIn)
                 .putBoolean(PLAYBACK_CROSSFADE_NEXT_KEY, normalizedSnapshot.playbackCrossfadeNext)
+                .putBoolean(
+                    PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY_KEY,
+                    normalizedSnapshot.sleepTimerFinishCurrentOnExpiry
+                )
                 .putLong(PLAYBACK_FADE_IN_DURATION_KEY, normalizedSnapshot.playbackFadeInDurationMs)
                 .putLong(
                     PLAYBACK_FADE_OUT_DURATION_KEY,
@@ -305,6 +326,15 @@ internal fun persistPlaybackPreferenceSnapshot(
                 .putFloat(PLAYBACK_SPEED_KEY, normalizedSnapshot.playbackSpeed)
                 .putFloat(PLAYBACK_PITCH_KEY, normalizedSnapshot.playbackPitch)
                 .putInt(PLAYBACK_LOUDNESS_KEY, normalizedSnapshot.playbackLoudnessGainMb)
+                .putFloat(PLAYBACK_VOLUME_BALANCE_KEY, normalizedSnapshot.playbackVolumeBalance)
+                .putBoolean(
+                    PLAYBACK_VOLUME_NORMALIZATION_KEY,
+                    normalizedSnapshot.playbackVolumeNormalizationEnabled
+                )
+                .putBoolean(
+                    PLAYBACK_HIGH_RESOLUTION_OUTPUT_KEY,
+                    normalizedSnapshot.playbackHighResolutionOutputEnabled
+                )
                 .putBoolean(
                     PLAYBACK_EQUALIZER_ENABLED_KEY,
                     normalizedSnapshot.playbackEqualizerEnabled
@@ -341,6 +371,10 @@ internal fun persistPlaybackPreferenceSnapshot(
                     normalizedSnapshot.qqMusicLyricDefaultOffsetMs
                 )
                 .putBoolean(PLAYBACK_LYRICON_ENABLED_KEY, normalizedSnapshot.lyriconEnabled)
+                .putBoolean(
+                    PLAYBACK_AMLL_LYRICS_ENABLED_KEY,
+                    normalizedSnapshot.amllLyricsEnabled
+                )
                 .putLong(PLAYBACK_MAX_CACHE_SIZE_BYTES_KEY, normalizedSnapshot.maxCacheSizeBytes)
         }
     }
@@ -372,6 +406,8 @@ internal fun Preferences.toPlaybackPreferenceSnapshot(): PlaybackPreferenceSnaps
         neteaseAutoSourceSwitch = this[SettingsKeys.NETEASE_AUTO_SOURCE_SWITCH] ?: true,
         playbackFadeIn = this[SettingsKeys.PLAYBACK_FADE_IN] ?: false,
         playbackCrossfadeNext = this[SettingsKeys.PLAYBACK_CROSSFADE_NEXT] ?: false,
+        sleepTimerFinishCurrentOnExpiry =
+            this[SettingsKeys.PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY] ?: false,
         playbackFadeInDurationMs = this[SettingsKeys.PLAYBACK_FADE_IN_DURATION_MS] ?: 500L,
         playbackFadeOutDurationMs = this[SettingsKeys.PLAYBACK_FADE_OUT_DURATION_MS] ?: 500L,
         playbackCrossfadeInDurationMs =
@@ -382,6 +418,12 @@ internal fun Preferences.toPlaybackPreferenceSnapshot(): PlaybackPreferenceSnaps
         playbackPitch = this[SettingsKeys.PLAYBACK_PITCH] ?: DEFAULT_PLAYBACK_PITCH,
         playbackLoudnessGainMb =
             this[SettingsKeys.PLAYBACK_LOUDNESS_GAIN_MB] ?: DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB,
+        playbackVolumeBalance =
+            this[SettingsKeys.PLAYBACK_VOLUME_BALANCE] ?: DEFAULT_PLAYBACK_VOLUME_BALANCE,
+        playbackVolumeNormalizationEnabled =
+            this[SettingsKeys.PLAYBACK_VOLUME_NORMALIZATION_ENABLED] ?: false,
+        playbackHighResolutionOutputEnabled =
+            this[SettingsKeys.PLAYBACK_HIGH_RESOLUTION_OUTPUT_ENABLED] ?: false,
         playbackEqualizerEnabled = this[SettingsKeys.PLAYBACK_EQUALIZER_ENABLED] ?: false,
         playbackEqualizerPreset =
             this[SettingsKeys.PLAYBACK_EQUALIZER_PRESET] ?: PlaybackEqualizerPresetId.FLAT,
@@ -429,6 +471,7 @@ internal fun Preferences.toPlaybackPreferenceSnapshot(): PlaybackPreferenceSnaps
             this[SettingsKeys.QQ_MUSIC_LYRIC_DEFAULT_OFFSET_MS]
                 ?: DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS,
         lyriconEnabled = this[SettingsKeys.LYRICON_ENABLED] ?: false,
+        amllLyricsEnabled = this[SettingsKeys.AMLL_LYRICS_ENABLED] ?: true,
         maxCacheSizeBytes =
             this[SettingsKeys.MAX_CACHE_SIZE_BYTES] ?: DEFAULT_MAX_CACHE_SIZE_BYTES
     ).sanitized()
@@ -496,6 +539,10 @@ private fun readCachedPlaybackPreferenceSnapshot(context: Context): PlaybackPref
             prefs.getBoolean(PLAYBACK_NETEASE_AUTO_SOURCE_SWITCH_KEY, true),
         playbackFadeIn = prefs.getBoolean(PLAYBACK_FADE_IN_KEY, false),
         playbackCrossfadeNext = prefs.getBoolean(PLAYBACK_CROSSFADE_NEXT_KEY, false),
+        sleepTimerFinishCurrentOnExpiry = prefs.getBoolean(
+            PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY_KEY,
+            false
+        ),
         playbackFadeInDurationMs = prefs.getLong(PLAYBACK_FADE_IN_DURATION_KEY, 500L),
         playbackFadeOutDurationMs = prefs.getLong(PLAYBACK_FADE_OUT_DURATION_KEY, 500L),
         playbackCrossfadeInDurationMs =
@@ -507,6 +554,18 @@ private fun readCachedPlaybackPreferenceSnapshot(context: Context): PlaybackPref
         playbackLoudnessGainMb = prefs.getInt(
             PLAYBACK_LOUDNESS_KEY,
             DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
+        ),
+        playbackVolumeBalance = prefs.getFloat(
+            PLAYBACK_VOLUME_BALANCE_KEY,
+            DEFAULT_PLAYBACK_VOLUME_BALANCE
+        ),
+        playbackVolumeNormalizationEnabled = prefs.getBoolean(
+            PLAYBACK_VOLUME_NORMALIZATION_KEY,
+            false
+        ),
+        playbackHighResolutionOutputEnabled = prefs.getBoolean(
+            PLAYBACK_HIGH_RESOLUTION_OUTPUT_KEY,
+            false
         ),
         playbackEqualizerEnabled =
             prefs.getBoolean(PLAYBACK_EQUALIZER_ENABLED_KEY, false),
@@ -548,6 +607,7 @@ private fun readCachedPlaybackPreferenceSnapshot(context: Context): PlaybackPref
             DEFAULT_QQ_MUSIC_LYRIC_OFFSET_MS
         ),
         lyriconEnabled = prefs.getBoolean(PLAYBACK_LYRICON_ENABLED_KEY, false),
+        amllLyricsEnabled = prefs.getBoolean(PLAYBACK_AMLL_LYRICS_ENABLED_KEY, true),
         maxCacheSizeBytes = prefs.getLong(
             PLAYBACK_MAX_CACHE_SIZE_BYTES_KEY,
             DEFAULT_MAX_CACHE_SIZE_BYTES

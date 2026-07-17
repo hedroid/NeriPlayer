@@ -22,7 +22,31 @@ neri::usb::PcmPipelineConfig configFor(int inputRate, int outputRate) {
     };
 }
 
+neri::usb::PcmPipelineConfig configFor32Bit(int inputRate, int outputRate) {
+    return {
+        { outputRate, 2, 4, 32, 8 },
+        { inputRate, 2, 4 },
+        250,
+        1536,
+        12
+    };
+}
+
+neri::usb::PcmPipelineConfig configFor24BitIn32Container(int inputRate, int outputRate) {
+    return {
+        { outputRate, 2, 4, 24, 8 },
+        { inputRate, 2, 22 },
+        250,
+        1536,
+        12
+    };
+}
+
 void writeFloatSample(std::vector<uint8_t>& output, size_t byteOffset, float value) {
+    std::memcpy(output.data() + byteOffset, &value, sizeof(value));
+}
+
+void writeInt32Sample(std::vector<uint8_t>& output, size_t byteOffset, int32_t value) {
     std::memcpy(output.data() + byteOffset, &value, sizeof(value));
 }
 
@@ -167,6 +191,34 @@ void verifiesTransportStartRampRearmsWithoutDroppingQueuedAudio() {
     assert(restartedSecondSample > restartedFirstSample);
 }
 
+void verifiesPartialUnderrunFadesLastValidFramesToSilence() {
+    neri::usb::PcmPipeline pipeline;
+    std::string error;
+    assert(pipeline.configure(configFor(48000, 48000), &error));
+
+    constexpr int16_t fullScale = std::numeric_limits<int16_t>::max();
+    std::vector<uint8_t> input(4U * 4U, 0);
+    for (size_t offset = 0; offset < input.size(); offset += sizeof(fullScale)) {
+        std::memcpy(input.data() + offset, &fullScale, sizeof(fullScale));
+    }
+    assert(pipeline.write(input.data(), input.size(), &error) == input.size());
+
+    std::vector<uint8_t> output(8U * 4U, 0);
+    assert(pipeline.fill(output.data(), output.size(), true) == input.size());
+
+    const int16_t firstSample = readInt16Sample(output, 0);
+    const int16_t fadedSample = readInt16Sample(output, 3U * 4U);
+    const int16_t zeroFillSample = readInt16Sample(output, 4U * 4U);
+    assert(firstSample > 32000);
+    assert(fadedSample == 0);
+    assert(zeroFillSample == 0);
+
+    const auto snapshot = pipeline.snapshot();
+    const auto missingBytes = static_cast<int64_t>(output.size() - input.size());
+    assert(snapshot.underrunBytes == missingBytes);
+    assert(snapshot.zeroFillBytes == missingBytes);
+}
+
 void verifiesUnsupportedEncodingIsRejected() {
     neri::usb::PcmPipeline pipeline;
     std::string error;
@@ -275,6 +327,76 @@ void verifiesFloatInputResampleProducesUsbSignalStats() {
     assert(hasNonZeroOutput);
 }
 
+void verifiesFloatInputPassThroughProduces32BitUsbSignal() {
+    neri::usb::PcmPipeline pipeline;
+    std::string error;
+    assert(pipeline.configure(configFor32Bit(96000, 96000), &error));
+
+    constexpr int inputFrames = 192;
+    constexpr int inputChannels = 2;
+    constexpr int inputSampleBytes = 4;
+    std::vector<uint8_t> input(
+        static_cast<size_t>(inputFrames * inputChannels * inputSampleBytes),
+        0
+    );
+    for (int frame = 0; frame < inputFrames; ++frame) {
+        const float value = frame % 2 == 0 ? 0.5f : -0.5f;
+        const size_t frameOffset = static_cast<size_t>(frame * inputChannels * inputSampleBytes);
+        writeFloatSample(input, frameOffset, value);
+        writeFloatSample(input, frameOffset + inputSampleBytes, value);
+    }
+
+    assert(pipeline.write(input.data(), input.size(), &error) == input.size());
+    std::vector<uint8_t> output(static_cast<size_t>(inputFrames) * 8U, 0);
+    assert(pipeline.fill(output.data(), output.size(), true) == output.size());
+
+    const auto snapshot = pipeline.snapshot();
+    assert(snapshot.signalOutputFrames == inputFrames);
+    assert(snapshot.signalOutputBytes == static_cast<int64_t>(output.size()));
+    assert(snapshot.outputPeak >= 0.5f);
+    assert(snapshot.lastOutputPeak >= 0.5f);
+
+    const float firstLeft = neri::usb::readIntegerPcmSample(output.data(), 4, 32);
+    const float secondLeft = neri::usb::readIntegerPcmSample(output.data() + 8, 4, 32);
+    assert(firstLeft > 0.49f && firstLeft <= 0.5f);
+    assert(secondLeft < -0.49f && secondLeft >= -0.5f);
+}
+
+void verifies32BitInputCanDrive24BitUsb32Container() {
+    neri::usb::PcmPipeline pipeline;
+    std::string error;
+    assert(pipeline.configure(configFor24BitIn32Container(96000, 96000), &error));
+
+    constexpr int inputFrames = 192;
+    constexpr int inputChannels = 2;
+    constexpr int inputSampleBytes = 4;
+    std::vector<uint8_t> input(
+        static_cast<size_t>(inputFrames * inputChannels * inputSampleBytes),
+        0
+    );
+    for (int frame = 0; frame < inputFrames; ++frame) {
+        const int32_t value = frame % 2 == 0 ? INT32_C(0x40000000) : -INT32_C(0x40000000);
+        const size_t frameOffset = static_cast<size_t>(frame * inputChannels * inputSampleBytes);
+        writeInt32Sample(input, frameOffset, value);
+        writeInt32Sample(input, frameOffset + inputSampleBytes, value);
+    }
+
+    assert(pipeline.write(input.data(), input.size(), &error) == input.size());
+    std::vector<uint8_t> output(static_cast<size_t>(inputFrames) * 8U, 0);
+    assert(pipeline.fill(output.data(), output.size(), true) == output.size());
+
+    const auto snapshot = pipeline.snapshot();
+    assert(snapshot.signalOutputFrames == inputFrames);
+    assert(snapshot.signalOutputBytes == static_cast<int64_t>(output.size()));
+    assert(snapshot.outputPeak >= 0.5f);
+    assert(snapshot.lastOutputPeak >= 0.5f);
+
+    const float firstLeft = neri::usb::readIntegerPcmSample(output.data(), 4, 24);
+    const float secondLeft = neri::usb::readIntegerPcmSample(output.data() + 8, 4, 24);
+    assert(firstLeft > 0.49f && firstLeft <= 0.5f);
+    assert(secondLeft < -0.49f && secondLeft >= -0.5f);
+}
+
 void verifiesIntegerCodecDepthsAndEndianInputs() {
     std::array<uint8_t, 4> output {};
     neri::usb::writeIntegerPcmSample(output.data(), 3, 24, -1.0f);
@@ -282,6 +404,14 @@ void verifiesIntegerCodecDepthsAndEndianInputs() {
     assert(output[1] == 0x00);
     assert(output[2] == 0x80);
     assert(neri::usb::readIntegerPcmSample(output.data(), 3, 24) == -1.0f);
+
+    std::array<uint8_t, 4> padded24Output {};
+    neri::usb::writeIntegerPcmSample(padded24Output.data(), 4, 24, -1.0f);
+    assert(padded24Output[0] == 0x00);
+    assert(padded24Output[1] == 0x00);
+    assert(padded24Output[2] == 0x00);
+    assert(padded24Output[3] == 0x80);
+    assert(neri::usb::readIntegerPcmSample(padded24Output.data(), 4, 24) == -1.0f);
 
     constexpr std::array<uint8_t, 2> littleEndianHalf { 0x00, 0x40 };
     constexpr std::array<uint8_t, 2> bigEndianHalf { 0x40, 0x00 };
@@ -314,11 +444,14 @@ int main() {
     verifiesPausePreservesQueuedAudio();
     verifiesResumeAfterSilentOutputRampsFromZero();
     verifiesTransportStartRampRearmsWithoutDroppingQueuedAudio();
+    verifiesPartialUnderrunFadesLastValidFramesToSilence();
     verifiesUnsupportedEncodingIsRejected();
     verifiesRuntimeRingResizePreservesQueuedAudio();
     verifiesHighResolutionRingUsesBoundedAllocation();
     verifiesBackpressureSnapshotTracksFullRing();
     verifiesFloatInputResampleProducesUsbSignalStats();
+    verifiesFloatInputPassThroughProduces32BitUsbSignal();
+    verifies32BitInputCanDrive24BitUsb32Container();
     verifiesIntegerCodecDepthsAndEndianInputs();
     return 0;
 }

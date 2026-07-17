@@ -38,12 +38,14 @@ import moe.ouom.neriplayer.core.download.normalizeDownloadFileNameTemplate
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_PITCH
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_SPEED
+import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_VOLUME_BALANCE
 import moe.ouom.neriplayer.core.player.model.PlaybackEqualizerPresetId
 import moe.ouom.neriplayer.core.player.model.decodePlaybackEqualizerBandLevels
 import moe.ouom.neriplayer.core.player.model.encodePlaybackEqualizerBandLevels
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackSpeed
+import moe.ouom.neriplayer.core.player.model.normalizePlaybackVolumeBalance
 import moe.ouom.neriplayer.data.settings.generated.AutoSettingsRepository
 import moe.ouom.neriplayer.ksp.annotations.AutoSettingSpec
 import java.util.Locale
@@ -209,6 +211,9 @@ class SettingsRepository(private val context: Context) {
     val lyriconEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.lyriconEnabledFlow
 
+    val amllLyricsEnabledFlow: Flow<Boolean> =
+        autoSettingsRepository.amllLyricsEnabledFlow
+
     val statusBarLyricsEnabledFlow : Flow<Boolean> =
         autoSettingsRepository.statusBarLyricsFlow
 
@@ -354,6 +359,11 @@ class SettingsRepository(private val context: Context) {
     val playbackCrossfadeNextFlow: Flow<Boolean> =
         dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_CROSSFADE_NEXT] ?: false }
 
+    val sleepTimerFinishCurrentOnExpiryFlow: Flow<Boolean> =
+        dataStoreSettingFlow {
+            it[SettingsKeys.PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY] ?: false
+        }
+
     val playbackFadeInDurationMsFlow: Flow<Long> =
         dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_FADE_IN_DURATION_MS] ?: 500L }
 
@@ -394,6 +404,23 @@ class SettingsRepository(private val context: Context) {
             normalizePlaybackLoudnessGainMb(
                 it[SettingsKeys.PLAYBACK_LOUDNESS_GAIN_MB] ?: DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
             )
+        }
+
+    val playbackVolumeBalanceFlow: Flow<Float> =
+        dataStoreSettingFlow {
+            normalizePlaybackVolumeBalance(
+                it[SettingsKeys.PLAYBACK_VOLUME_BALANCE] ?: DEFAULT_PLAYBACK_VOLUME_BALANCE
+            )
+        }
+
+    val playbackVolumeNormalizationEnabledFlow: Flow<Boolean> =
+        dataStoreSettingFlow {
+            it[SettingsKeys.PLAYBACK_VOLUME_NORMALIZATION_ENABLED] ?: false
+        }
+
+    val playbackHighResolutionOutputEnabledFlow: Flow<Boolean> =
+        dataStoreSettingFlow {
+            it[SettingsKeys.PLAYBACK_HIGH_RESOLUTION_OUTPUT_ENABLED] ?: false
         }
 
     val keepLastPlaybackProgressFlow: Flow<Boolean> =
@@ -721,6 +748,12 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun setFloatingLyricsEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[SettingsKeys.FLOATING_LYRICS_ENABLED] = enabled
+        }
+    }
+
     suspend fun setAdvancedBlurEnabled(enabled: Boolean) {
         autoSettingsRepository.setAdvancedBlurEnabled(enabled)
     }
@@ -881,6 +914,15 @@ class SettingsRepository(private val context: Context) {
         updatePlaybackPreferenceSnapshot(context) { it.copy(playbackCrossfadeNext = enabled) }
     }
 
+    suspend fun setSleepTimerFinishCurrentOnExpiry(enabled: Boolean) {
+        context.dataStore.edit {
+            it[SettingsKeys.PLAYBACK_SLEEP_TIMER_FINISH_CURRENT_ON_EXPIRY] = enabled
+        }
+        updatePlaybackPreferenceSnapshot(context) {
+            it.copy(sleepTimerFinishCurrentOnExpiry = enabled)
+        }
+    }
+
     suspend fun setPlaybackFadeInDurationMs(durationMs: Long) {
         val normalized = durationMs.coerceAtLeast(0L)
         context.dataStore.edit { it[SettingsKeys.PLAYBACK_FADE_IN_DURATION_MS] = normalized }
@@ -969,6 +1011,34 @@ class SettingsRepository(private val context: Context) {
         }
         updatePlaybackPreferenceSnapshot(context) {
             it.copy(playbackLoudnessGainMb = normalized)
+        }
+    }
+
+    suspend fun setPlaybackVolumeBalance(balance: Float) {
+        val normalized = normalizePlaybackVolumeBalance(balance)
+        context.dataStore.edit {
+            it[SettingsKeys.PLAYBACK_VOLUME_BALANCE] = normalized
+        }
+        updatePlaybackPreferenceSnapshot(context) {
+            it.copy(playbackVolumeBalance = normalized)
+        }
+    }
+
+    suspend fun setPlaybackVolumeNormalizationEnabled(enabled: Boolean) {
+        context.dataStore.edit {
+            it[SettingsKeys.PLAYBACK_VOLUME_NORMALIZATION_ENABLED] = enabled
+        }
+        updatePlaybackPreferenceSnapshot(context) {
+            it.copy(playbackVolumeNormalizationEnabled = enabled)
+        }
+    }
+
+    suspend fun setPlaybackHighResolutionOutputEnabled(enabled: Boolean) {
+        context.dataStore.edit {
+            it[SettingsKeys.PLAYBACK_HIGH_RESOLUTION_OUTPUT_ENABLED] = enabled
+        }
+        updatePlaybackPreferenceSnapshot(context) {
+            it.copy(playbackHighResolutionOutputEnabled = enabled)
         }
     }
 

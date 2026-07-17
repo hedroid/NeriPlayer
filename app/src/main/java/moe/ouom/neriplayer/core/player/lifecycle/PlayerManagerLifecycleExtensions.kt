@@ -43,6 +43,7 @@ import moe.ouom.neriplayer.core.lyricon.LyriconManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.core.player.audio.focus.StartupAudioFocusController
 import moe.ouom.neriplayer.core.player.effects.AudioReactive
+import moe.ouom.neriplayer.core.player.engine.PlaybackVolumeNormalizationState
 import moe.ouom.neriplayer.core.player.engine.ReactiveRenderersFactory
 import moe.ouom.neriplayer.core.player.engine.datasource.ConditionalHttpDataSourceFactory
 import moe.ouom.neriplayer.core.player.service.AudioPlayerService
@@ -64,14 +65,17 @@ import moe.ouom.neriplayer.core.player.debug.playbackStateName
 import moe.ouom.neriplayer.core.player.model.AudioDevice
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
 import moe.ouom.neriplayer.core.player.model.PlayerEvent
+import moe.ouom.neriplayer.core.player.metadata.PlayerLyricsProvider
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommandSource
 import moe.ouom.neriplayer.core.player.policy.offload.requiresPcmAudioProcessing
 import moe.ouom.neriplayer.core.player.policy.usb.evaluateUsbExclusiveKeepAliveProgress
 import moe.ouom.neriplayer.core.player.policy.pending.shouldAcceptPlayerCallback
 import moe.ouom.neriplayer.core.player.policy.pending.shouldExposePlayerCallbackState
 import moe.ouom.neriplayer.core.player.policy.usb.shouldSkipUsbExclusiveRouteRebuildForManualPlayback
+import moe.ouom.neriplayer.core.player.policy.usb.shouldStopUsbExclusivePlaybackForNoisyRoute
 import moe.ouom.neriplayer.core.player.policy.usb.isTransientUsbExclusiveOpenGate
 import moe.ouom.neriplayer.core.player.policy.usb.shouldApplyActiveUsbBufferResize
+import moe.ouom.neriplayer.core.player.policy.usb.shouldSkipRedundantUsbExclusiveReconfiguration
 import moe.ouom.neriplayer.core.player.playlist.PlayerFavoritesController
 import moe.ouom.neriplayer.core.player.policy.command.shouldClearResumePlaybackRequestOnPlayWhenReadyPause
 import moe.ouom.neriplayer.core.player.playback.advanceAfterPlaybackFailure
@@ -96,6 +100,9 @@ import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathTracker
 import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathState
 import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveSessionController
 import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveWakeLock
+import moe.ouom.neriplayer.core.player.usb.transport.UsbExclusiveErrorCode
+import moe.ouom.neriplayer.core.player.usb.transport.isRecoverableTransportFailure
+import moe.ouom.neriplayer.core.player.usb.transport.usbExclusiveErrorCode
 import moe.ouom.neriplayer.core.player.watchdog.cancelPlaybackStartupWatchdog
 import moe.ouom.neriplayer.core.player.watchdog.clearActivePlaybackCandidates
 import moe.ouom.neriplayer.core.player.watchdog.schedulePlaybackStartupWatchdog
@@ -187,15 +194,18 @@ internal fun PlayerManager.initializeImpl(
         qqMusicLyricDefaultOffsetMs =
             initialPlaybackPreferences.qqMusicLyricDefaultOffsetMs
         externalBluetoothLyricsEnabled = false
+        amllLyricsEnabled = initialPlaybackPreferences.amllLyricsEnabled
         lyriconEnabled = initialPlaybackPreferences.lyriconEnabled
         LyriconManager.setEnabled(lyriconEnabled)
         if (lyriconEnabled && !LyriconManager.isInitialized()) {
             LyriconManager.initialize(app)
         }
         playbackSoundConfig = initialPlaybackPreferences.toPlaybackSoundConfig()
+        playbackHighResolutionOutputEnabled =
+            initialPlaybackPreferences.playbackHighResolutionOutputEnabled
         NPLogger.d(
             "NERI-PlayerManager",
-            "initialize(): prefs quality=$preferredQuality, youtubeQuality=$youtubePreferredQuality, biliQuality=$biliPreferredQuality, mobileDataFollowDefault=$mobileDataFollowDefaultAudioQuality, mobileDataQuality=$mobileDataNeteaseAudioQuality/$mobileDataYouTubeAudioQuality/$mobileDataBiliAudioQuality, keepProgress=$keepLastPlaybackProgressEnabled, keepMode=$keepPlaybackModeStateEnabled, neteaseAutoSourceSwitch=$neteaseAutoSourceSwitchEnabled, fadeIn=$playbackFadeInEnabled/${playbackFadeInDurationMs}ms, crossfade=$playbackCrossfadeNextEnabled/${playbackCrossfadeInDurationMs}ms, stopOnBluetoothDisconnect=$stopOnBluetoothDisconnectEnabled, usbExclusivePlayback=$usbExclusivePlaybackEnabled, allowMixedPlayback=$allowMixedPlaybackEnabled"
+            "initialize(): prefs quality=$preferredQuality, youtubeQuality=$youtubePreferredQuality, biliQuality=$biliPreferredQuality, mobileDataFollowDefault=$mobileDataFollowDefaultAudioQuality, mobileDataQuality=$mobileDataNeteaseAudioQuality/$mobileDataYouTubeAudioQuality/$mobileDataBiliAudioQuality, keepProgress=$keepLastPlaybackProgressEnabled, keepMode=$keepPlaybackModeStateEnabled, neteaseAutoSourceSwitch=$neteaseAutoSourceSwitchEnabled, fadeIn=$playbackFadeInEnabled/${playbackFadeInDurationMs}ms, crossfade=$playbackCrossfadeNextEnabled/${playbackCrossfadeInDurationMs}ms, highResolutionOutput=$playbackHighResolutionOutputEnabled, stopOnBluetoothDisconnect=$stopOnBluetoothDisconnectEnabled, usbExclusivePlayback=$usbExclusivePlaybackEnabled, allowMixedPlayback=$allowMixedPlaybackEnabled"
         )
         val okHttpClient = AppContainer.sharedOkHttpClient
         val upstreamFactory: HttpDataSource.Factory = OkHttpDataSource.Factory(okHttpClient)
@@ -242,7 +252,11 @@ internal fun PlayerManager.initializeImpl(
             extractorsFactory
         )
 
+        // USB 独占优先保留解码器的原生整数 PCM，别在进入 native USB 前强行改成 float
+        val enableFloatOutput =
+            playbackHighResolutionOutputEnabled && !usbExclusivePlaybackEnabled
         val renderersFactory = ReactiveRenderersFactory(app)
+            .setEnableAudioFloatOutput(enableFloatOutput)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         player = ExoPlayer.Builder(app, renderersFactory)
@@ -535,6 +549,7 @@ internal fun PlayerManager.initializeImpl(
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                PlaybackVolumeNormalizationState.resetForNewTrack()
                 _playbackPositionMs.value = player.currentPosition.coerceAtLeast(0L)
                 maybeBackfillCurrentSongDurationFromPlayer()
                 if (player.playWhenReady || player.isPlaying) {
@@ -671,6 +686,17 @@ internal fun PlayerManager.initializeImpl(
             }
         }
         ioScope.launch {
+            settingsRepo.amllLyricsEnabledFlow.collect { enabled ->
+                val changed = amllLyricsEnabled != enabled
+                amllLyricsEnabled = enabled
+                if (changed) {
+                    ytMusicLyricsCache.evictAll()
+                    PlayerLyricsProvider.clearAmllLyricsCache()
+                    syncExternalBluetoothLyrics(_currentSongFlow.value)
+                }
+            }
+        }
+        ioScope.launch {
             settingsRepo.statusBarLyricsEnabledFlow.collect { enabled ->
                 statusBarLyricsEnable = enabled
                 syncExternalBluetoothLyrics(_currentSongFlow.value)
@@ -766,6 +792,20 @@ internal fun PlayerManager.initializeImpl(
             settingsRepo.playbackLoudnessGainMbFlow.collect { levelMb ->
                 applyPlaybackSoundConfigIfChanged(
                     playbackSoundConfig.copy(loudnessGainMb = levelMb)
+                )
+            }
+        }
+        ioScope.launch {
+            settingsRepo.playbackVolumeBalanceFlow.collect { balance ->
+                applyPlaybackSoundConfigIfChanged(
+                    playbackSoundConfig.copy(volumeBalance = balance)
+                )
+            }
+        }
+        ioScope.launch {
+            settingsRepo.playbackVolumeNormalizationEnabledFlow.collect { enabled ->
+                applyPlaybackSoundConfigIfChanged(
+                    playbackSoundConfig.copy(volumeNormalizationEnabled = enabled)
                 )
             }
         }
@@ -1029,6 +1069,9 @@ internal fun PlayerManager.updateAudioOffloadPreferences(reason: String) {
         playbackPitch = playbackSoundConfig.pitch,
         equalizerEnabled = playbackSoundConfig.equalizerEnabled,
         loudnessGainMb = playbackSoundConfig.loudnessGainMb,
+        volumeBalance = playbackSoundConfig.volumeBalance,
+        volumeNormalizationEnabled = playbackSoundConfig.volumeNormalizationEnabled,
+        highResolutionOutputEnabled = playbackHighResolutionOutputEnabled,
         audioReactiveActive = AudioReactive.enabled,
         listenTogetherPlaybackRate = listenTogetherSyncPlaybackRate,
     )
@@ -1112,15 +1155,24 @@ internal fun PlayerManager.handleAudioBecomingNoisyImpl(): Boolean {
         NPLogger.d("NERI-PlayerManager", "handleAudioBecomingNoisy(): ignored because manager is not initialized")
         return false
     }
+    val currentDevice = _currentAudioDevice.value
+    val playbackActive = _isPlayingFlow.value || _playWhenReadyFlow.value || resumePlaybackRequested
     if (!_isPlayingFlow.value) {
+        if (shouldStopForUsbExclusiveNoisyRoute(currentDevice, playbackActive)) {
+            stopPlaybackAfterUsbExclusiveNoisyRoute(currentDevice)
+            return true
+        }
         NPLogger.d("NERI-PlayerManager", "handleAudioBecomingNoisy(): ignored because playback is already paused")
         return false
     }
-    val currentDevice = _currentAudioDevice.value
     NPLogger.d(
         "NERI-PlayerManager",
         "handleAudioBecomingNoisy(): currentDevice=${currentDevice?.type}:${currentDevice?.name}, isPlaying=${_isPlayingFlow.value}"
     )
+    if (shouldStopForUsbExclusiveNoisyRoute(currentDevice, playbackActive)) {
+        stopPlaybackAfterUsbExclusiveNoisyRoute(currentDevice)
+        return true
+    }
     if (usbExclusivePlaybackEnabled && currentDevice != null && isUsbOutputType(currentDevice.type)) {
         NPLogger.d("NERI-PlayerManager", "handleAudioBecomingNoisy(): ignored for USB exclusive route")
         return false
@@ -1144,6 +1196,28 @@ internal fun PlayerManager.handleAudioBecomingNoisyImpl(): Boolean {
     suppressPlaybackForAudioRouteLoss(reason = "becoming_noisy_immediate")
     pauseForAudioRouteLoss(reason = "becoming_noisy_immediate")
     return true
+}
+
+private fun PlayerManager.shouldStopForUsbExclusiveNoisyRoute(
+    currentDevice: AudioDevice?,
+    playbackActive: Boolean
+): Boolean {
+    return shouldStopUsbExclusivePlaybackForNoisyRoute(
+        usbExclusivePlaybackEnabled = usbExclusivePlaybackEnabled,
+        allowMixedPlaybackEnabled = allowMixedPlaybackEnabled,
+        routeIsUsbOutput = currentDevice?.type?.let(::isUsbOutputType) == true,
+        playbackActive = playbackActive
+    )
+}
+
+private fun PlayerManager.stopPlaybackAfterUsbExclusiveNoisyRoute(currentDevice: AudioDevice?) {
+    NPLogger.w(
+        "NERI-UsbExclusive",
+        "stop USB exclusive playback after noisy route event: " +
+            "device=${currentDevice?.type}:${currentDevice?.name} " +
+            "playWhenReady=${_playWhenReadyFlow.value} isPlaying=${_isPlayingFlow.value}"
+    )
+    stopPlaybackAfterUsbExclusiveNativeFailure("usb_audio_route_noisy")
 }
 
 private fun PlayerManager.handleDeviceChange(
@@ -2285,7 +2359,9 @@ private fun PlayerManager.applyActiveUsbExclusiveBuffer(reason: String) {
     ) {
         NPLogger.d(
             "NERI-UsbExclusive",
-            "defer active USB buffer shrink: reason=$reason current=${nativeState.bufferDurationMs} target=$targetBufferMs"
+            "defer active USB buffer update: reason=$reason " +
+                "foreground=$usbExclusiveAppInForeground " +
+                "current=${nativeState.bufferDurationMs} target=$targetBufferMs"
         )
         return
     }
@@ -2720,6 +2796,25 @@ internal fun PlayerManager.scheduleUsbAudioSinkReconfiguration(
                 return@reconfigure
             }
             if (
+                shouldSkipRedundantUsbExclusiveReconfiguration(
+                    reason = reason,
+                    usbExclusiveEnabled = usbExclusivePlaybackEnabled,
+                    hasHealthyPlayerPcmSession =
+                        UsbExclusiveSessionController.hasHealthyPlayerPcmSession()
+                )
+            ) {
+                pendingUsbExclusivePreferenceReconfigure = false
+                usbExclusiveToggleTransitionActive = false
+                usbExclusiveToggleTransitionReason = ""
+                markUsbExclusivePlaybackPreparing(false, "native_route_already_ready:$reason")
+                NPLogger.i(
+                    "NERI-UsbExclusive",
+                    "skip redundant USB reconfiguration because native player session is ready: " +
+                        "reason=$reason generation=$scheduledGeneration"
+                )
+                return@reconfigure
+            }
+            if (
                 usbExclusivePlaybackEnabled &&
                 !allowWhilePlaybackActive &&
                 isPlaybackActiveForUsbExclusiveSwitch()
@@ -2877,6 +2972,7 @@ private fun String?.isRecoverableUsbExclusiveFallback(): Boolean {
     if (reason.startsWith("channel_count_unsupported", ignoreCase = true)) return false
     if (reason.startsWith("sample_rate_unsupported")) return false
     if (reason.startsWith("bit_depth_unsupported")) return false
+    if (reason.contains("feedback_scheduler", ignoreCase = true)) return false
     if (reason.contains("requires_system", ignoreCase = true)) return false
     if (reason.contains("requires_system_audio", ignoreCase = true)) return false
     if (reason.contains("playback_parameters_require", ignoreCase = true)) return false
@@ -2894,6 +2990,7 @@ private fun String.isNativeTransitionInFlightGate(): Boolean {
 }
 
 private fun String.isRecoverableUsbExclusiveNativeTransferFailure(): Boolean {
+    if (usbExclusiveErrorCode().isRecoverableTransportFailure) return true
     if (contains("LIBUSB_ERROR_NO_DEVICE", ignoreCase = true)) return false
     if (contains("permission", ignoreCase = true)) return false
     return isUsbExclusiveFirstCompletionTimeout() ||
@@ -2906,7 +3003,8 @@ private fun String.isRecoverableUsbExclusiveNativeTransferFailure(): Boolean {
 }
 
 private fun String.isUsbExclusiveFirstCompletionTimeout(): Boolean {
-    return contains("event_loop_first_completion_timeout", ignoreCase = true)
+    return usbExclusiveErrorCode() == UsbExclusiveErrorCode.TransferFirstCompletionTimeout ||
+        contains("event_loop_first_completion_timeout", ignoreCase = true)
 }
 
 private fun String.isLifecycleForegroundRecoveryReason(): Boolean {

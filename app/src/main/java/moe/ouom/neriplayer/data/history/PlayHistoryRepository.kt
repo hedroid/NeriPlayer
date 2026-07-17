@@ -39,6 +39,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.model.SongIdentity
+import moe.ouom.neriplayer.data.sync.PlayHistoryUpdateMode
+import moe.ouom.neriplayer.data.sync.SyncPreferences
 import moe.ouom.neriplayer.data.sync.github.GitHubSyncWorker
 import moe.ouom.neriplayer.data.sync.github.SecureTokenStorage
 import moe.ouom.neriplayer.util.io.writeTextAtomically
@@ -154,6 +156,7 @@ class PlayHistoryRepository private constructor(private val app: Context) {
     private val _history = MutableStateFlow(loadFromDisk())
     val historyFlow: StateFlow<List<PlayedEntry>> = _history
     private val storage by lazy { SecureTokenStorage(app) }
+    private val syncPreferences by lazy { SyncPreferences(app) }
     private var lastBatchSyncTime = 0L
     private val historyMutex = Mutex()
     private var pendingSettledSyncJob: Job? = null
@@ -196,12 +199,12 @@ class PlayHistoryRepository private constructor(private val app: Context) {
             markSyncMutation()
         }
         try {
-            val mode = storage.getPlayHistoryUpdateMode()
+            val mode = syncPreferences.getUpdateMode(storage.getLegacyPlayHistoryUpdateModeName())
             val now = System.currentTimeMillis()
             when (mode) {
-                SecureTokenStorage.PlayHistoryUpdateMode.IMMEDIATE -> triggerAutoSync(urgency)
-                SecureTokenStorage.PlayHistoryUpdateMode.BATCHED -> {
-                    if (now - lastBatchSyncTime >= 10 * 60 * 1000) {
+                PlayHistoryUpdateMode.IMMEDIATE -> triggerAutoSync(urgency)
+                else -> {
+                    if (now - lastBatchSyncTime >= mode.intervalMillis) {
                         lastBatchSyncTime = now
                         triggerAutoSync(urgency)
                     }
@@ -284,7 +287,11 @@ class PlayHistoryRepository private constructor(private val app: Context) {
         }
     }
 
-    fun updateSongMetadata(originalSong: SongItem, updatedSong: SongItem) {
+    fun updateSongMetadata(
+        originalSong: SongItem,
+        updatedSong: SongItem,
+        triggerSync: Boolean = true
+    ) {
         scope.launch {
             historyMutex.withLock {
                 NPLogger.d(
@@ -298,6 +305,9 @@ class PlayHistoryRepository private constructor(private val app: Context) {
                 }
 
                 val updatedEntry = current[existingIndex].mergeSongMetadata(updatedSong)
+                if (updatedEntry == current[existingIndex]) {
+                    return@withLock
+                }
                 val updated = current.toMutableList().apply {
                     this[existingIndex] = updatedEntry
                 }
@@ -307,7 +317,9 @@ class PlayHistoryRepository private constructor(private val app: Context) {
 
                 _history.value = updated
                 persistToDisk(updated)
-                triggerSyncIfNeeded(PlayHistorySyncUrgency.SETTLED)
+                if (triggerSync) {
+                    triggerSyncIfNeeded(PlayHistorySyncUrgency.SETTLED)
+                }
             }
         }
     }

@@ -271,14 +271,14 @@ object SyncDataSerializer {
 
     @Serializable
     private data class LegacySyncSong(
-        @ProtoNumber(1) val id: Long,
+        @ProtoNumber(1) val id: Long = 0L,
         @ProtoNumber(2) val name: String = "",
         @ProtoNumber(3) val artist: String = "",
         @ProtoNumber(4) val album: String = "",
         @ProtoNumber(5) val albumId: Long = 0L,
         @ProtoNumber(6) val durationMs: Long = 0L,
         @ProtoNumber(7) val coverUrl: String? = null,
-        @ProtoNumber(8) val addedAt: Long = System.currentTimeMillis(),
+        @ProtoNumber(8) val addedAt: Long = 0L,
         @ProtoNumber(9) val matchedLyric: String? = null,
         @ProtoNumber(10) val matchedTranslatedLyric: String? = null,
         @ProtoNumber(11) val matchedLyricSource: String? = null,

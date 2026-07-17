@@ -190,6 +190,7 @@
     <string name="sleep_timer_finish_current">播放完当前歌曲后停止</string>
     <string name="sleep_timer_finish_playlist">播放完播放列表后停止</string>
     <string name="sleep_timer_start_countdown">开始倒计时</string>
+    <string name="sleep_timer_countdown_finish_current">倒计时结束后播放完当前歌曲</string>
     <string name="sleep_timer_other_modes">其他模式</string>
     <string name="sleep_timer_close">关闭</string>
     <string name="playback_invalid_url">播放地址无效，请重新登录或切换音质后重试</string>
@@ -201,8 +202,11 @@
     <string name="playback_url_error_detail">获取播放地址失败：%1$s</string>
     <string name="nowplaying_no_playback">暂无播放</string>
     <string name="notification_timer_remaining">⏱ %1$s 后停止</string>
+    <string name="notification_timer_finish_current_remaining">⏱ %1$s 后播完当前歌曲停止</string>
     <string name="notification_stop_after_current">⏱ 播完当前停止</string>
     <string name="notification_stop_after_playlist">⏱ 播完列表停止</string>
+    <string name="notification_hide_floating_lyrics">关闭悬浮歌词</string>
+    <string name="notification_show_floating_lyrics">开启悬浮歌词</string>
     <string name="nowplaying_favorited">已收藏</string>
     <string name="nowplaying_favorite">收藏</string>
     <string name="nowplaying_more_options">更多选项</string>
@@ -306,6 +310,13 @@
     <string name="cover_download_success">封面已保存：%s</string>
     <string name="cover_download_failed">封面保存失败：%s</string>
     <string name="cover_download_permission_required">保存封面前请先授予存储权限</string>
+    <string name="cover_preview_unavailable">当前没有可预览封面</string>
+    <string name="cover_preview_title">封面大图</string>
+    <string name="cover_preview_image_content_description">歌曲封面大图</string>
+    <string name="cover_preview_image_content_description_named">%s 的封面大图</string>
+    <string name="cover_preview_zoom_hint">双指缩放 · 拖动查看</string>
+    <string name="cover_preview_zoom_percent">%1$d%%</string>
+    <string name="cover_preview_reset_zoom">重置缩放</string>
     <string name="music_view_album">查看专辑 %s</string>
 
     <!-- Playlist -->
@@ -833,8 +844,19 @@
     <string name="settings_playback_fade_duration_value">当前：%.1f 秒</string>
     <string name="settings_playback_crossfade_next">下一首淡入淡出</string>
     <string name="settings_playback_crossfade_next_desc">切换到下一首时使用淡入淡出过渡</string>
+    <string name="settings_playback_sleep_timer_finish_current_on_expiry">定时器到点后播放完当前歌曲</string>
+    <string name="settings_playback_sleep_timer_finish_current_on_expiry_desc">开启后，倒计时结束时播放完当前歌曲再停止</string>
     <string name="settings_playback_crossfade_in_duration">下一首淡入时长</string>
     <string name="settings_playback_crossfade_out_duration">当前曲淡出时长</string>
+    <string name="settings_playback_volume_normalization">响度均衡</string>
+    <string name="settings_playback_volume_normalization_desc">实时分析歌曲响度并平滑补偿，让切歌时音量更一致；USB 独占播放时不生效</string>
+    <string name="settings_playback_high_resolution_output">32-bit 高解析输出</string>
+    <string name="settings_playback_high_resolution_output_desc">普通系统输出尽量使用 Media3 32-bit float 管线，仅高精度音源生效，USB 独占不受影响；会绕过响度均衡、声道平衡、音频可视化和应用内倍速，重启应用后生效</string>
+    <string name="settings_playback_volume_balance">声道平衡</string>
+    <string name="settings_playback_volume_balance_desc">调整左右声道音量比例</string>
+    <string name="settings_playback_volume_balance_center">当前：居中</string>
+    <string name="settings_playback_volume_balance_left">当前：偏左 %d%%</string>
+    <string name="settings_playback_volume_balance_right">当前：偏右 %d%%</string>
     <string name="settings_playback_source">播放源</string>
     <string name="settings_playback_source_desc">配置自动换源与音源兜底策略</string>
     <string name="settings_keep_last_playback_progress">保留上次播放进度</string>
@@ -900,11 +922,11 @@
     <string name="settings_usb_exclusive_unsupported_system_fallback">回退系统播放</string>
     <string name="settings_usb_exclusive_unsupported_system_fallback_desc">不转换，直接回到系统播放</string>
     <string name="settings_usb_exclusive_unsupported_closest">转换到最接近格式</string>
-    <string name="settings_usb_exclusive_unsupported_closest_desc">转换到设备支持的格式</string>
+    <string name="settings_usb_exclusive_unsupported_closest_desc">优先尝试设备支持的位深/容器，采样率不做隐式转换</string>
     <string name="settings_usb_exclusive_bit_depth_compatibility">位深兼容</string>
     <string name="settings_usb_exclusive_bit_depth_compatibility_desc">设备不支持源位深时自动回退</string>
     <string name="settings_usb_exclusive_sample_rate_compatibility">采样率兼容</string>
-    <string name="settings_usb_exclusive_sample_rate_compatibility_desc">设备不支持源采样率时自动回退</string>
+    <string name="settings_usb_exclusive_sample_rate_compatibility_desc">设备不支持源采样率时回到系统播放，避免低质量重采样</string>
     <string name="settings_usb_exclusive_channel_compatibility">声道兼容</string>
     <string name="settings_usb_exclusive_channel_compatibility_desc">设备不支持源声道时自动回退</string>
     <string name="settings_usb_exclusive_foreground_buffer">前台缓冲区</string>
@@ -1044,7 +1066,6 @@
     <string name="language_restart_message_bilingual">语言已更改，需要重启应用以完全生效。\nLanguage changed. Restart the app to apply it completely.</string>
     <string name="language_restart_now_bilingual">立即重启 / Restart now</string>
     <string name="language_restart_later_bilingual">稍后 / Later</string>
-    <string name="settings_sync_batch_update_time">每10分钟更新</string>
     <string name="settings_color_picker_hint">长按颜色或点击 × 可删除自定义颜色</string>
     <string name="settings_phone_number_hint">+86 手机号</string>
     <string name="settings_resend_code_countdown">重新获取(%ds)</string>
@@ -1164,6 +1185,8 @@
     <string name="settings_motion_expand">展开以调整动效表现</string>
     <string name="settings_lyric_api_enabled">第三方歌词API适配</string>
     <string name="settings_lyric_api_enabled_desc">向 Lyricon &amp; SuperLyric 提供当前歌曲、播放状态、进度、逐字歌词和翻译</string>
+    <string name="settings_amll_lyrics_enabled">使用 AMLL 数据库</string>
+    <string name="settings_amll_lyrics_enabled_desc">平台没有逐字歌词时，从 AMLL TTML 数据库尝试匹配逐字歌词</string>
     <string name="settings_external_bluetooth_lyrics_enabled">外接设备蓝牙歌词</string>
     <string name="settings_external_bluetooth_lyrics_enabled_desc">连接蓝牙设备时，将当前歌词行同步到外接设备的歌曲信息区域</string>
     <string name="settings_lyrics_offset">歌词设置</string>
@@ -1327,7 +1350,6 @@
     <string name="sync_initial_uploaded">初始数据已上传</string>
     <string name="sync_history_frequency">播放历史更新频率</string>
     <string name="sync_after_play">每次播放后立即同步</string>
-    <string name="sync_batch_update">批量更新</string>
     <string name="sync_configured">已配置</string>
     <string name="sync_not_configured">未配置</string>
     <string name="sync_config">配置</string>
@@ -1354,7 +1376,8 @@
     <string name="sync_last_time">上次同步: %s</string>
     <string name="sync_frequency_desc">选择播放历史同步到云端的频率：</string>
     <string name="sync_after_play_desc">每次播放后立即同步</string>
-    <string name="sync_batch_update_desc">每10分钟同步一次（节省流量）</string>
+    <string name="sync_every_minutes">每%1$d分钟同步</string>
+    <string name="sync_every_minutes_desc">播放历史变更后，至少间隔%1$d分钟再同步到云端</string>
     <string name="sync_step1_token">步骤1: 输入 GitHub Token</string>
     <string name="sync_create_token">在 GitHub 创建 Token</string>
     <string name="sync_step2_repo">步骤2: 选择仓库</string>
@@ -1411,6 +1434,7 @@
     <string name="settings_sync_now">立即同步</string>
     <string name="settings_play_history_update_freq">播放历史更新频率</string>
     <string name="settings_update_immediate">立即更新</string>
+    <string name="settings_update_every_minutes">每%1$d分钟更新</string>
     <string name="settings_data_saver">省流通道</string>
     <string name="github_auto_sync">GitHub 自动同步</string>
     <string name="github_sync_warning_title">GitHub 同步配置警告</string>

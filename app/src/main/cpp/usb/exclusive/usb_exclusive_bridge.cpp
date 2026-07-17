@@ -27,6 +27,7 @@
 #include "usb/iso/usb_iso_transfer_health.h"
 #include "usb/pcm/usb_pcm_pipeline.h"
 #include "usb/uac1/usb_uac1_format.h"
+#include "usb/uac2/usb_uac2_format.h"
 
 #define LOG_TAG "NeriUsbExclusive"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -37,6 +38,8 @@ namespace {
 
 constexpr int kUsbSubclassAudioStreaming = 0x02;
 constexpr int kUsbSubclassAudioControl = 0x01;
+constexpr int kUsbAudioProtocolUac1 = 0x00;
+constexpr int kUsbAudioProtocolUac2 = 0x20;
 constexpr int kUsbDescriptorTypeClassSpecificInterface = 0x24;
 constexpr int kUsbAudioControlHeaderSubtype = 0x01;
 constexpr int kUsbTransferTypeIsochronous = 0x01;
@@ -49,10 +52,15 @@ constexpr int kEventLoopConsecutiveErrorLimit = 64;
 constexpr int kParkedErrorBackoffBaseMs = 100;
 constexpr int kParkedErrorBackoffMaxMs = 5000;
 constexpr int kGeneratedToneFrequencyHz = 440;
-constexpr int kDefaultPacketsPerTransfer = 16;
-constexpr int kDefaultTransferCount = 12;
+constexpr int kDefaultPacketsPerTransfer = 32;
+constexpr int kDefaultTransferCount = 16;
+constexpr int kMinimumTransferCount = 8;
+constexpr int kMaximumPacketsPerTransfer = 64;
+constexpr int kMaximumTransferCount = 32;
+constexpr int kHighSpeedTargetInFlightMs = 160;
+constexpr int kFullSpeedTargetInFlightMs = 320;
 constexpr int kDefaultPcmRingDurationMs = 250;
-constexpr int kPlayerStartupPrerollMs = 150;
+constexpr int kPlayerStartupPrerollMs = 0;
 constexpr int kMinimumPcmRingDurationMs = 100;
 constexpr int kMaximumPcmRingDurationMs = 3000;
 constexpr int kCancelDrainWarningMs = 1200;
@@ -61,9 +69,30 @@ constexpr int kQuarantineDrainLogIntervalMs = 10000;
 constexpr int kQuarantineTotalTimeoutMs = 30000;
 constexpr size_t kMaximumParkedHandles = 8;
 constexpr size_t kMaximumHardRetainedHandles = 4;
-constexpr int kFirstTransferCompletionTimeoutMs = 1500;
+constexpr int kFirstTransferCompletionTimeoutMs = 3000;
+constexpr int kTransferCompletionStallTimeoutMs = 1500;
 constexpr int kInterfaceTransitionCooldownMs = 1500;
 constexpr int kUrgentAudioThreadPriority = -19;
+constexpr auto kLibusbEndpointOut =
+    static_cast<uint8_t>(LIBUSB_ENDPOINT_OUT);
+constexpr auto kLibusbEndpointIn =
+    static_cast<uint8_t>(LIBUSB_ENDPOINT_IN);
+constexpr auto kLibusbRequestTypeClass =
+    static_cast<unsigned int>(LIBUSB_REQUEST_TYPE_CLASS);
+constexpr auto kLibusbRecipientEndpoint =
+    static_cast<unsigned int>(LIBUSB_RECIPIENT_ENDPOINT);
+constexpr auto kLibusbRecipientInterface =
+    static_cast<unsigned int>(LIBUSB_RECIPIENT_INTERFACE);
+constexpr auto kLibusbIsoUsageFeedback =
+    static_cast<int>(LIBUSB_ISO_USAGE_TYPE_FEEDBACK);
+constexpr auto kLibusbIsoUsageImplicit =
+    static_cast<int>(LIBUSB_ISO_USAGE_TYPE_IMPLICIT);
+constexpr auto kLibusbIsoSyncTypeAdaptive =
+    static_cast<int>(LIBUSB_ISO_SYNC_TYPE_ADAPTIVE);
+constexpr auto kLibusbIsoSyncTypeSynchronous =
+    static_cast<int>(LIBUSB_ISO_SYNC_TYPE_SYNC);
+constexpr auto kLibusbIsoSyncTypeAsynchronous =
+    static_cast<int>(LIBUSB_ISO_SYNC_TYPE_ASYNC);
 
 enum class StreamSource {
     Tone,
@@ -92,9 +121,9 @@ struct ClaimedUsbInterface {
 struct UsbExclusiveHandle {
     libusb_context* ctx = nullptr;
     libusb_device_handle* devh = nullptr;
-    int originalFd = -1;
     int dupFd = -1;
     int audioStreamingInterface = -1;
+    int audioControlInterface = -1;
     int alternateSetting = -1;
     uint8_t outEndpoint = 0;
     int sampleRate = 0;
@@ -108,8 +137,8 @@ struct UsbExclusiveHandle {
     std::vector<ClaimedUsbInterface> claimedAudioInterfaces;
     bool completeAudioFunctionClaim = false;
     int uacVersion = 0;
+    int uacClockSourceId = 0;
     int negotiatedSampleRate = 0;
-    bool samplingFrequencyControl = false;
     std::string descriptorSampleRates = "none";
     std::string formatSelectionReason = "none";
     std::string sampleRateControlStatus = "not_attempted";
@@ -152,6 +181,8 @@ struct UsbExclusiveHandle {
     std::atomic<bool> playerReplayFailed { false };
     double tonePhase = 0.0;
     std::atomic<int> completedTransfers { 0 };
+    std::atomic<int64_t> firstTransferSubmittedAtMs { 0 };
+    std::atomic<int64_t> lastTransferCompletionAtMs { 0 };
     std::atomic<int> submitErrors { 0 };
     std::atomic<int> isoPacketErrors { 0 };
     std::atomic<int> isoPacketErrorTransfers { 0 };
@@ -188,6 +219,21 @@ void freeTransfers(UsbExclusiveHandle* handle);
 void eventLoopThread(UsbExclusiveHandle* handle) noexcept;
 bool stopStreamingInternal(UsbExclusiveHandle* handle);
 bool closeHandleInternal(const std::shared_ptr<UsbExclusiveHandle>& handle);
+bool reconfigureOpenedPlayerPcmOutput(
+    UsbExclusiveHandle* handle,
+    int sampleRate,
+    int channelCount,
+    int bitsPerSample,
+    int subslotBytes,
+    std::string* error
+);
+bool readUac2CurrentSampleRate(
+    libusb_device_handle* deviceHandle,
+    int audioControlInterface,
+    int clockSourceId,
+    int* currentSampleRate,
+    std::string* status
+);
 
 int exponentialBackoffMs(int consecutiveErrors) {
     const int shift = std::min(std::max(0, consecutiveErrors - 1), 6);
@@ -350,15 +396,72 @@ std::string getErrorCopy(UsbExclusiveHandle* handle) {
 }
 
 bool isIsoOutEndpoint(const libusb_endpoint_descriptor& endpoint) {
-    const auto direction = endpoint.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK;
-    const auto transferType = endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
-    return direction == LIBUSB_ENDPOINT_OUT && transferType == kUsbTransferTypeIsochronous;
+    const auto direction = static_cast<uint8_t>(
+        endpoint.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK
+    );
+    const auto transferType = static_cast<uint8_t>(
+        endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK
+    );
+    return direction == kLibusbEndpointOut &&
+        transferType == static_cast<uint8_t>(kUsbTransferTypeIsochronous);
 }
 
 bool isIsoInEndpoint(const libusb_endpoint_descriptor& endpoint) {
-    const auto direction = endpoint.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK;
-    const auto transferType = endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
-    return direction == LIBUSB_ENDPOINT_IN && transferType == kUsbTransferTypeIsochronous;
+    const auto direction = static_cast<uint8_t>(
+        endpoint.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK
+    );
+    const auto transferType = static_cast<uint8_t>(
+        endpoint.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK
+    );
+    return direction == kLibusbEndpointIn &&
+        transferType == static_cast<uint8_t>(kUsbTransferTypeIsochronous);
+}
+
+int usbIsoUsageType(uint8_t endpointAttributes) {
+    return static_cast<int>((endpointAttributes & LIBUSB_ISO_USAGE_TYPE_MASK) >> 4);
+}
+
+int usbIsoSyncType(uint8_t endpointAttributes) {
+    return static_cast<int>((endpointAttributes & LIBUSB_ISO_SYNC_TYPE_MASK) >> 2);
+}
+
+uint8_t makeClassEndpointRequestType(uint8_t direction) {
+    return static_cast<uint8_t>(
+        static_cast<unsigned int>(direction) |
+        kLibusbRequestTypeClass |
+        kLibusbRecipientEndpoint
+    );
+}
+
+uint8_t makeClassInterfaceRequestType(uint8_t direction) {
+    return static_cast<uint8_t>(
+        static_cast<unsigned int>(direction) |
+        kLibusbRequestTypeClass |
+        kLibusbRecipientInterface
+    );
+}
+
+uint16_t makeClockEntityIndex(int clockSourceId, int interfaceNumber) {
+    return static_cast<uint16_t>(
+        ((clockSourceId & 0xFF) << 8) |
+        (interfaceNumber & 0xFF)
+    );
+}
+
+bool sameClaimPlan(
+    const std::vector<ClaimedUsbInterface>& current,
+    const std::vector<ClaimedUsbInterface>& requested
+) {
+    if (current.size() != requested.size()) {
+        return false;
+    }
+    for (size_t index = 0; index < current.size(); ++index) {
+        if (current[index].interfaceNumber != requested[index].interfaceNumber ||
+            current[index].subclass != requested[index].subclass) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int computeIntervalsPerSecond(int usbSpeed, int interval);
@@ -373,12 +476,22 @@ int computeMaxPacketBytes(
 struct StreamingAltSelection {
     int interfaceNumber = -1;
     int alternateSetting = -1;
+    int audioControlInterface = -1;
     uint8_t outEndpoint = 0;
     int endpointMaxPacketBytes = 0;
     int endpointInterval = 0;
     int score = std::numeric_limits<int>::min();
-    neri::usb::uac1::TypeIFormat format;
-    neri::usb::uac1::EndpointControls endpointControls;
+    int uacVersion = 0;
+    struct Uac1Details {
+        neri::usb::uac1::TypeIFormat format;
+        neri::usb::uac1::EndpointControls endpointControls;
+    } uac1;
+    struct Uac2Details {
+        neri::usb::uac2::TypeIFormat format;
+        int clockSourceId = 0;
+        neri::usb::uac2::ControlCapability sampleRateControl =
+            neri::usb::uac2::ControlCapability::None;
+    } uac2;
     std::string syncType = "none";
     std::string feedback = "none";
     std::string reason = "none";
@@ -572,6 +685,32 @@ bool buildAudioFunctionClaimPlan(
     return false;
 }
 
+bool buildMinimalAudioFunctionClaimPlan(
+    const libusb_config_descriptor* config,
+    int audioControlInterface,
+    int selectedStreamingInterface,
+    std::vector<ClaimedUsbInterface>* plan
+) {
+    if (config == nullptr || plan == nullptr || selectedStreamingInterface < 0) {
+        return false;
+    }
+    plan->clear();
+    if (audioControlInterface >= 0) {
+        appendClaimPlanInterface(
+            plan,
+            audioControlInterface,
+            kUsbSubclassAudioControl
+        );
+    }
+    appendClaimPlanInterface(
+        plan,
+        selectedStreamingInterface,
+        kUsbSubclassAudioStreaming
+    );
+    sortAudioClaimPlan(plan, selectedStreamingInterface);
+    return audioControlInterface >= 0;
+}
+
 void appendCandidateRejection(
     std::string* summary,
     int interfaceNumber,
@@ -612,21 +751,139 @@ std::string describeFeedback(
         );
         return buffer;
     }
-    const int outputUsage =
-        (outputEndpoint.bmAttributes & LIBUSB_ISO_USAGE_TYPE_MASK) >> 4;
-    if (outputUsage == LIBUSB_ISO_USAGE_TYPE_IMPLICIT) {
+    const int outputUsage = usbIsoUsageType(outputEndpoint.bmAttributes);
+    if (outputUsage == kLibusbIsoUsageImplicit) {
         return "implicit";
     }
     for (int index = 0; index < alt.bNumEndpoints; ++index) {
         const libusb_endpoint_descriptor& endpoint = alt.endpoint[index];
-        const int usage = (endpoint.bmAttributes & LIBUSB_ISO_USAGE_TYPE_MASK) >> 4;
-        if (isIsoInEndpoint(endpoint) && usage == LIBUSB_ISO_USAGE_TYPE_FEEDBACK) {
+        const int usage = usbIsoUsageType(endpoint.bmAttributes);
+        if (isIsoInEndpoint(endpoint) && usage == kLibusbIsoUsageFeedback) {
             char buffer[24];
             snprintf(buffer, sizeof(buffer), "explicit:0x%02X", endpoint.bEndpointAddress);
             return buffer;
         }
     }
     return "none";
+}
+
+struct Uac2ClockPath {
+    int audioControlInterface = -1;
+    int clockSourceId = 0;
+    neri::usb::uac2::ControlCapability sampleRateControl =
+        neri::usb::uac2::ControlCapability::None;
+};
+
+bool findUac2ClockPath(
+    const libusb_config_descriptor* config,
+    int terminalLink,
+    Uac2ClockPath* output,
+    std::string* failureReason
+) {
+    if (config == nullptr || output == nullptr || terminalLink <= 0) {
+        if (failureReason != nullptr) {
+            *failureReason = "uac2_invalid_clock_path_input";
+        }
+        return false;
+    }
+
+    bool ambiguousAudioControl = false;
+    Uac2ClockPath result;
+
+    for (int ifaceIndex = 0; ifaceIndex < config->bNumInterfaces; ++ifaceIndex) {
+        const libusb_interface& iface = config->interface[ifaceIndex];
+        for (int altIndex = 0; altIndex < iface.num_altsetting; ++altIndex) {
+            const libusb_interface_descriptor& alt = iface.altsetting[altIndex];
+            if (alt.bInterfaceClass != LIBUSB_CLASS_AUDIO ||
+                alt.bInterfaceSubClass != kUsbSubclassAudioControl ||
+                alt.bInterfaceProtocol != kUsbAudioProtocolUac2 ||
+                alt.extra == nullptr ||
+                alt.extra_length <= 0) {
+                continue;
+            }
+
+            int terminalClockSourceId = 0;
+            std::vector<neri::usb::uac2::ClockSource> clockSources;
+            int offset = 0;
+            while (offset + 2 <= alt.extra_length) {
+                const int descriptorLength = alt.extra[offset];
+                if (descriptorLength < 2 || offset + descriptorLength > alt.extra_length) {
+                    break;
+                }
+                const uint8_t* descriptor = alt.extra + offset;
+                if (descriptorLength >= 3 &&
+                    descriptor[1] == kUsbDescriptorTypeClassSpecificInterface) {
+                    neri::usb::uac2::TerminalClockSource terminal;
+                    std::string parseError;
+                    if (neri::usb::uac2::parseTerminalClockSourceDescriptor(
+                            descriptor,
+                            descriptorLength,
+                            &terminal,
+                            &parseError
+                        ) && terminal.terminalId == terminalLink) {
+                        terminalClockSourceId = terminal.clockSourceId;
+                    }
+
+                    neri::usb::uac2::ClockSource clock;
+                    if (neri::usb::uac2::parseClockSourceDescriptor(
+                            descriptor,
+                            descriptorLength,
+                            &clock,
+                            &parseError
+                        )) {
+                        clockSources.push_back(clock);
+                    }
+                }
+                offset += descriptorLength;
+            }
+
+            if (terminalClockSourceId <= 0) {
+                continue;
+            }
+            const auto clock = std::find_if(
+                clockSources.begin(),
+                clockSources.end(),
+                [terminalClockSourceId](const neri::usb::uac2::ClockSource& candidate) {
+                    return candidate.id == terminalClockSourceId;
+                }
+            );
+            if (clock == clockSources.end()) {
+                continue;
+            }
+            if (result.audioControlInterface >= 0 &&
+                result.audioControlInterface != alt.bInterfaceNumber) {
+                ambiguousAudioControl = true;
+                continue;
+            }
+            result.audioControlInterface = alt.bInterfaceNumber;
+            result.clockSourceId = clock->id;
+            result.sampleRateControl = clock->samplingFrequencyControl();
+        }
+    }
+
+    if (ambiguousAudioControl) {
+        if (failureReason != nullptr) {
+            *failureReason = "uac2_audio_control_interface_ambiguous";
+        }
+        return false;
+    }
+    if (result.audioControlInterface < 0) {
+        if (failureReason != nullptr) {
+            *failureReason = "uac2_terminal_link_not_found";
+        }
+        return false;
+    }
+    if (result.clockSourceId <= 0) {
+        if (failureReason != nullptr) {
+            *failureReason = "uac2_clock_topology_unsupported";
+        }
+        return false;
+    }
+    *output = result;
+    if (failureReason != nullptr) {
+        failureReason->clear();
+    }
+    return true;
 }
 
 int scoreStreamingCandidate(
@@ -647,18 +904,40 @@ int scoreStreamingCandidate(
     if (controls.samplingFrequencyControl) {
         score += 100;
     }
-    const int syncType = (endpointAttributes & LIBUSB_ISO_SYNC_TYPE_MASK) >> 2;
-    if (syncType == LIBUSB_ISO_SYNC_TYPE_ADAPTIVE) {
+    const int syncType = usbIsoSyncType(endpointAttributes);
+    if (syncType == kLibusbIsoSyncTypeAdaptive) {
         score += 40;
-    } else if (syncType == LIBUSB_ISO_SYNC_TYPE_SYNC) {
+    } else if (syncType == kLibusbIsoSyncTypeSynchronous) {
         score += 30;
-    } else if (syncType == LIBUSB_ISO_SYNC_TYPE_ASYNC && feedback != "none") {
+    } else if (syncType == kLibusbIsoSyncTypeAsynchronous && feedback != "none") {
         score += 20;
     }
     return score;
 }
 
-bool findStreamingAlt(
+int scoreUac2StreamingCandidate(
+    neri::usb::uac2::ControlCapability sampleRateControl,
+    uint8_t endpointAttributes,
+    const std::string& feedback
+) {
+    int score = 11000;
+    if (sampleRateControl == neri::usb::uac2::ControlCapability::ReadWrite) {
+        score += 300;
+    } else if (sampleRateControl == neri::usb::uac2::ControlCapability::ReadOnly) {
+        score += 100;
+    }
+    const int syncType = usbIsoSyncType(endpointAttributes);
+    if (syncType == kLibusbIsoSyncTypeAdaptive) {
+        score += 40;
+    } else if (syncType == kLibusbIsoSyncTypeSynchronous) {
+        score += 30;
+    } else if (syncType == kLibusbIsoSyncTypeAsynchronous && feedback != "none") {
+        score += 20;
+    }
+    return score;
+}
+
+bool findStreamingAltUac1(
     libusb_device_handle* devh,
     int sampleRate,
     int channelCount,
@@ -688,8 +967,6 @@ bool findStreamingAlt(
 
     StreamingAltSelection best;
     std::string rejectionSummary;
-    const int frameBytes = channelCount * subslotBytes;
-
     for (int ifaceIndex = 0; ifaceIndex < config->bNumInterfaces; ++ifaceIndex) {
         const libusb_interface& iface = config->interface[ifaceIndex];
         for (int altIndex = 0; altIndex < iface.num_altsetting; ++altIndex) {
@@ -698,7 +975,7 @@ bool findStreamingAlt(
                 alt.bInterfaceSubClass != kUsbSubclassAudioStreaming) {
                 continue;
             }
-            if (alt.bInterfaceProtocol != 0) {
+            if (alt.bInterfaceProtocol != kUsbAudioProtocolUac1) {
                 appendCandidateRejection(
                     &rejectionSummary,
                     alt.bInterfaceNumber,
@@ -740,6 +1017,7 @@ bool findStreamingAlt(
                 );
                 continue;
             }
+            const int actualFrameBytes = format.channels * format.subslotBytes;
 
             bool hasIsoOutputEndpoint = false;
             for (int epIndex = 0; epIndex < alt.bNumEndpoints; ++epIndex) {
@@ -747,8 +1025,8 @@ bool findStreamingAlt(
                 if (!isIsoOutEndpoint(endpoint)) {
                     continue;
                 }
-                const int usage = (endpoint.bmAttributes & LIBUSB_ISO_USAGE_TYPE_MASK) >> 4;
-                if (usage == LIBUSB_ISO_USAGE_TYPE_FEEDBACK) {
+                const int usage = usbIsoUsageType(endpoint.bmAttributes);
+                if (usage == kLibusbIsoUsageFeedback) {
                     continue;
                 }
                 hasIsoOutputEndpoint = true;
@@ -783,7 +1061,7 @@ bool findStreamingAlt(
                 if (packetBytes <= 0 || computeMaxPacketBytes(
                         sampleRate,
                         intervalsPerSecond,
-                        frameBytes,
+                        actualFrameBytes,
                         packetBytes
                     ) <= 0) {
                     appendCandidateRejection(
@@ -796,11 +1074,14 @@ bool findStreamingAlt(
                 }
                 const std::string feedback = describeFeedback(alt, endpoint);
                 if (neri::usb::uac1::requiresFeedbackScheduler(endpoint.bmAttributes)) {
+                    const std::string feedbackBlockReason = feedback == "implicit"
+                        ? "implicit_feedback_scheduler_unavailable"
+                        : "async_feedback_scheduler_unavailable";
                     appendCandidateRejection(
                         &rejectionSummary,
                         alt.bInterfaceNumber,
                         alt.bAlternateSetting,
-                        "async_feedback_scheduler_unavailable"
+                        feedbackBlockReason + ":feedback=" + feedback
                     );
                     continue;
                 }
@@ -825,12 +1106,14 @@ bool findStreamingAlt(
                 }
                 best.interfaceNumber = alt.bInterfaceNumber;
                 best.alternateSetting = alt.bAlternateSetting;
+                best.audioControlInterface = -1;
                 best.outEndpoint = endpoint.bEndpointAddress;
                 best.endpointMaxPacketBytes = packetBytes;
                 best.endpointInterval = endpoint.bInterval;
                 best.score = score;
-                best.format = format;
-                best.endpointControls = controls;
+                best.uacVersion = 1;
+                best.uac1.format = format;
+                best.uac1.endpointControls = controls;
                 best.syncType = neri::usb::uac1::syncTypeName(endpoint.bmAttributes);
                 best.feedback = feedback;
                 const char* rateKind = format.isFixedAt(sampleRate)
@@ -883,6 +1166,343 @@ bool findStreamingAlt(
     return true;
 }
 
+bool findStreamingAltUac2(
+    libusb_device_handle* devh,
+    int sampleRate,
+    int channelCount,
+    int bitsPerSample,
+    int subslotBytes,
+    int usbSpeed,
+    StreamingAltSelection* output,
+    std::string* failureReason
+) {
+    libusb_device* device = libusb_get_device(devh);
+    if (device == nullptr || output == nullptr) {
+        if (failureReason != nullptr) {
+            *failureReason = "invalid_libusb_device";
+        }
+        return false;
+    }
+
+    libusb_config_descriptor* config = nullptr;
+    int rc = libusb_get_active_config_descriptor(device, &config);
+    if (rc != LIBUSB_SUCCESS || config == nullptr) {
+        LOGE("libusb_get_active_config_descriptor failed for UAC2: %s", libusbErrName(rc));
+        if (failureReason != nullptr) {
+            *failureReason = std::string("active_config_failed:") + libusbErrName(rc);
+        }
+        return false;
+    }
+
+    StreamingAltSelection best;
+    std::string rejectionSummary;
+    for (int ifaceIndex = 0; ifaceIndex < config->bNumInterfaces; ++ifaceIndex) {
+        const libusb_interface& iface = config->interface[ifaceIndex];
+        for (int altIndex = 0; altIndex < iface.num_altsetting; ++altIndex) {
+            const libusb_interface_descriptor& alt = iface.altsetting[altIndex];
+            if (alt.bInterfaceClass != LIBUSB_CLASS_AUDIO ||
+                alt.bInterfaceSubClass != kUsbSubclassAudioStreaming) {
+                continue;
+            }
+            if (alt.bInterfaceProtocol != kUsbAudioProtocolUac2) {
+                appendCandidateRejection(
+                    &rejectionSummary,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    "non_uac2_protocol_" + std::to_string(alt.bInterfaceProtocol)
+                );
+                continue;
+            }
+
+            neri::usb::uac2::TypeIFormat format;
+            std::string parseError;
+            if (!neri::usb::uac2::parseTypeIFormat(
+                    alt.extra,
+                    alt.extra_length,
+                    &format,
+                    &parseError
+                )) {
+                appendCandidateRejection(
+                    &rejectionSummary,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    parseError
+                );
+                continue;
+            }
+            const neri::usb::uac2::FormatTarget formatTarget {
+                channelCount,
+                subslotBytes,
+                bitsPerSample
+            };
+            std::string matchError;
+            if (!neri::usb::uac2::matchesTarget(format, formatTarget, &matchError)) {
+                appendCandidateRejection(
+                    &rejectionSummary,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    matchError
+                );
+                continue;
+            }
+            const int actualFrameBytes = format.channels * format.subslotBytes;
+
+            Uac2ClockPath clockPath;
+            std::string clockFailure;
+            if (!findUac2ClockPath(
+                    config,
+                    format.terminalLink,
+                    &clockPath,
+                    &clockFailure
+                )) {
+                appendCandidateRejection(
+                    &rejectionSummary,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    clockFailure
+                );
+                continue;
+            }
+            if (clockPath.sampleRateControl == neri::usb::uac2::ControlCapability::None) {
+                int fixedSampleRate = 0;
+                std::string fixedRateStatus;
+                if (!readUac2CurrentSampleRate(
+                        devh,
+                        clockPath.audioControlInterface,
+                        clockPath.clockSourceId,
+                        &fixedSampleRate,
+                        &fixedRateStatus
+                    )) {
+                    appendCandidateRejection(
+                        &rejectionSummary,
+                        alt.bInterfaceNumber,
+                        alt.bAlternateSetting,
+                        fixedRateStatus
+                    );
+                    continue;
+                }
+                if (fixedSampleRate != sampleRate) {
+                    appendCandidateRejection(
+                        &rejectionSummary,
+                        alt.bInterfaceNumber,
+                        alt.bAlternateSetting,
+                        "uac2_fixed_sample_rate_mismatch_requested=" +
+                            std::to_string(sampleRate) + "/actual=" +
+                            std::to_string(fixedSampleRate)
+                    );
+                    continue;
+                }
+            }
+
+            bool hasIsoOutputEndpoint = false;
+            for (int epIndex = 0; epIndex < alt.bNumEndpoints; ++epIndex) {
+                const libusb_endpoint_descriptor& endpoint = alt.endpoint[epIndex];
+                if (!isIsoOutEndpoint(endpoint)) {
+                    continue;
+                }
+                const int usage = usbIsoUsageType(endpoint.bmAttributes);
+                if (usage == kLibusbIsoUsageFeedback) {
+                    continue;
+                }
+                hasIsoOutputEndpoint = true;
+                neri::usb::uac2::EndpointControls controls;
+                if (!neri::usb::uac2::parseEndpointControls(
+                        endpoint.extra,
+                        endpoint.extra_length,
+                        &controls,
+                        &parseError
+                    )) {
+                    appendCandidateRejection(
+                        &rejectionSummary,
+                        alt.bInterfaceNumber,
+                        alt.bAlternateSetting,
+                        parseError
+                    );
+                    continue;
+                }
+                int packetBytes = libusb_get_max_alt_packet_size(
+                    device,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    endpoint.bEndpointAddress
+                );
+                if (packetBytes <= 0) {
+                    packetBytes = endpointPacketCapacity(endpoint);
+                }
+                const int intervalsPerSecond = computeIntervalsPerSecond(
+                    usbSpeed,
+                    endpoint.bInterval
+                );
+                if (packetBytes <= 0 || computeMaxPacketBytes(
+                        sampleRate,
+                        intervalsPerSecond,
+                        actualFrameBytes,
+                        packetBytes
+                    ) <= 0) {
+                    appendCandidateRejection(
+                        &rejectionSummary,
+                        alt.bInterfaceNumber,
+                        alt.bAlternateSetting,
+                        "endpoint_capacity_insufficient_" + std::to_string(packetBytes)
+                    );
+                    continue;
+                }
+                const std::string feedback = describeFeedback(alt, endpoint);
+                if (neri::usb::uac2::requiresFeedbackScheduler(endpoint.bmAttributes)) {
+                    const std::string feedbackBlockReason = feedback == "implicit"
+                        ? "implicit_feedback_scheduler_unavailable"
+                        : "async_feedback_scheduler_unavailable";
+                    appendCandidateRejection(
+                        &rejectionSummary,
+                        alt.bInterfaceNumber,
+                        alt.bAlternateSetting,
+                        feedbackBlockReason + ":feedback=" + feedback
+                    );
+                    continue;
+                }
+                const int score = scoreUac2StreamingCandidate(
+                    clockPath.sampleRateControl,
+                    endpoint.bmAttributes,
+                    feedback
+                );
+                LOGI(
+                    "UAC2 candidate iface=%d alt=%d ep=0x%02X packetBytes=%d "
+                    "clock=%d control=%s endpointDescriptor=%s score=%d",
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    endpoint.bEndpointAddress,
+                    packetBytes,
+                    clockPath.clockSourceId,
+                    neri::usb::uac2::controlCapabilityName(clockPath.sampleRateControl),
+                    controls.hasGeneralDescriptor ? "general" : "missing",
+                    score
+                );
+                if (score <= best.score) {
+                    continue;
+                }
+                best.interfaceNumber = alt.bInterfaceNumber;
+                best.alternateSetting = alt.bAlternateSetting;
+                best.audioControlInterface = clockPath.audioControlInterface;
+                best.outEndpoint = endpoint.bEndpointAddress;
+                best.endpointMaxPacketBytes = packetBytes;
+                best.endpointInterval = endpoint.bInterval;
+                best.score = score;
+                best.uacVersion = 2;
+                best.uac2.format = format;
+                best.uac2.clockSourceId = clockPath.clockSourceId;
+                best.uac2.sampleRateControl = clockPath.sampleRateControl;
+                best.syncType = neri::usb::uac2::syncTypeName(endpoint.bmAttributes);
+                best.feedback = feedback;
+                best.reason = "exact_uac2_type_i_pcm;clock=" +
+                    std::to_string(clockPath.clockSourceId) + ";rateControl=" +
+                    neri::usb::uac2::controlCapabilityName(clockPath.sampleRateControl) +
+                    ";score=" + std::to_string(score);
+            }
+            if (!hasIsoOutputEndpoint) {
+                appendCandidateRejection(
+                    &rejectionSummary,
+                    alt.bInterfaceNumber,
+                    alt.bAlternateSetting,
+                    "iso_output_endpoint_missing"
+                );
+            }
+        }
+    }
+
+    if (best.interfaceNumber < 0) {
+        libusb_free_config_descriptor(config);
+        if (failureReason != nullptr) {
+            *failureReason = rejectionSummary.empty()
+                ? "no_uac2_type_i_output_candidate"
+                : rejectionSummary;
+        }
+        return false;
+    }
+    best.completeClaimPlan = buildMinimalAudioFunctionClaimPlan(
+        config,
+        best.audioControlInterface,
+        best.interfaceNumber,
+        &best.claimPlan
+    );
+    libusb_free_config_descriptor(config);
+    *output = std::move(best);
+    if (failureReason != nullptr) {
+        failureReason->clear();
+    }
+    return true;
+}
+
+bool findStreamingAlt(
+    libusb_device_handle* devh,
+    int sampleRate,
+    int channelCount,
+    int bitsPerSample,
+    int subslotBytes,
+    int usbSpeed,
+    StreamingAltSelection* output,
+    std::string* failureReason
+) {
+    std::string uac1Failure;
+    StreamingAltSelection uac1Selection;
+    if (findStreamingAltUac1(
+            devh,
+            sampleRate,
+            channelCount,
+            bitsPerSample,
+            subslotBytes,
+            usbSpeed,
+            &uac1Selection,
+            &uac1Failure
+        )) {
+        uac1Failure.clear();
+    }
+
+    std::string uac2Failure;
+    StreamingAltSelection uac2Selection;
+    if (findStreamingAltUac2(
+            devh,
+            sampleRate,
+            channelCount,
+            bitsPerSample,
+            subslotBytes,
+            usbSpeed,
+            &uac2Selection,
+            &uac2Failure
+        )) {
+        uac2Failure.clear();
+    }
+
+    const bool hasUac1 = uac1Selection.interfaceNumber >= 0;
+    const bool hasUac2 = uac2Selection.interfaceNumber >= 0;
+    if (hasUac1 || hasUac2) {
+        const StreamingAltSelection* best = nullptr;
+        if (hasUac1 && hasUac2) {
+            best = uac2Selection.score >= uac1Selection.score
+                ? &uac2Selection
+                : &uac1Selection;
+            LOGI(
+                "USB audio alt arbitration picked UAC%d over UAC%d (score=%d vs %d)",
+                best->uacVersion,
+                best->uacVersion == 2 ? 1 : 2,
+                best->score,
+                best->uacVersion == 2 ? uac1Selection.score : uac2Selection.score
+            );
+        } else {
+            best = hasUac2 ? &uac2Selection : &uac1Selection;
+        }
+        *output = *best;
+        if (failureReason != nullptr) {
+            failureReason->clear();
+        }
+        return true;
+    }
+
+    if (failureReason != nullptr) {
+        *failureReason = "uac1={" + uac1Failure + "} uac2={" + uac2Failure + "}";
+    }
+    return false;
+}
+
 int computeIntervalsPerSecond(int usbSpeed, int interval) {
     const int normalizedInterval = std::clamp(interval, 1, 16);
     const int intervalUnits = 1 << (normalizedInterval - 1);
@@ -892,6 +1512,43 @@ int computeIntervalsPerSecond(int usbSpeed, int interval) {
         usbSpeed == LIBUSB_SPEED_SUPER_PLUS_X2;
     const int baseIntervalsPerSecond = usesMicroframes ? 8000 : 1000;
     return std::max(1, baseIntervalsPerSecond / intervalUnits);
+}
+
+int scaledPacketsPerTransfer(int intervalsPerSecond) {
+    const int normalizedIntervals = std::max(1, intervalsPerSecond);
+    const int intervalRatio = std::max(1, normalizedIntervals / 1000);
+    return std::clamp(
+        kDefaultPacketsPerTransfer * intervalRatio,
+        kDefaultPacketsPerTransfer,
+        kMaximumPacketsPerTransfer
+    );
+}
+
+int scaledTransferCount(int intervalsPerSecond, int packetsPerTransfer) {
+    const int normalizedIntervals = std::max(1, intervalsPerSecond);
+    const bool highSpeedSchedule = normalizedIntervals > 1000;
+    const int targetInFlightMs = highSpeedSchedule
+        ? kHighSpeedTargetInFlightMs
+        : kFullSpeedTargetInFlightMs;
+    const int targetPacketsInFlight = std::max(
+        kDefaultPacketsPerTransfer,
+        normalizedIntervals * targetInFlightMs / 1000
+    );
+    const int normalizedPacketsPerTransfer = std::max(1, packetsPerTransfer);
+    const int requiredTransfers =
+        (targetPacketsInFlight + normalizedPacketsPerTransfer - 1) /
+        normalizedPacketsPerTransfer;
+    return std::clamp(
+        requiredTransfers,
+        kMinimumTransferCount,
+        kMaximumTransferCount
+    );
+}
+
+int64_t steadyClockMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
 }
 
 int frameAlignedDown(int bytes, int frameBytes) {
@@ -954,9 +1611,7 @@ bool negotiateUac1SampleRate(
         static_cast<uint8_t>((sampleRate >> 8) & 0xFF),
         static_cast<uint8_t>((sampleRate >> 16) & 0xFF)
     };
-    const auto outRequestType = static_cast<uint8_t>(
-        LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_ENDPOINT
-    );
+    const auto outRequestType = makeClassEndpointRequestType(kLibusbEndpointOut);
     const int setResult = libusb_control_transfer(
         deviceHandle,
         outRequestType,
@@ -991,9 +1646,7 @@ bool negotiateUac1SampleRate(
     }
 
     uint8_t verifiedBytes[3] = { 0, 0, 0 };
-    const uint8_t inRequestType = static_cast<uint8_t>(
-        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_ENDPOINT
-    );
+    const auto inRequestType = makeClassEndpointRequestType(kLibusbEndpointIn);
     const int getResult = libusb_control_transfer(
         deviceHandle,
         inRequestType,
@@ -1030,6 +1683,492 @@ bool negotiateUac1SampleRate(
     *status = getResult < 0
         ? std::string("set_cur_unverified:") + libusbErrName(getResult)
         : "set_cur_unverified_short_get";
+    return true;
+}
+
+bool readUac2CurrentSampleRate(
+    libusb_device_handle* deviceHandle,
+    int audioControlInterface,
+    int clockSourceId,
+    int* currentSampleRate,
+    std::string* status
+) {
+    if (deviceHandle == nullptr || currentSampleRate == nullptr ||
+        audioControlInterface < 0 || clockSourceId <= 0) {
+        if (status != nullptr) {
+            *status = "uac2_invalid_get_cur_input";
+        }
+        return false;
+    }
+
+    constexpr uint8_t kCurRequest = 0x01;
+    constexpr uint16_t kSampleFrequencyControl = 0x0100;
+    constexpr unsigned int kControlTimeoutMs = 1000;
+    uint8_t sampleRateBytes[4] = { 0, 0, 0, 0 };
+    const auto requestType = makeClassInterfaceRequestType(kLibusbEndpointIn);
+    const auto entityIndex = makeClockEntityIndex(clockSourceId, audioControlInterface);
+    const int result = libusb_control_transfer(
+        deviceHandle,
+        requestType,
+        kCurRequest,
+        kSampleFrequencyControl,
+        entityIndex,
+        sampleRateBytes,
+        sizeof(sampleRateBytes),
+        kControlTimeoutMs
+    );
+    if (result != static_cast<int>(sizeof(sampleRateBytes))) {
+        if (status != nullptr) {
+            *status = result < 0
+                ? std::string("uac2_sample_rate_get_cur_failed:") + libusbErrName(result)
+                : "uac2_sample_rate_get_cur_short";
+        }
+        return false;
+    }
+    *currentSampleRate = static_cast<int>(sampleRateBytes[0]) |
+        (static_cast<int>(sampleRateBytes[1]) << 8) |
+        (static_cast<int>(sampleRateBytes[2]) << 16) |
+        (static_cast<int>(sampleRateBytes[3]) << 24);
+    if (*currentSampleRate <= 0) {
+        if (status != nullptr) {
+            *status = "uac2_sample_rate_get_cur_invalid";
+        }
+        return false;
+    }
+    if (status != nullptr) {
+        *status = "get_cur_verified";
+    }
+    return true;
+}
+
+bool readUac2SampleRateRanges(
+    libusb_device_handle* deviceHandle,
+    int audioControlInterface,
+    int clockSourceId,
+    std::vector<neri::usb::uac2::SampleRateSubrange>* ranges,
+    std::string* status
+) {
+    if (deviceHandle == nullptr || ranges == nullptr ||
+        audioControlInterface < 0 || clockSourceId <= 0) {
+        if (status != nullptr) {
+            *status = "uac2_invalid_range_input";
+        }
+        return false;
+    }
+
+    constexpr uint8_t kRangeRequest = 0x02;
+    constexpr uint16_t kSampleFrequencyControl = 0x0100;
+    constexpr unsigned int kControlTimeoutMs = 1000;
+    std::array<uint8_t, 512> rangeBytes {};
+    const auto requestType = makeClassInterfaceRequestType(kLibusbEndpointIn);
+    const auto entityIndex = makeClockEntityIndex(clockSourceId, audioControlInterface);
+    const int result = libusb_control_transfer(
+        deviceHandle,
+        requestType,
+        kRangeRequest,
+        kSampleFrequencyControl,
+        entityIndex,
+        rangeBytes.data(),
+        rangeBytes.size(),
+        kControlTimeoutMs
+    );
+    if (result < 0) {
+        if (status != nullptr) {
+            *status = std::string("uac2_sample_rate_range_failed:") + libusbErrName(result);
+        }
+        return false;
+    }
+    std::string parseError;
+    if (!neri::usb::uac2::parseSampleRateRanges(
+            rangeBytes.data(),
+            result,
+            ranges,
+            &parseError
+        )) {
+        if (status != nullptr) {
+            *status = "uac2_sample_rate_range_parse_failed:" + parseError;
+        }
+        return false;
+    }
+    if (status != nullptr) {
+        *status = "range_verified";
+    }
+    return true;
+}
+
+bool negotiateUac2SampleRate(
+    libusb_device_handle* deviceHandle,
+    int audioControlInterface,
+    int clockSourceId,
+    int sampleRate,
+    neri::usb::uac2::ControlCapability sampleRateControl,
+    int* negotiatedSampleRate,
+    std::string* status,
+    std::string* error
+) {
+    if (deviceHandle == nullptr || negotiatedSampleRate == nullptr || status == nullptr ||
+        audioControlInterface < 0 || clockSourceId <= 0 || sampleRate <= 0) {
+        if (error != nullptr) {
+            *error = "invalid_uac2_sample_rate_negotiation_input";
+        }
+        return false;
+    }
+
+    if (sampleRateControl == neri::usb::uac2::ControlCapability::None) {
+        int currentSampleRate = 0;
+        std::string currentStatus;
+        if (!readUac2CurrentSampleRate(
+                deviceHandle,
+                audioControlInterface,
+                clockSourceId,
+                &currentSampleRate,
+                &currentStatus
+            )) {
+            if (error != nullptr) {
+                *error = currentStatus;
+            }
+            return false;
+        }
+        if (currentSampleRate != sampleRate) {
+            if (error != nullptr) {
+                *error = "uac2_fixed_sample_rate_mismatch_requested=" +
+                    std::to_string(sampleRate) + "/actual=" +
+                    std::to_string(currentSampleRate);
+            }
+            return false;
+        }
+        *negotiatedSampleRate = currentSampleRate;
+        *status = "fixed_get_cur_verified";
+        return true;
+    }
+
+    if (sampleRateControl == neri::usb::uac2::ControlCapability::ReadOnly) {
+        int currentSampleRate = 0;
+        std::string currentStatus;
+        if (!readUac2CurrentSampleRate(
+                deviceHandle,
+                audioControlInterface,
+                clockSourceId,
+                &currentSampleRate,
+                &currentStatus
+            )) {
+            if (error != nullptr) {
+                *error = currentStatus;
+            }
+            return false;
+        }
+        if (currentSampleRate != sampleRate) {
+            if (error != nullptr) {
+                *error = "uac2_read_only_sample_rate_mismatch_requested=" +
+                    std::to_string(sampleRate) + "/actual=" +
+                    std::to_string(currentSampleRate);
+            }
+            return false;
+        }
+        *negotiatedSampleRate = currentSampleRate;
+        *status = "read_only_get_cur_verified";
+        return true;
+    }
+
+    if (sampleRateControl != neri::usb::uac2::ControlCapability::ReadWrite) {
+        if (error != nullptr) {
+            *error = "uac2_sample_rate_control_not_writable";
+        }
+        return false;
+    }
+
+    std::vector<neri::usb::uac2::SampleRateSubrange> ranges;
+    std::string rangeStatus;
+    if (readUac2SampleRateRanges(
+            deviceHandle,
+            audioControlInterface,
+            clockSourceId,
+            &ranges,
+            &rangeStatus
+        )) {
+        const bool rangeSupportsTarget = std::any_of(
+            ranges.begin(),
+            ranges.end(),
+            [sampleRate](const neri::usb::uac2::SampleRateSubrange& range) {
+                return range.supports(sampleRate);
+            }
+        );
+        if (!rangeSupportsTarget) {
+            if (error != nullptr) {
+                *error = "uac2_sample_rate_unsupported_by_range";
+            }
+            return false;
+        }
+    } else if (rangeStatus.find("LIBUSB_ERROR_NO_DEVICE") != std::string::npos) {
+        if (error != nullptr) {
+            *error = rangeStatus;
+        }
+        return false;
+    }
+
+    constexpr uint8_t kCurRequest = 0x01;
+    constexpr uint16_t kSampleFrequencyControl = 0x0100;
+    constexpr unsigned int kControlTimeoutMs = 1000;
+    uint8_t sampleRateBytes[4] = {
+        static_cast<uint8_t>(sampleRate & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 8) & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 16) & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 24) & 0xFF)
+    };
+    const auto requestType = makeClassInterfaceRequestType(kLibusbEndpointOut);
+    const auto entityIndex = makeClockEntityIndex(clockSourceId, audioControlInterface);
+    const int setResult = libusb_control_transfer(
+        deviceHandle,
+        requestType,
+        kCurRequest,
+        kSampleFrequencyControl,
+        entityIndex,
+        sampleRateBytes,
+        sizeof(sampleRateBytes),
+        kControlTimeoutMs
+    );
+    if (setResult == LIBUSB_ERROR_NO_DEVICE) {
+        if (error != nullptr) {
+            *error = "uac2_sample_rate_set_cur_failed:LIBUSB_ERROR_NO_DEVICE";
+        }
+        return false;
+    }
+    if (setResult != static_cast<int>(sizeof(sampleRateBytes))) {
+        if (error != nullptr) {
+            *error = setResult < 0
+                ? std::string("uac2_sample_rate_set_cur_failed:") + libusbErrName(setResult)
+                : "uac2_sample_rate_set_cur_short";
+        }
+        return false;
+    }
+
+    int verifiedRate = 0;
+    std::string getStatus;
+    if (readUac2CurrentSampleRate(
+            deviceHandle,
+            audioControlInterface,
+            clockSourceId,
+            &verifiedRate,
+            &getStatus
+        )) {
+        if (verifiedRate != sampleRate) {
+            if (error != nullptr) {
+                *error = "uac2_sample_rate_verify_mismatch_requested=" +
+                    std::to_string(sampleRate) + "/actual=" +
+                    std::to_string(verifiedRate);
+            }
+            return false;
+        }
+        *negotiatedSampleRate = verifiedRate;
+        *status = "set_cur_verified";
+        return true;
+    }
+
+    if (getStatus.find("LIBUSB_ERROR_NO_DEVICE") != std::string::npos) {
+        if (error != nullptr) {
+            *error = getStatus;
+        }
+        return false;
+    }
+    *negotiatedSampleRate = sampleRate;
+    *status = "set_cur_unverified:" + getStatus;
+    return true;
+}
+
+bool reconfigureOpenedPlayerPcmOutput(
+    UsbExclusiveHandle* handle,
+    int sampleRate,
+    int channelCount,
+    int bitsPerSample,
+    int subslotBytes,
+    std::string* error
+) {
+    if (handle == nullptr || handle->devh == nullptr) {
+        if (error != nullptr) {
+            *error = "reconfigure_invalid_handle";
+        }
+        return false;
+    }
+    if (handle->running.load() || !handle->deviceOnline.load() || handle->closing.load()) {
+        if (error != nullptr) {
+            *error = "reconfigure_requires_idle_handle";
+        }
+        return false;
+    }
+    if (sampleRate <= 0 || channelCount <= 0 || bitsPerSample <= 0 || subslotBytes <= 0 ||
+        bitsPerSample > subslotBytes * 8) {
+        if (error != nullptr) {
+            *error = "reconfigure_invalid_output_format";
+        }
+        return false;
+    }
+
+    StreamingAltSelection selection;
+    std::string selectionFailure;
+    if (!findStreamingAlt(
+            handle->devh,
+            sampleRate,
+            channelCount,
+            bitsPerSample,
+            subslotBytes,
+            handle->usbSpeed,
+            &selection,
+            &selectionFailure
+        )) {
+        if (error != nullptr) {
+            *error = "reconfigure_no_compatible_output:" + selectionFailure;
+        }
+        return false;
+    }
+    if (selection.interfaceNumber != handle->audioStreamingInterface ||
+        selection.audioControlInterface != handle->audioControlInterface ||
+        !sameClaimPlan(handle->claimedAudioInterfaces, selection.claimPlan)) {
+        if (error != nullptr) {
+            *error = "reconfigure_requires_reopen:claim_or_interface_changed";
+        }
+        return false;
+    }
+
+    if (selection.uacVersion == 1 &&
+        selection.alternateSetting != handle->alternateSetting) {
+        const int rc = libusb_set_interface_alt_setting(
+            handle->devh,
+            selection.interfaceNumber,
+            selection.alternateSetting
+        );
+        if (rc != LIBUSB_SUCCESS) {
+            if (error != nullptr) {
+                *error = std::string("reconfigure_set_alt_failed:") + libusbErrName(rc);
+            }
+            if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                requestNoDeviceStop(handle);
+            }
+            return false;
+        }
+        std::lock_guard<std::mutex> transitionGuard(g_usbInterfaceTransitionLock);
+        markInterfaceTransitionLocked();
+    }
+
+    int negotiatedSampleRate = 0;
+    std::string negotiationStatus;
+    std::string negotiationError;
+    const bool sampleRateNegotiated = selection.uacVersion == 1
+        ? negotiateUac1SampleRate(
+            handle->devh,
+            selection.outEndpoint,
+            sampleRate,
+            selection.uac1.format,
+            selection.uac1.endpointControls,
+            &negotiatedSampleRate,
+            &negotiationStatus,
+            &negotiationError
+        )
+        : negotiateUac2SampleRate(
+            handle->devh,
+            selection.audioControlInterface,
+            selection.uac2.clockSourceId,
+            sampleRate,
+            selection.uac2.sampleRateControl,
+            &negotiatedSampleRate,
+            &negotiationStatus,
+            &negotiationError
+        );
+    if (!sampleRateNegotiated) {
+        if (error != nullptr) {
+            *error = "reconfigure_sample_rate_failed:" + negotiationError;
+        }
+        if (negotiationError.find("LIBUSB_ERROR_NO_DEVICE") != std::string::npos) {
+            requestNoDeviceStop(handle);
+        }
+        return false;
+    }
+
+    if (selection.uacVersion == 2) {
+        const int rc = libusb_set_interface_alt_setting(
+            handle->devh,
+            selection.interfaceNumber,
+            selection.alternateSetting
+        );
+        if (rc != LIBUSB_SUCCESS) {
+            if (error != nullptr) {
+                *error = std::string("reconfigure_set_alt_failed:") + libusbErrName(rc);
+            }
+            if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                requestNoDeviceStop(handle);
+            }
+            return false;
+        }
+        std::lock_guard<std::mutex> transitionGuard(g_usbInterfaceTransitionLock);
+        markInterfaceTransitionLocked();
+    }
+
+    handle->sampleRate = sampleRate;
+    handle->channelCount = channelCount;
+    handle->bitsPerSample = bitsPerSample;
+    handle->subslotBytes = selection.uacVersion == 1
+        ? selection.uac1.format.subslotBytes
+        : selection.uac2.format.subslotBytes;
+    handle->frameBytes = handle->channelCount * handle->subslotBytes;
+    handle->audioStreamingInterface = selection.interfaceNumber;
+    handle->audioControlInterface = selection.audioControlInterface;
+    handle->alternateSetting = selection.alternateSetting;
+    handle->outEndpoint = selection.outEndpoint;
+    handle->endpointMaxPacketBytes = selection.endpointMaxPacketBytes;
+    handle->endpointInterval = selection.endpointInterval;
+    handle->uacVersion = selection.uacVersion;
+    handle->uacClockSourceId = selection.uac2.clockSourceId;
+    handle->descriptorSampleRates = selection.uacVersion == 1
+        ? selection.uac1.format.sampleRateSummary()
+        : "uac2_clock_source";
+    handle->formatSelectionReason = selection.reason;
+    handle->sampleRateControlStatus = negotiationStatus;
+    handle->endpointSyncType = selection.syncType;
+    handle->endpointFeedback = selection.feedback;
+    handle->completeAudioFunctionClaim = selection.completeClaimPlan;
+    handle->negotiatedSampleRate = negotiatedSampleRate;
+    handle->intervalsPerSecond = computeIntervalsPerSecond(
+        handle->usbSpeed,
+        handle->endpointInterval
+    );
+    handle->packetsPerTransfer = scaledPacketsPerTransfer(handle->intervalsPerSecond);
+    handle->transferCount = scaledTransferCount(
+        handle->intervalsPerSecond,
+        handle->packetsPerTransfer
+    );
+    handle->bytesPerUsbFrame = computeMaxPacketBytes(
+        handle->sampleRate,
+        handle->intervalsPerSecond,
+        std::max(1, handle->frameBytes),
+        handle->endpointMaxPacketBytes
+    );
+    if (handle->bytesPerUsbFrame <= 0) {
+        if (error != nullptr) {
+            *error = "reconfigure_endpoint_capacity_too_small";
+        }
+        return false;
+    }
+    handle->transferBytes = handle->bytesPerUsbFrame * handle->packetsPerTransfer;
+    handle->packetScheduler.configure(
+        handle->sampleRate,
+        handle->intervalsPerSecond,
+        handle->frameBytes
+    );
+    handle->lastTransferBytes.store(0);
+    clearError(handle);
+    if (error != nullptr) {
+        error->clear();
+    }
+    LOGI(
+        "reconfigureOpenedPlayerPcmOutput ok: iface=%d alt=%d sr=%d negotiated=%d ch=%d bits=%d subslot=%d packetBytes=%d",
+        handle->audioStreamingInterface,
+        handle->alternateSetting,
+        handle->sampleRate,
+        handle->negotiatedSampleRate,
+        handle->channelCount,
+        handle->bitsPerSample,
+        handle->subslotBytes,
+        handle->bytesPerUsbFrame
+    );
     return true;
 }
 
@@ -1125,6 +2264,8 @@ bool startStreamingInternal(
     handle->packetFramesMax.store(0);
     handle->lastTransferBytes.store(0);
     handle->shortWriteWarnings.store(0);
+    handle->firstTransferSubmittedAtMs.store(0);
+    handle->lastTransferCompletionAtMs.store(0);
     handle->packetScheduler.reset();
     {
         std::lock_guard<std::mutex> submitGuard(handle->transferSubmitLock);
@@ -1169,6 +2310,14 @@ bool startStreamingInternal(
             if (!cancelled) {
                 rc = libusb_submit_transfer(transfer);
                 if (rc == LIBUSB_SUCCESS) {
+                    const int64_t submittedAtMs = steadyClockMillis();
+                    int64_t firstSubmittedAtMs = 0;
+                    if (handle->firstTransferSubmittedAtMs.compare_exchange_strong(
+                            firstSubmittedAtMs,
+                            submittedAtMs
+                        )) {
+                        handle->lastTransferCompletionAtMs.store(submittedAtMs);
+                    }
                     handle->inFlightTransfers.fetch_add(1);
                 }
             }
@@ -1549,6 +2698,7 @@ void LIBUSB_CALL transferCallback(libusb_transfer* transfer) noexcept {
             handle->isoPacketErrorScore.store(
                 neri::usb::updateIsoPacketErrorScore(currentScore, 0)
             );
+            handle->lastTransferCompletionAtMs.store(steadyClockMillis());
             const int completedBefore = handle->completedTransfers.fetch_add(1);
             if (completedBefore == 0) {
                 LOGI(
@@ -1751,7 +2901,6 @@ void freeTransfers(UsbExclusiveHandle* handle) {
 void eventLoopThread(UsbExclusiveHandle* handle) noexcept {
     try {
         configureUsbEventThreadPriority();
-        const auto startedAt = std::chrono::steady_clock::now();
         int consecutiveErrors = 0;
         LOGI("USB event loop entered");
         while (handle->deviceOnline.load() && !handle->stopRequested.load()) {
@@ -1800,11 +2949,12 @@ void eventLoopThread(UsbExclusiveHandle* handle) noexcept {
             } else {
                 consecutiveErrors = 0;
             }
+            const int64_t firstSubmittedAtMs = handle->firstTransferSubmittedAtMs.load();
             if (
                 handle->completedTransfers.load() == 0 &&
                 handle->inFlightTransfers.load() > 0 &&
-                std::chrono::steady_clock::now() - startedAt >=
-                    std::chrono::milliseconds(kFirstTransferCompletionTimeoutMs)
+                firstSubmittedAtMs > 0 &&
+                steadyClockMillis() - firstSubmittedAtMs >= kFirstTransferCompletionTimeoutMs
             ) {
                 handle->transportFailed.store(true);
                 handle->running.store(false);
@@ -1812,6 +2962,25 @@ void eventLoopThread(UsbExclusiveHandle* handle) noexcept {
                 setError(handle, "event_loop_first_completion_timeout");
                 LOGE(
                     "USB event loop timed out before first completion: inFlight=%d",
+                    handle->inFlightTransfers.load()
+                );
+                break;
+            }
+            const int64_t lastCompletionAtMs = handle->lastTransferCompletionAtMs.load();
+            if (
+                handle->completedTransfers.load() > 0 &&
+                handle->inFlightTransfers.load() > 0 &&
+                lastCompletionAtMs > 0 &&
+                steadyClockMillis() - lastCompletionAtMs >=
+                    kTransferCompletionStallTimeoutMs
+            ) {
+                handle->transportFailed.store(true);
+                handle->running.store(false);
+                handle->stopRequested.store(true);
+                setError(handle, "event_loop_completion_stalled");
+                LOGE(
+                    "USB event loop stalled after completions: completed=%d inFlight=%d",
+                    handle->completedTransfers.load(),
                     handle->inFlightTransfers.load()
                 );
                 break;
@@ -2542,7 +3711,6 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
     std::shared_ptr<UsbExclusiveHandle> handle;
     try {
         handle = std::make_shared<UsbExclusiveHandle>();
-        handle->originalFd = fd;
         handle->sampleRate = sampleRate > 0 ? sampleRate : 48000;
         handle->channelCount = channelCount > 0 ? channelCount : 2;
         handle->bitsPerSample = bitsPerSample > 0 ? bitsPerSample : 16;
@@ -2640,22 +3808,29 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
             if (selectionFailure.find("LIBUSB_ERROR_NO_DEVICE") != std::string::npos) {
                 requestNoDeviceStop(handle.get());
             }
-            const std::string error = "no_compatible_uac1_format:" + selectionFailure;
-            LOGE("nativeOpen compatible UAC1 alt not found: %s", selectionFailure.c_str());
+            const std::string error = "no_compatible_usb_audio_format:" + selectionFailure;
+            LOGE("nativeOpen compatible USB audio alt not found: %s", selectionFailure.c_str());
             rememberLastOpenError(error);
             setError(handle.get(), error);
             closeHandleInternal(handle);
             return 0L;
         }
         handle->audioStreamingInterface = selection.interfaceNumber;
+        handle->audioControlInterface = selection.audioControlInterface;
         handle->alternateSetting = selection.alternateSetting;
         handle->outEndpoint = selection.outEndpoint;
         handle->endpointMaxPacketBytes = selection.endpointMaxPacketBytes;
         handle->endpointInterval = selection.endpointInterval;
-        handle->uacVersion = 1;
-        handle->descriptorSampleRates = selection.format.sampleRateSummary();
+        handle->uacVersion = selection.uacVersion;
+        handle->subslotBytes = selection.uacVersion == 1
+            ? selection.uac1.format.subslotBytes
+            : selection.uac2.format.subslotBytes;
+        handle->frameBytes = handle->channelCount * handle->subslotBytes;
+        handle->uacClockSourceId = selection.uac2.clockSourceId;
+        handle->descriptorSampleRates = selection.uacVersion == 1
+            ? selection.uac1.format.sampleRateSummary()
+            : "uac2_clock_source";
         handle->formatSelectionReason = selection.reason;
-        handle->samplingFrequencyControl = selection.endpointControls.samplingFrequencyControl;
         handle->endpointSyncType = selection.syncType;
         handle->endpointFeedback = selection.feedback;
         handle->completeAudioFunctionClaim = selection.completeClaimPlan;
@@ -2672,56 +3847,105 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
             return 0L;
         }
 
-        rc = libusb_set_interface_alt_setting(
-            handle->devh,
-            handle->audioStreamingInterface,
-            handle->alternateSetting
-        );
-        if (rc != LIBUSB_SUCCESS) {
-            if (rc == LIBUSB_ERROR_NO_DEVICE) {
-                requestNoDeviceStop(handle.get());
-            }
-            LOGE(
-                "nativeOpen set alt failed: iface=%d alt=%d err=%s",
+        if (selection.uacVersion == 1) {
+            rc = libusb_set_interface_alt_setting(
+                handle->devh,
                 handle->audioStreamingInterface,
-                handle->alternateSetting,
-                libusbErrName(rc)
+                handle->alternateSetting
             );
-            const std::string error = std::string("set_alt_failed:") + libusbErrName(rc);
-            rememberLastOpenError(error);
-            setError(handle.get(), error);
-            closeHandleInternal(handle);
+            if (rc != LIBUSB_SUCCESS) {
+                if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                    requestNoDeviceStop(handle.get());
+                }
+                LOGE(
+                    "nativeOpen set alt failed: iface=%d alt=%d err=%s",
+                    handle->audioStreamingInterface,
+                    handle->alternateSetting,
+                    libusbErrName(rc)
+                );
+                const std::string error = std::string("set_alt_failed:") + libusbErrName(rc);
+                rememberLastOpenError(error);
+                setError(handle.get(), error);
+                closeHandleInternal(handle);
+                markInterfaceTransitionLocked();
+                return 0L;
+            }
             markInterfaceTransitionLocked();
-            return 0L;
         }
-        markInterfaceTransitionLocked();
 
         std::string negotiationError;
-        if (!negotiateUac1SampleRate(
+        const bool sampleRateNegotiated = selection.uacVersion == 1
+            ? negotiateUac1SampleRate(
                 handle->devh,
                 handle->outEndpoint,
                 handle->sampleRate,
-                selection.format,
-                selection.endpointControls,
+                selection.uac1.format,
+                selection.uac1.endpointControls,
                 &handle->negotiatedSampleRate,
                 &handle->sampleRateControlStatus,
                 &negotiationError
-            )) {
+            )
+            : negotiateUac2SampleRate(
+                handle->devh,
+                handle->audioControlInterface,
+                handle->uacClockSourceId,
+                handle->sampleRate,
+                selection.uac2.sampleRateControl,
+                &handle->negotiatedSampleRate,
+                &handle->sampleRateControlStatus,
+                &negotiationError
+            );
+        if (!sampleRateNegotiated) {
             if (negotiationError.find("LIBUSB_ERROR_NO_DEVICE") != std::string::npos) {
                 requestNoDeviceStop(handle.get());
             }
             const std::string error = "sample_rate_negotiation_failed:" + negotiationError;
-            LOGE("nativeOpen UAC1 sample rate negotiation failed: %s", negotiationError.c_str());
+            LOGE(
+                "nativeOpen UAC%d sample rate negotiation failed: %s",
+                selection.uacVersion,
+                negotiationError.c_str()
+            );
             rememberLastOpenError(error);
             setError(handle.get(), error);
             closeHandleInternal(handle);
             return 0L;
+        }
+
+        if (selection.uacVersion == 2) {
+            rc = libusb_set_interface_alt_setting(
+                handle->devh,
+                handle->audioStreamingInterface,
+                handle->alternateSetting
+            );
+            if (rc != LIBUSB_SUCCESS) {
+                if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                    requestNoDeviceStop(handle.get());
+                }
+                LOGE(
+                    "nativeOpen set alt failed after UAC2 clock configure: iface=%d alt=%d err=%s",
+                    handle->audioStreamingInterface,
+                    handle->alternateSetting,
+                    libusbErrName(rc)
+                );
+                const std::string error = std::string("set_alt_failed:") + libusbErrName(rc);
+                rememberLastOpenError(error);
+                setError(handle.get(), error);
+                closeHandleInternal(handle);
+                markInterfaceTransitionLocked();
+                return 0L;
+            }
+            markInterfaceTransitionLocked();
         }
 
         const int frameBytes = std::max(1, handle->frameBytes);
         handle->intervalsPerSecond = computeIntervalsPerSecond(
             handle->usbSpeed,
             handle->endpointInterval
+        );
+        handle->packetsPerTransfer = scaledPacketsPerTransfer(handle->intervalsPerSecond);
+        handle->transferCount = scaledTransferCount(
+            handle->intervalsPerSecond,
+            handle->packetsPerTransfer
         );
         handle->bytesPerUsbFrame = computeMaxPacketBytes(
             handle->sampleRate,
@@ -2746,10 +3970,13 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
         clearError(handle.get());
 
         LOGI(
-            "nativeOpen ok: uac=1 iface=%d alt=%d claimed=%zu fullFunctionClaim=%d "
+            "nativeOpen ok: uac=%d iface=%d acIface=%d alt=%d claimed=%zu fullFunctionClaim=%d "
             "outEp=0x%02X packetBytes=%d endpointMax=%d speed=%d interval=%d ips=%d "
-            "sr=%d negotiated=%d ch=%d bits=%d subslot=%d rates=%s control=%s sync=%s feedback=%s",
+            "sr=%d negotiated=%d ch=%d bits=%d subslot=%d rates=%s control=%s "
+            "clock=%d sync=%s feedback=%s",
+            handle->uacVersion,
             handle->audioStreamingInterface,
+            handle->audioControlInterface,
             handle->alternateSetting,
             handle->claimedAudioInterfaces.size(),
             handle->completeAudioFunctionClaim ? 1 : 0,
@@ -2766,6 +3993,7 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
             handle->subslotBytes,
             handle->descriptorSampleRates.c_str(),
             handle->sampleRateControlStatus.c_str(),
+            handle->uacClockSourceId,
             handle->endpointSyncType.c_str(),
             handle->endpointFeedback.c_str()
         );
@@ -3077,6 +4305,49 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
 
 extern "C"
 JNIEXPORT jboolean JNICALL
+Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nativeReconfigurePlayerPcmOutput(
+    JNIEnv* env,
+    jclass /*clazz*/,
+    jlong handleValue,
+    jint sampleRate,
+    jint channelCount,
+    jint bitsPerSample,
+    jint subslotBytes
+) {
+    static_cast<void>(env);
+    const auto holder = acquireHandle(handleValue);
+    if (holder == nullptr) {
+        LOGW(
+            "nativeReconfigurePlayerPcmOutput rejected: invalid handle=%lld",
+            static_cast<long long>(handleValue)
+        );
+        return JNI_FALSE;
+    }
+    std::lock_guard<std::mutex> apiGuard(holder->apiLock);
+    std::string error;
+    if (!reconfigureOpenedPlayerPcmOutput(
+            holder.get(),
+            sampleRate,
+            channelCount,
+            bitsPerSample,
+            subslotBytes,
+            &error
+        )) {
+        if (!error.empty()) {
+            setError(holder.get(), error);
+            LOGW(
+                "nativeReconfigurePlayerPcmOutput failed: handle=%lld error=%s",
+                static_cast<long long>(handleValue),
+                error.c_str()
+            );
+        }
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
 Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nativePlayPlayerPcm(
     JNIEnv* env,
     jclass /*clazz*/,
@@ -3316,6 +4587,21 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
 }
 
 extern "C"
+JNIEXPORT jlong JNICALL
+Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nativeGetPlayerPcmFreeBytes(
+    JNIEnv* env,
+    jclass /*clazz*/,
+    jlong handleValue
+) {
+    static_cast<void>(env);
+    const auto holder = acquireHandle(handleValue);
+    if (holder == nullptr || holder->closing.load()) {
+        return -1L;
+    }
+    return static_cast<jlong>(holder->pcmPipeline.snapshot().freeBytes);
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nativeStop(
     JNIEnv* env,
@@ -3437,6 +4723,7 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
         }
         const std::string report =
             "iface=" + std::to_string(holder->audioStreamingInterface) +
+            " acIface=" + std::to_string(holder->audioControlInterface) +
             " alt=" + std::to_string(holder->alternateSetting) +
             " claimedIfaces=" + claimedInterfaceSummary +
             " fullFunctionClaim=" + std::string(
@@ -3448,7 +4735,12 @@ Java_moe_ouom_neriplayer_core_player_usb_transport_UsbExclusiveNativeBridge_nati
                 return std::string(buf);
             }() +
             " source=" + std::string(sourceName(holder->streamSource.load())) +
-            " uacVersion=" + std::string(holder->uacVersion == 1 ? "1.0" : "unsupported") +
+            " uacVersion=" + std::string(
+                holder->uacVersion == 1
+                    ? "1.0"
+                    : holder->uacVersion == 2 ? "2.0" : "unsupported"
+            ) +
+            " clockEntity=" + std::to_string(holder->uacClockSourceId) +
             " sampleRate=" + std::to_string(holder->sampleRate) +
             " negotiatedRate=" + std::to_string(holder->negotiatedSampleRate) +
             " descriptorRates=" + holder->descriptorSampleRates +

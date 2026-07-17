@@ -5,6 +5,7 @@ import moe.ouom.neriplayer.core.player.download.DEFAULT_DOWNLOAD_PARALLELISM
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_PITCH
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_SPEED
+import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_VOLUME_BALANCE
 import moe.ouom.neriplayer.core.player.model.PlaybackEqualizerPresetId
 import moe.ouom.neriplayer.ksp.annotations.AutoSetting
 import moe.ouom.neriplayer.ksp.annotations.AutoSettingIcon
@@ -778,6 +779,19 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
+            key = "amll_lyrics_enabled",
+            type = SettingValueType.Boolean,
+            defaultBoolean = true,
+            order = 11,
+            ui = SettingUiType.Switch
+        )
+        val amllLyricsEnabled = autoSetting(
+            titleRes = R.string.settings_amll_lyrics_enabled,
+            descriptionRes = R.string.settings_amll_lyrics_enabled_desc,
+            icon = AutoSettingIcon.Subtitles
+        )
+
+        @AutoSetting(
             key = "status_bar_lyrics_enabled",
             type = SettingValueType.Boolean,
             defaultBoolean = false,
@@ -1229,6 +1243,19 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
+            key = "playback_sleep_timer_finish_current_on_expiry",
+            type = SettingValueType.Boolean,
+            defaultBoolean = false,
+            order = 25,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val sleepTimerFinishCurrentOnExpiry = autoSetting(
+            titleRes = R.string.settings_playback_sleep_timer_finish_current_on_expiry,
+            descriptionRes = R.string.settings_playback_sleep_timer_finish_current_on_expiry_desc
+        )
+
+        @AutoSetting(
             key = "playback_fade_in_duration_ms",
             type = SettingValueType.Long,
             defaultLong = 500L,
@@ -1346,6 +1373,45 @@ object AutoSettingsSchema {
         )
         val playbackLoudnessGainMb = autoSetting(
             titleRes = R.string.settings_playback
+        )
+
+        @AutoSetting(
+            key = "playback_volume_normalization_enabled",
+            type = SettingValueType.Boolean,
+            defaultBoolean = false,
+            order = 123,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val playbackVolumeNormalizationEnabled = autoSetting(
+            titleRes = R.string.settings_playback_volume_normalization,
+            descriptionRes = R.string.settings_playback_volume_normalization_desc
+        )
+
+        @AutoSetting(
+            key = "playback_high_resolution_output_enabled",
+            type = SettingValueType.Boolean,
+            defaultBoolean = false,
+            order = 124,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val playbackHighResolutionOutputEnabled = autoSetting(
+            titleRes = R.string.settings_playback_high_resolution_output,
+            descriptionRes = R.string.settings_playback_high_resolution_output_desc
+        )
+
+        @AutoSetting(
+            key = "playback_volume_balance",
+            type = SettingValueType.Float,
+            defaultFloat = DEFAULT_PLAYBACK_VOLUME_BALANCE,
+            order = 125,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val playbackVolumeBalance = autoSetting(
+            titleRes = R.string.settings_playback_volume_balance,
+            descriptionRes = R.string.settings_playback_volume_balance_desc
         )
 
         @AutoSetting(

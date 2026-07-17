@@ -190,6 +190,7 @@
     <string name="sleep_timer_finish_current">Stop after current song</string>
     <string name="sleep_timer_finish_playlist">Stop after playlist</string>
     <string name="sleep_timer_start_countdown">Start Countdown</string>
+    <string name="sleep_timer_countdown_finish_current">After countdown, finish current song</string>
     <string name="sleep_timer_other_modes">Other Modes</string>
     <string name="sleep_timer_close">Close</string>
     <string name="playback_invalid_url">Playback URL is invalid. Please sign in again or switch audio quality and retry.</string>
@@ -201,8 +202,11 @@
     <string name="playback_url_error_detail">Failed to resolve playback URL: %1$s</string>
     <string name="nowplaying_no_playback">No Playback</string>
     <string name="notification_timer_remaining">⏱ Stops in %1$s</string>
+    <string name="notification_timer_finish_current_remaining">⏱ Stop after current song in %1$s</string>
     <string name="notification_stop_after_current">⏱ Stop After Current</string>
     <string name="notification_stop_after_playlist">⏱ Stop After Playlist</string>
+    <string name="notification_hide_floating_lyrics">Hide floating lyrics</string>
+    <string name="notification_show_floating_lyrics">Enable floating lyrics</string>
     <string name="nowplaying_favorited">Favorited</string>
     <string name="nowplaying_favorite">Favorite</string>
     <string name="nowplaying_more_options">More Options</string>
@@ -306,6 +310,13 @@
     <string name="cover_download_success">Cover saved: %s</string>
     <string name="cover_download_failed">Failed to save cover: %s</string>
     <string name="cover_download_permission_required">Grant storage permission before saving covers</string>
+    <string name="cover_preview_unavailable">No cover is available to preview</string>
+    <string name="cover_preview_title">Cover Artwork</string>
+    <string name="cover_preview_image_content_description">Full-size song artwork</string>
+    <string name="cover_preview_image_content_description_named">Full-size artwork for %s</string>
+    <string name="cover_preview_zoom_hint">Pinch to zoom · Drag to explore</string>
+    <string name="cover_preview_zoom_percent">%1$d%%</string>
+    <string name="cover_preview_reset_zoom">Reset zoom</string>
     <string name="music_view_album">View Album %s</string>
 
     <!-- Playlist -->
@@ -833,8 +844,19 @@
     <string name="settings_playback_fade_duration_value">Current: %.1fs</string>
     <string name="settings_playback_crossfade_next">Next Track Fade</string>
     <string name="settings_playback_crossfade_next_desc">Fade between tracks when moving to the next song</string>
+    <string name="settings_playback_sleep_timer_finish_current_on_expiry">Finish current song when timer expires</string>
+    <string name="settings_playback_sleep_timer_finish_current_on_expiry_desc">When enabled, finish the current song before stopping after the countdown ends</string>
     <string name="settings_playback_crossfade_in_duration">Next Track Fade-in Duration</string>
     <string name="settings_playback_crossfade_out_duration">Current Track Fade-out Duration</string>
+    <string name="settings_playback_volume_normalization">Loudness Normalization</string>
+    <string name="settings_playback_volume_normalization_desc">Analyzes each track and smoothly compensates its loudness for more consistent volume between songs. Disabled during USB exclusive playback.</string>
+    <string name="settings_playback_high_resolution_output">32-bit High-resolution Output</string>
+    <string name="settings_playback_high_resolution_output_desc">Uses the Media3 32-bit float pipeline for standard system output when the source is high-resolution. USB exclusive output is unaffected. Loudness normalization, balance, audio visualization, and app-side speed processing are bypassed. Restart the app to apply.</string>
+    <string name="settings_playback_volume_balance">Channel Balance</string>
+    <string name="settings_playback_volume_balance_desc">Adjust the left and right channel balance</string>
+    <string name="settings_playback_volume_balance_center">Current: Center</string>
+    <string name="settings_playback_volume_balance_left">Current: Left %d%%</string>
+    <string name="settings_playback_volume_balance_right">Current: Right %d%%</string>
     <string name="settings_playback_source">Playback Source</string>
     <string name="settings_playback_source_desc">Configure automatic source switching and fallback sources</string>
     <string name="settings_keep_last_playback_progress">Keep Last Playback Progress</string>
@@ -900,11 +922,11 @@
     <string name="settings_usb_exclusive_unsupported_system_fallback">Fall back to system playback</string>
     <string name="settings_usb_exclusive_unsupported_system_fallback_desc">Do not convert; use system playback</string>
     <string name="settings_usb_exclusive_unsupported_closest">Convert to closest format</string>
-    <string name="settings_usb_exclusive_unsupported_closest_desc">Convert to a supported device format</string>
+    <string name="settings_usb_exclusive_unsupported_closest_desc">Try supported bit-depth/container variants; sample rate is not changed implicitly</string>
     <string name="settings_usb_exclusive_bit_depth_compatibility">Bit-depth compatibility</string>
     <string name="settings_usb_exclusive_bit_depth_compatibility_desc">Fall back when the device cannot use the source bit depth</string>
     <string name="settings_usb_exclusive_sample_rate_compatibility">Sample-rate compatibility</string>
-    <string name="settings_usb_exclusive_sample_rate_compatibility_desc">Fall back when the device cannot use the source sample rate</string>
+    <string name="settings_usb_exclusive_sample_rate_compatibility_desc">Fall back to system playback when the source sample rate is unsupported</string>
     <string name="settings_usb_exclusive_channel_compatibility">Channel compatibility</string>
     <string name="settings_usb_exclusive_channel_compatibility_desc">Fall back when the device cannot use the source channel count</string>
     <string name="settings_usb_exclusive_foreground_buffer">Foreground buffer</string>
@@ -1044,7 +1066,6 @@
     <string name="language_restart_message_bilingual">Language changed. Restart the app to apply it completely.\n语言已更改，需要重启应用以完全生效。</string>
     <string name="language_restart_now_bilingual">Restart now / 立即重启</string>
     <string name="language_restart_later_bilingual">Later / 稍后</string>
-    <string name="settings_sync_batch_update_time">Update every 10 minutes</string>
     <string name="settings_color_picker_hint">Long press color or tap × to delete custom color</string>
     <string name="settings_phone_number_hint">+86 Phone Number</string>
     <string name="settings_resend_code_countdown">Resend (%ds)</string>
@@ -1164,6 +1185,8 @@
     <string name="settings_motion_expand">Customize motion effects</string>
     <string name="settings_lyric_api_enabled">Third-party Lyrics API Integration</string>
     <string name="settings_lyric_api_enabled_desc">Provide Lyricon and SuperLyric with the current song, playback state, position, word-level lyrics, and translations</string>
+    <string name="settings_amll_lyrics_enabled">Use AMLL Database</string>
+    <string name="settings_amll_lyrics_enabled_desc">When platform lyrics are not word-level, try matching word-level lyrics from the AMLL TTML database</string>
     <string name="settings_external_bluetooth_lyrics_enabled">External Bluetooth Lyrics</string>
     <string name="settings_external_bluetooth_lyrics_enabled_desc">When a Bluetooth device is connected, sync the current lyric line to the device song info area</string>
     <string name="settings_lyrics_offset">Lyrics Settings</string>
@@ -1327,7 +1350,6 @@
     <string name="sync_initial_uploaded">Initial Data Uploaded</string>
     <string name="sync_history_frequency">Sync Frequency</string>
     <string name="sync_after_play">After Each Play</string>
-    <string name="sync_batch_update">Batch Update</string>
     <string name="sync_configured">Configured</string>
     <string name="sync_not_configured">Not Configured</string>
     <string name="sync_config">Configure</string>
@@ -1354,7 +1376,8 @@
     <string name="sync_last_time">Last sync: %s</string>
     <string name="sync_frequency_desc">Sync frequency:</string>
     <string name="sync_after_play_desc">After each play</string>
-    <string name="sync_batch_update_desc">Every 10 minutes</string>
+    <string name="sync_every_minutes">Every %1$d minutes</string>
+    <string name="sync_every_minutes_desc">Wait at least %1$d minutes between automatic play history syncs</string>
     <string name="sync_step1_token">Step 1: Enter GitHub Token</string>
     <string name="sync_create_token">Create Token on GitHub</string>
     <string name="sync_step2_repo">Step 2: Select Repository</string>
@@ -1411,6 +1434,7 @@
     <string name="settings_sync_now">Sync Now</string>
     <string name="settings_play_history_update_freq">Play History Update Frequency</string>
     <string name="settings_update_immediate">Immediate Update</string>
+    <string name="settings_update_every_minutes">Update every %1$d minutes</string>
     <string name="settings_data_saver">Data Saver</string>
     <string name="github_auto_sync">GitHub Auto Sync</string>
     <string name="github_sync_warning_title">GitHub Sync Configuration Warning</string>

@@ -74,12 +74,15 @@ import moe.ouom.neriplayer.core.player.lifecycle.ensureInitializedImpl
 import moe.ouom.neriplayer.core.player.lifecycle.handleAudioBecomingNoisyImpl
 import moe.ouom.neriplayer.core.player.lifecycle.initializeImpl
 import moe.ouom.neriplayer.core.player.lifecycle.releaseImpl
+import moe.ouom.neriplayer.core.player.lifecycle.scheduleUsbAudioSinkReconfiguration
 import moe.ouom.neriplayer.core.player.lifecycle.updateAudioOffloadPreferences
 import moe.ouom.neriplayer.core.player.lyrics.syncExternalBluetoothLyrics
 import moe.ouom.neriplayer.core.player.model.AudioDevice
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_PITCH
 import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_SPEED
+import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_VOLUME_BALANCE
+import moe.ouom.neriplayer.core.player.model.DEFAULT_PLAYBACK_VOLUME_NORMALIZATION_ENABLED
 import moe.ouom.neriplayer.core.player.model.PersistedPlaybackState
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioInfo
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
@@ -93,6 +96,7 @@ import moe.ouom.neriplayer.core.player.metadata.NeteaseLyricsCacheEntry
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackSpeed
+import moe.ouom.neriplayer.core.player.model.normalizePlaybackVolumeBalance
 import moe.ouom.neriplayer.core.player.debug.UsbExclusiveDebugLogger
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommand
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommandSource
@@ -172,6 +176,7 @@ import moe.ouom.neriplayer.core.player.url.refreshCurrentSongUrlImpl
 import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathState
 import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathTracker
 import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveSessionController
+import moe.ouom.neriplayer.core.player.usb.transport.usbRuntimeMetrics
 import moe.ouom.neriplayer.core.player.watchdog.cancelPlaybackStartupWatchdog
 import moe.ouom.neriplayer.core.player.watchdog.clearActivePlaybackCandidates
 import moe.ouom.neriplayer.core.player.watchdog.shouldTreatReadyAtStartAsUnhealthyPrepared
@@ -317,7 +322,10 @@ object PlayerManager {
     internal var playbackCrossfadeOutDurationMs = DEFAULT_FADE_DURATION_MS
     @Volatile
     internal var playbackSoundConfig = PlaybackSoundConfig()
+    internal var playbackHighResolutionOutputEnabled = false
     internal var lyriconEnabled = false
+    @Volatile
+    internal var amllLyricsEnabled = false
     internal var statusBarLyricsEnable = false
     internal var externalBluetoothLyricsEnabled = false
     internal var floatingLyricsEnabled = false
@@ -500,8 +508,14 @@ object PlayerManager {
     internal var playbackRequestToken = 0L
     @Volatile
     internal var loadedMediaRequestToken = 0L
+    internal val _pendingMediaLoadFlow = MutableStateFlow(false)
+    val pendingMediaLoadFlow: StateFlow<Boolean> = _pendingMediaLoadFlow
     @Volatile
     internal var pendingMediaLoadActive = false
+        set(value) {
+            field = value
+            _pendingMediaLoadFlow.value = value
+        }
     @Volatile
     internal var pendingMediaLoadPositionMs = 0L
     internal var activePlaybackCandidates: List<PlaybackUrlCandidate> = emptyList()
@@ -525,6 +539,7 @@ object PlayerManager {
     val cloudMusicSearchApi by lazy { AppContainer.cloudMusicSearchApi }
     val qqMusicSearchApi by lazy { AppContainer.qqMusicSearchApi }
     val lrcLibClient by lazy { AppContainer.lrcLibClient }
+    val amllTtmlClient by lazy { AppContainer.amllTtmlClient }
 
     // YouTube Music 歌词缓存，避免短时间内重复请求
     internal val ytMusicLyricsCache = android.util.LruCache<String, List<LyricEntry>>(20)
@@ -849,13 +864,15 @@ object PlayerManager {
         if (!usbExclusivePlaybackEnabled || allowMixedPlaybackEnabled) return false
         val pathState = UsbExclusiveAudioPathTracker.state.value
         val nativeState = UsbExclusiveSessionController.state.value
+        val metrics = nativeState.runtimeReport.usbRuntimeMetrics()
         return pathState.effectivePath == UsbExclusiveAudioPathState.EFFECTIVE_NATIVE_USB &&
             pathState.sinkPlaying &&
             pathState.fallbackReason == null &&
             nativeState.source == "player_pcm" &&
             nativeState.opened &&
             nativeState.streaming &&
-            !nativeState.transitioning
+            !nativeState.transitioning &&
+            metrics.hasHealthyTransport
     }
 
     internal fun isUsbExclusivePlaybackActiveForForegroundService(): Boolean {
@@ -1371,6 +1388,43 @@ object PlayerManager {
         )
     }
 
+    fun setPlaybackVolumeBalance(balance: Float, persist: Boolean = true) {
+        ensureInitialized()
+        applyPlaybackSoundConfig(
+            playbackSoundConfig.copy(
+                volumeBalance = normalizePlaybackVolumeBalance(balance)
+            ),
+            persist = persist
+        )
+    }
+
+    fun setPlaybackVolumeNormalizationEnabled(enabled: Boolean, persist: Boolean = true) {
+        ensureInitialized()
+        applyPlaybackSoundConfig(
+            playbackSoundConfig.copy(volumeNormalizationEnabled = enabled),
+            persist = persist
+        )
+    }
+
+    fun setPlaybackHighResolutionOutputEnabled(enabled: Boolean, persist: Boolean = true) {
+        ensureInitialized()
+        if (playbackHighResolutionOutputEnabled == enabled) return
+        playbackHighResolutionOutputEnabled = enabled
+        updateAudioOffloadPreferences("playback_high_resolution_output")
+        if (persist) {
+            ioScope.launch {
+                settingsRepo.setPlaybackHighResolutionOutputEnabled(enabled)
+            }
+        }
+        if (usbExclusivePlaybackEnabled) {
+            scheduleUsbAudioSinkReconfiguration(
+                reason = "playback_high_resolution_output_changed",
+                allowWhilePlaybackActive = true,
+                bypassCooldown = true
+            )
+        }
+    }
+
     fun setPlaybackEqualizerEnabled(enabled: Boolean, persist: Boolean = true) {
         ensureInitialized()
         applyPlaybackSoundConfig(
@@ -1417,6 +1471,8 @@ object PlayerManager {
                 speed = DEFAULT_PLAYBACK_SPEED,
                 pitch = DEFAULT_PLAYBACK_PITCH,
                 loudnessGainMb = DEFAULT_PLAYBACK_LOUDNESS_GAIN_MB,
+                volumeBalance = DEFAULT_PLAYBACK_VOLUME_BALANCE,
+                volumeNormalizationEnabled = DEFAULT_PLAYBACK_VOLUME_NORMALIZATION_ENABLED,
                 equalizerEnabled = false,
                 presetId = PlaybackEqualizerPresetId.FLAT,
                 customBandLevelsMb = emptyList()
@@ -1433,7 +1489,8 @@ object PlayerManager {
         playbackSoundConfig = newConfig.copy(
             speed = normalizePlaybackSpeed(newConfig.speed),
             pitch = normalizePlaybackPitch(newConfig.pitch),
-            loudnessGainMb = normalizePlaybackLoudnessGainMb(newConfig.loudnessGainMb)
+            loudnessGainMb = normalizePlaybackLoudnessGainMb(newConfig.loudnessGainMb),
+            volumeBalance = normalizePlaybackVolumeBalance(newConfig.volumeBalance)
         )
         schedulePlaybackSoundConfigApply(
             previousConfig = previousConfig,
@@ -1477,7 +1534,8 @@ object PlayerManager {
         val normalizedConfig = newConfig.copy(
             speed = normalizePlaybackSpeed(newConfig.speed),
             pitch = normalizePlaybackPitch(newConfig.pitch),
-            loudnessGainMb = normalizePlaybackLoudnessGainMb(newConfig.loudnessGainMb)
+            loudnessGainMb = normalizePlaybackLoudnessGainMb(newConfig.loudnessGainMb),
+            volumeBalance = normalizePlaybackVolumeBalance(newConfig.volumeBalance)
         )
         if (normalizedConfig == playbackSoundConfig) return
         applyPlaybackSoundConfig(normalizedConfig, persist = false)
@@ -1490,6 +1548,8 @@ object PlayerManager {
             settingsRepo.setPlaybackSpeed(config.speed)
             settingsRepo.setPlaybackPitch(config.pitch)
             settingsRepo.setPlaybackLoudnessGainMb(config.loudnessGainMb)
+            settingsRepo.setPlaybackVolumeBalance(config.volumeBalance)
+            settingsRepo.setPlaybackVolumeNormalizationEnabled(config.volumeNormalizationEnabled)
             settingsRepo.setPlaybackEqualizerEnabled(config.equalizerEnabled)
             settingsRepo.setPlaybackEqualizerPreset(config.presetId)
             settingsRepo.setPlaybackEqualizerCustomBandLevels(config.customBandLevelsMb)
@@ -2011,8 +2071,9 @@ object PlayerManager {
     fun replaceMetadataFromSearch(
         originalSong: SongItem,
         selectedSong: SongSearchInfo,
-        isAuto: Boolean = false
-    ) = replaceMetadataFromSearchImpl(originalSong, selectedSong, isAuto)
+        isAuto: Boolean = false,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) = replaceMetadataFromSearchImpl(originalSong, selectedSong, isAuto, onComplete)
 
     fun updateSongCustomInfo(
         originalSong: SongItem,
