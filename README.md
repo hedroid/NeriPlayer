@@ -118,7 +118,7 @@ NeriPlayer 是一个基于 **Jetpack Compose + Media3** 的原生 Android
   Bilibili 音源兜底；播放异常时还会刷新当前链接，连续失败再跳过或停止。
 - **GLSL/AGSL 高性能流体背景**：
   播放页动态背景由 `BgEffectPainter` 加载
-  `assets/hyper_background_effect.glsl` 并通过 `RuntimeShader` 逐帧渲染；
+  `assets/shaders/hyper_background_effect.glsl` 并通过 `RuntimeShader` 逐帧渲染；
   shader 内部基于封面取色、动态色块和轻量颗粒噪声生成流体背景，
   并接入 `uMusicLevel / uBeat` 做音频响应，不是简单把封面做高斯模糊。
 - **仿 Apple Music 的深度歌词体验**：
@@ -175,8 +175,11 @@ NeriPlayer 是一个基于 **Jetpack Compose + Media3** 的原生 Android
 - **高个性化，不只是换主题色**：
   设置 schema 由 `AutoSettingsSchema` 管理，覆盖动态取色、种子色、
   主题风格、自动/浅色/深色模式、UI 缩放、自定义背景、歌词字号、
-  歌词模糊、播放页流体背景、首页卡片开关、默认启动页、触感反馈，
+  歌词模糊、播放页流体背景、两级高级模糊、首页卡片开关、默认启动页、触感反馈，
   以及歌曲自定义名称、歌手和封面等细粒度选项。
+  “进阶高级模糊”默认关闭，仅在 Android 13+ 且父级高级模糊开启时可用；
+  它会增强屏幕级顶部 Tab、底部 Tab 和设置结构卡片的实时玻璃材质，
+  并提供 `12-64 dp` 的模糊度调节，不改变文字、图标、布局与点击区域。
 - **ANR、崩溃和安全模式都纳入诊断闭环**：
   `AnrWatchdog` 会读取 Android `ApplicationExitInfo.REASON_ANR` 并保存系统
   ANR trace；`ExceptionHandler` 与 `NativeCrashHandler` 分别记录 JVM 和
@@ -249,6 +252,7 @@ NeriPlayer 是一个基于 **Jetpack Compose + Media3** 的原生 Android
   首页歌单与歌曲货架。
 - 🗂️ **媒体库分类浏览**：
   `Library` 提供本地、收藏、网易云、YouTube Music、Bilibili 等入口；
+  可在“设置 > 通用”中完全禁用 YouTube，关闭后不会展示相关入口或执行后台预热；
   本地页支持歌单/歌手切换、搜索、歌手排序，收藏页支持歌单/歌手切换，
   网易云页支持歌单/专辑切换，Bilibili 页区分创建收藏夹、订阅收藏夹和合集。
 - 🔍 **分层搜索能力**：
@@ -333,13 +337,16 @@ NeriPlayer 是一个基于 **Jetpack Compose + Media3** 的原生 Android
   可选共享房主解析直链、邀请链接、深链加入、自定义服务端和房主离线检测。
 - 🌈 **个性化与主题**：
   支持自动/浅色/深色模式、动态取色、种子色、主题风格、UI 缩放、
-  自定义背景图、触感反馈、歌词字号、歌词模糊、默认启动页和首页卡片开关。
+  自定义背景图、触感反馈、歌词字号、歌词模糊、默认启动页和首页卡片开关；
+  Android 13+ 还可按需开启默认关闭的“进阶高级模糊”，增强顶部/底部 Tab
+  与设置结构卡片材质；模糊度可在 `12-64 dp` 间调节，父级关闭时会保留
+  子级选择和模糊度但停止进阶绘制。
 - ✨ **播放页动效与歌词**：
   支持 `RuntimeShader` / GLSL 流体背景、音频反应式动态背景、封面模糊背景、
   仿 Apple Music 歌词、高级歌词、逐词歌词、翻译歌词、歌词偏移、
   音译显示、歌词长按分享、歌词卡片生成、歌词编辑、歌词字体调节、
   歌词触感反馈和 Lyrics 全屏页。RuntimeShader 动态背景仅在 Android 13+
-  启用，封面/高级模糊仅在 Android 12+ 启用，低版本会降级。
+  启用；封面模糊需要 Android 12+，高级模糊需要 Android 13+，低版本会降级。
 - 👆 **迷你播放器手势**：
   底部 Mini Player 支持横向滑动切换上一首/下一首，同时保留点击展开与播放暂停。
 - 🪟 **悬浮歌词与状态栏歌词**：

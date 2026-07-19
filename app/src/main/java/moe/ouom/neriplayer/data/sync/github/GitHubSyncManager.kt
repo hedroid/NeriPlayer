@@ -43,6 +43,23 @@ import moe.ouom.neriplayer.data.model.identity
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.stats.PlaybackStatsRepository
 import moe.ouom.neriplayer.data.sync.SyncCoordinator
+import moe.ouom.neriplayer.data.sync.model.ConflictResolution
+import moe.ouom.neriplayer.data.sync.model.ConflictType
+import moe.ouom.neriplayer.data.sync.model.CURRENT_SYNC_METADATA_VERSION
+import moe.ouom.neriplayer.data.sync.model.SyncConflict
+import moe.ouom.neriplayer.data.sync.model.SyncData
+import moe.ouom.neriplayer.data.sync.model.SyncFavoritePlaylist
+import moe.ouom.neriplayer.data.sync.model.SyncPlaybackStatBucket
+import moe.ouom.neriplayer.data.sync.model.SyncPlaylist
+import moe.ouom.neriplayer.data.sync.model.SyncPlaylistSongDeletion
+import moe.ouom.neriplayer.data.sync.model.SyncRecentPlay
+import moe.ouom.neriplayer.data.sync.model.SyncRecentPlayDeletion
+import moe.ouom.neriplayer.data.sync.model.SyncResult
+import moe.ouom.neriplayer.data.sync.model.SyncSong
+import moe.ouom.neriplayer.data.sync.model.SyncTrackStat
+import moe.ouom.neriplayer.data.sync.model.copyWithNormalizedMembershipTokens
+import moe.ouom.neriplayer.data.sync.model.hasResolvableSyncIdentity
+import moe.ouom.neriplayer.data.sync.model.mergePositiveTimestamp
 import moe.ouom.neriplayer.util.platform.LanguageManager
 import moe.ouom.neriplayer.core.logging.NPLogger
 import java.io.IOException
@@ -306,7 +323,8 @@ class GitHubSyncManager private constructor(context: Context) {
                         originalArtist = playedEntry.originalArtist,
                         originalCoverUrl = playedEntry.originalCoverUrl,
                         originalLyric = playedEntry.originalLyric,
-                        originalTranslatedLyric = playedEntry.originalTranslatedLyric
+                        originalTranslatedLyric = playedEntry.originalTranslatedLyric,
+                        syncMetadataVersion = CURRENT_SYNC_METADATA_VERSION
                     ),
                     playedAt = playedEntry.playedAt,
                     deviceId = getDeviceId()
@@ -620,7 +638,7 @@ class GitHubSyncManager private constructor(context: Context) {
                 id = resolvedPlaylistId,
                 name = finalName,
                 songs = mergedSongs,
-                createdAt = minOf(local.createdAt, remote.createdAt),
+                createdAt = mergePositiveTimestamp(local.createdAt, remote.createdAt),
                 modifiedAt = maxOf(local.modifiedAt, remote.modifiedAt),
                 songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION
             ),
@@ -761,7 +779,7 @@ class GitHubSyncManager private constructor(context: Context) {
             id = systemDescriptor?.id ?: local.id,
             name = resolvedName,
             songs = emptyList(),
-            createdAt = minOf(local.createdAt, remote.createdAt),
+            createdAt = mergePositiveTimestamp(local.createdAt, remote.createdAt),
             modifiedAt = maxOf(local.modifiedAt, remote.modifiedAt),
             isDeleted = true,
             songOrderVersion = DISPLAY_ORDER_SONG_ORDER_VERSION

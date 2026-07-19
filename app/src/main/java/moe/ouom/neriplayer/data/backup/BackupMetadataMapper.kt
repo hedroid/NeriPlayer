@@ -6,10 +6,11 @@ import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.stats.PlaybackStatBucket
 import moe.ouom.neriplayer.data.stats.TrackStat
 import moe.ouom.neriplayer.data.sync.github.SyncPlaybackStatMapper
-import moe.ouom.neriplayer.data.sync.github.SyncPlaybackStatBucket
-import moe.ouom.neriplayer.data.sync.github.SyncRecentPlay
-import moe.ouom.neriplayer.data.sync.github.SyncSong
-import moe.ouom.neriplayer.data.sync.github.SyncTrackStat
+import moe.ouom.neriplayer.data.sync.model.CURRENT_SYNC_METADATA_VERSION
+import moe.ouom.neriplayer.data.sync.model.SyncPlaybackStatBucket
+import moe.ouom.neriplayer.data.sync.model.SyncRecentPlay
+import moe.ouom.neriplayer.data.sync.model.SyncSong
+import moe.ouom.neriplayer.data.sync.model.SyncTrackStat
 
 internal object BackupMetadataMapper {
     private const val BACKUP_DEVICE_ID = "manual_backup"
@@ -50,7 +51,8 @@ internal object BackupMetadataMapper {
                 originalArtist = entry.originalArtist,
                 originalCoverUrl = entry.originalCoverUrl,
                 originalLyric = entry.originalLyric,
-                originalTranslatedLyric = entry.originalTranslatedLyric
+                originalTranslatedLyric = entry.originalTranslatedLyric,
+                syncMetadataVersion = CURRENT_SYNC_METADATA_VERSION
             ),
             playedAt = entry.playedAt,
             deviceId = BACKUP_DEVICE_ID

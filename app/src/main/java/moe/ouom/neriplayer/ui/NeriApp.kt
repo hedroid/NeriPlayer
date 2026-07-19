@@ -38,18 +38,19 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.EaseInOutCubic
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +63,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -111,12 +113,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -131,11 +136,6 @@ import coil.size.Precision
 import com.google.gson.Gson
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
-import dev.chrisbanes.haze.HazeDefaults
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.HazeStyle
-import dev.chrisbanes.haze.haze
-import dev.chrisbanes.haze.hazeChild
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -165,6 +165,7 @@ import moe.ouom.neriplayer.data.model.displayCoverUrl
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
+import moe.ouom.neriplayer.data.settings.DEFAULT_ENHANCED_ADVANCED_BLUR_RADIUS_DP
 import moe.ouom.neriplayer.data.settings.FloatingLyricsPreferences
 import moe.ouom.neriplayer.data.settings.PlaybackPreferenceSnapshot
 import moe.ouom.neriplayer.data.settings.ThemeDefaults
@@ -179,6 +180,13 @@ import moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayer
 import moe.ouom.neriplayer.ui.component.playback.resolvePlaybackWaiting
 import moe.ouom.neriplayer.ui.component.common.ThemeRevealOverlay
 import moe.ouom.neriplayer.ui.component.common.blockUnderlyingTouches
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassController
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassHost
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassNavigationHandoff
+import moe.ouom.neriplayer.ui.effect.glass.advancedGlassMainTabTransitionSpec
+import moe.ouom.neriplayer.ui.effect.glass.captureAdvancedGlassBackdrop
+import moe.ouom.neriplayer.ui.effect.glass.isAdvancedGlassBackendSupported
+import moe.ouom.neriplayer.ui.effect.glass.rememberAdvancedGlassBackdrop
 import moe.ouom.neriplayer.ui.screen.DownloadManagerScreen
 import moe.ouom.neriplayer.ui.screen.DownloadProgressScreen
 import moe.ouom.neriplayer.ui.screen.NowPlayingScreen
@@ -235,6 +243,307 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val navigationGson: Gson by lazy(LazyThreadSafetyMode.PUBLICATION) { Gson() }
+private val MAIN_TAB_ROUTES = listOf(
+    Destinations.Home.route,
+    Destinations.Explore.route,
+    Destinations.Library.route,
+    Destinations.Settings.route,
+    Destinations.Debug.route
+)
+private val TRANSPARENT_MAIN_TAB_DETAIL_ROUTES = setOf(
+    Destinations.PlaylistDetail.route,
+    Destinations.NeteaseAlbumDetail.route,
+    Destinations.NeteaseArtistDetail.route,
+    Destinations.BiliPlaylistDetail.route,
+    Destinations.LocalPlaylistDetail.route,
+    Destinations.Recent.route,
+    Destinations.PlaybackStats.route,
+    Destinations.DownloadManager.route,
+    Destinations.DownloadProgress.route
+)
+private val DEBUG_NAVIGATION_DEPTH_BY_ROUTE = mapOf(
+    Destinations.Debug.route to 0,
+    Destinations.DebugListenTogether.route to 1,
+    Destinations.DebugUsbExclusive.route to 1,
+    Destinations.DebugYouTube.route to 1,
+    Destinations.DebugBili.route to 1,
+    Destinations.DebugNetease.route to 1,
+    Destinations.DebugSearch.route to 1,
+    Destinations.DebugLogsList.route to 1,
+    Destinations.DebugCrashLogsList.route to 1,
+    Destinations.DebugLogViewer.route to 2
+)
+
+internal const val MAIN_TAB_DETAIL_OPEN_DURATION_MS = 220
+internal const val MAIN_TAB_DETAIL_CLOSE_DURATION_MS = 240
+internal const val DEBUG_NAVIGATION_OPEN_DURATION_MS = 220
+internal const val DEBUG_NAVIGATION_CLOSE_DURATION_MS = 240
+
+internal enum class MainTabDetailHandoff {
+    OPEN_DETAIL,
+    RETURN_TO_TAB
+}
+
+internal fun resolveMainTabTransitionDirection(
+    initialRoute: String?,
+    targetRoute: String?
+): Int? {
+    val initialIndex = MAIN_TAB_ROUTES.indexOf(initialRoute).takeIf { it >= 0 } ?: return null
+    val targetIndex = MAIN_TAB_ROUTES.indexOf(targetRoute).takeIf { it >= 0 } ?: return null
+    if (initialIndex == targetIndex) return null
+    return if (targetIndex > initialIndex) 1 else -1
+}
+
+internal fun resolveMainTabDetailHandoff(
+    initialRoute: String?,
+    targetRoute: String?
+): MainTabDetailHandoff? {
+    if (initialRoute == null || targetRoute == null) return null
+    val initialIsMainTab = initialRoute in MAIN_TAB_ROUTES
+    val targetIsMainTab = targetRoute in MAIN_TAB_ROUTES
+    return when {
+        initialIsMainTab && targetRoute in TRANSPARENT_MAIN_TAB_DETAIL_ROUTES ->
+            MainTabDetailHandoff.OPEN_DETAIL
+        initialRoute in TRANSPARENT_MAIN_TAB_DETAIL_ROUTES && targetIsMainTab ->
+            MainTabDetailHandoff.RETURN_TO_TAB
+        else -> null
+    }
+}
+
+internal fun resolveDebugNavigationTransitionDirection(
+    initialRoute: String?,
+    targetRoute: String?
+): Int? {
+    val initialDepth = DEBUG_NAVIGATION_DEPTH_BY_ROUTE[initialRoute] ?: return null
+    val targetDepth = DEBUG_NAVIGATION_DEPTH_BY_ROUTE[targetRoute] ?: return null
+    if (initialDepth == targetDepth) return null
+    return if (targetDepth > initialDepth) 1 else -1
+}
+
+internal data class BottomBarLayoutInsets(
+    val navContentBottomPadding: Dp,
+    val screenBottomInset: Dp,
+    val miniPlayerBottomPadding: Dp
+)
+
+internal fun resolveBottomBarLayoutInsets(
+    baseBlurRequested: Boolean,
+    bottomBarInset: Dp,
+    reservedMiniPlayerHeight: Dp
+): BottomBarLayoutInsets = if (baseBlurRequested) {
+    BottomBarLayoutInsets(
+        navContentBottomPadding = 0.dp,
+        screenBottomInset = reservedMiniPlayerHeight + bottomBarInset,
+        miniPlayerBottomPadding = bottomBarInset
+    )
+} else {
+    BottomBarLayoutInsets(
+        navContentBottomPadding = bottomBarInset,
+        screenBottomInset = reservedMiniPlayerHeight,
+        miniPlayerBottomPadding = 0.dp
+    )
+}
+
+internal fun resolveMainTabDetailContentOffsetTarget(route: String?): Float {
+    return if (route in TRANSPARENT_MAIN_TAB_DETAIL_ROUTES) {
+        -1f
+    } else {
+        0f
+    }
+}
+
+internal fun resolveMainTabDetailContentOffsetDurationMillis(targetOffset: Float): Int {
+    return if (targetOffset < 0f) {
+        MAIN_TAB_DETAIL_OPEN_DURATION_MS
+    } else {
+        MAIN_TAB_DETAIL_CLOSE_DURATION_MS
+    }
+}
+
+internal fun mainTabDetailContentOffsetEasing(): Easing = FastOutSlowInEasing
+
+internal fun shouldReleaseStartupGlassGate(
+    baseBlurEnabled: Boolean,
+    backgroundEffectReady: Boolean,
+    contentEffectReady: Boolean
+): Boolean {
+    return !baseBlurEnabled || backgroundEffectReady || contentEffectReady
+}
+
+internal fun shouldShowStartupGlassGate(
+    baseBlurEnabled: Boolean,
+    gateReleased: Boolean,
+    backgroundEffectReady: Boolean,
+    contentEffectReady: Boolean
+): Boolean {
+    return baseBlurEnabled &&
+        !gateReleased &&
+        !backgroundEffectReady &&
+        !contentEffectReady
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.mainTabEnterTransition(): EnterTransition {
+    val initialRoute = initialState.destination.route
+    val targetRoute = targetState.destination.route
+    val direction = resolveMainTabTransitionDirection(
+        initialRoute = initialRoute,
+        targetRoute = targetRoute
+    )
+    if (direction != null) {
+        return slideIntoContainer(
+            towards = if (direction > 0) {
+                AnimatedContentTransitionScope.SlideDirection.Left
+            } else {
+                AnimatedContentTransitionScope.SlideDirection.Right
+            },
+            animationSpec = advancedGlassMainTabTransitionSpec()
+        )
+    }
+    val debugDirection = resolveDebugNavigationTransitionDirection(
+        initialRoute = initialRoute,
+        targetRoute = targetRoute
+    )
+    if (debugDirection != null) {
+        return debugNavigationEnterTransition(debugDirection)
+    }
+    return if (
+        resolveMainTabDetailHandoff(initialRoute, targetRoute) ==
+        MainTabDetailHandoff.RETURN_TO_TAB
+    ) {
+        slideInVertically(
+            animationSpec = tween(
+                durationMillis = MAIN_TAB_DETAIL_CLOSE_DURATION_MS,
+                easing = mainTabDetailContentOffsetEasing()
+            )
+        ) { fullHeight -> -fullHeight }
+    } else {
+        EnterTransition.None
+    }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.mainTabExitTransition(): ExitTransition {
+    val initialRoute = initialState.destination.route
+    val targetRoute = targetState.destination.route
+    val direction = resolveMainTabTransitionDirection(
+        initialRoute = initialRoute,
+        targetRoute = targetRoute
+    )
+    if (direction != null) {
+        return slideOutOfContainer(
+            towards = if (direction > 0) {
+                AnimatedContentTransitionScope.SlideDirection.Left
+            } else {
+                AnimatedContentTransitionScope.SlideDirection.Right
+            },
+            animationSpec = advancedGlassMainTabTransitionSpec()
+        )
+    }
+    val debugDirection = resolveDebugNavigationTransitionDirection(
+        initialRoute = initialRoute,
+        targetRoute = targetRoute
+    )
+    if (debugDirection != null) {
+        return debugNavigationExitTransition(debugDirection)
+    }
+    return if (
+        resolveMainTabDetailHandoff(initialRoute, targetRoute) ==
+        MainTabDetailHandoff.OPEN_DETAIL
+    ) {
+        slideOutVertically(
+            animationSpec = tween(
+                durationMillis = MAIN_TAB_DETAIL_OPEN_DURATION_MS,
+                easing = mainTabDetailContentOffsetEasing()
+            )
+        ) { fullHeight -> -fullHeight }
+    } else {
+        ExitTransition.None
+    }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.transparentDetailEnterTransition(): EnterTransition {
+    return slideInVertically(
+        animationSpec = tween(
+            durationMillis = MAIN_TAB_DETAIL_OPEN_DURATION_MS,
+            easing = mainTabDetailContentOffsetEasing()
+        )
+    ) { fullHeight -> fullHeight }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.transparentDetailExitTransition(): ExitTransition {
+    val handoff = resolveMainTabDetailHandoff(
+        initialRoute = initialState.destination.route,
+        targetRoute = targetState.destination.route
+    )
+    return if (handoff == MainTabDetailHandoff.RETURN_TO_TAB) {
+        slideOutVertically(
+            animationSpec = tween(
+                durationMillis = MAIN_TAB_DETAIL_CLOSE_DURATION_MS,
+                easing = mainTabDetailContentOffsetEasing()
+            )
+        ) { fullHeight -> fullHeight }
+    } else {
+        slideOutVertically(
+            animationSpec = tween(
+                durationMillis = MAIN_TAB_DETAIL_OPEN_DURATION_MS,
+                easing = mainTabDetailContentOffsetEasing()
+            )
+        ) { fullHeight -> -fullHeight }
+    }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.transparentDetailPopEnterTransition(): EnterTransition {
+    return slideInVertically(
+        animationSpec = tween(
+            durationMillis = MAIN_TAB_DETAIL_CLOSE_DURATION_MS,
+            easing = mainTabDetailContentOffsetEasing()
+        )
+    ) { fullHeight -> -fullHeight }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.transparentDetailPopExitTransition(): ExitTransition {
+    return slideOutVertically(
+        animationSpec = tween(
+            durationMillis = MAIN_TAB_DETAIL_CLOSE_DURATION_MS,
+            easing = mainTabDetailContentOffsetEasing()
+        )
+    ) { fullHeight -> fullHeight }
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.debugNavigationEnterTransition(): EnterTransition {
+    val direction = resolveDebugNavigationTransitionDirection(
+        initialRoute = initialState.destination.route,
+        targetRoute = targetState.destination.route
+    ) ?: return EnterTransition.None
+    return debugNavigationEnterTransition(direction)
+}
+
+internal fun AnimatedContentTransitionScope<NavBackStackEntry>.debugNavigationExitTransition(): ExitTransition {
+    val direction = resolveDebugNavigationTransitionDirection(
+        initialRoute = initialState.destination.route,
+        targetRoute = targetState.destination.route
+    ) ?: return ExitTransition.None
+    return debugNavigationExitTransition(direction)
+}
+
+private fun debugNavigationEnterTransition(direction: Int): EnterTransition {
+    return slideInVertically(
+        animationSpec = tween(debugNavigationDurationMs(direction))
+    ) { fullHeight -> direction * fullHeight }
+}
+
+private fun debugNavigationExitTransition(direction: Int): ExitTransition {
+    return slideOutVertically(
+        animationSpec = tween(debugNavigationDurationMs(direction))
+    ) { fullHeight -> -direction * fullHeight }
+}
+
+private fun debugNavigationDurationMs(direction: Int): Int {
+    return if (direction > 0) {
+        DEBUG_NAVIGATION_OPEN_DURATION_MS
+    } else {
+        DEBUG_NAVIGATION_CLOSE_DURATION_MS
+    }
+}
 
 private fun resolveMainStartDestination(
     preferredRoute: String,
@@ -488,7 +797,6 @@ private fun UsbExclusiveBackgroundPermissionDialog(
 private const val THEME_REVEAL_SNAPSHOT_MAX_DIMENSION_PX = 1080
 private const val THEME_REVEAL_STABLE_DRAW_PASSES = 1
 private val THEME_REVEAL_SNAPSHOT_CONFIG = Bitmap.Config.RGB_565
-private val ROOT_HAZE_BLUR_RADIUS = 24.dp
 
 internal data class ThemeRevealSnapshotDimensions(
     val width: Int,
@@ -760,7 +1068,7 @@ fun NeriApp(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(if (bootstrapIsDark) Color(0xFF121212) else Color.White)
+                .background(if (bootstrapIsDark) Color(0xFF121212) else Color(0xFFF4EFE7))
         )
         return
     }
@@ -768,6 +1076,29 @@ fun NeriApp(
     NeriAppContent(
         initialThemeSnapshot = initialThemeSnapshot,
         onIsDarkChanged = onIsDarkChanged
+    )
+}
+
+@Composable
+private fun StartupGlassGateOverlay(
+    isDark: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val baseColor = if (isDark) {
+        Color(0xFF101010)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val scrimColor = if (isDark) {
+        Color.Black.copy(alpha = 0.20f)
+    } else {
+        MaterialTheme.colorScheme.background.copy(alpha = 0.72f)
+    }
+    Box(
+        modifier = modifier
+            .background(baseColor)
+            .background(scrimColor)
+            .blockUnderlyingTouches()
     )
 }
 
@@ -831,7 +1162,13 @@ private fun NeriAppContent(
     )
     val advancedLyricsEnabled by repo.advancedLyricsEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val advancedBlurEnabled by repo.advancedBlurEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
-    val advancedBlurAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val enhancedAdvancedBlurEnabled by repo.enhancedAdvancedBlurEnabledFlow
+        .collectAsStateWithLifecycle(initialValue = false)
+    val enhancedAdvancedBlurRadiusDp by repo.enhancedAdvancedBlurRadiusDpFlow
+        .collectAsStateWithLifecycle(
+            initialValue = DEFAULT_ENHANCED_ADVANCED_BLUR_RADIUS_DP
+        )
+    val advancedBlurAvailable = isAdvancedGlassBackendSupported(Build.VERSION.SDK_INT)
     val effectiveAdvancedBlurEnabled = advancedBlurAvailable && advancedBlurEnabled
     val nowPlayingAudioReactiveEnabled by repo.nowPlayingAudioReactiveEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val nowPlayingDynamicBackgroundEnabled by repo.nowPlayingDynamicBackgroundEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
@@ -1139,7 +1476,41 @@ private fun NeriAppContent(
         mode = themeMode,
         systemDark = systemDark
     )
-    val hazeState = remember { HazeState() }
+    val backgroundGlassBackdrop = rememberAdvancedGlassBackdrop()
+    val contentGlassBackdrop = rememberAdvancedGlassBackdrop()
+    val advancedGlassController = remember(
+        advancedBlurEnabled,
+        enhancedAdvancedBlurEnabled,
+        enhancedAdvancedBlurRadiusDp
+    ) {
+        AdvancedGlassController(
+            sdkInt = Build.VERSION.SDK_INT,
+            advancedBlurEnabled = advancedBlurEnabled,
+            enhancedAdvancedBlurEnabled = enhancedAdvancedBlurEnabled,
+            backendReady = isAdvancedGlassBackendSupported(Build.VERSION.SDK_INT),
+            enhancedAdvancedBlurRadiusDp = enhancedAdvancedBlurRadiusDp
+        )
+    }
+    var startupGlassGateReleased by rememberSaveable {
+        mutableStateOf(!advancedGlassController.isBaseBlurEnabled)
+    }
+    val startupBackgroundGlassReady = backgroundGlassBackdrop.renderEffect != null
+    val startupContentGlassReady = contentGlassBackdrop.renderEffect != null
+    LaunchedEffect(
+        advancedGlassController.isBaseBlurEnabled,
+        startupBackgroundGlassReady,
+        startupContentGlassReady
+    ) {
+        if (
+            shouldReleaseStartupGlassGate(
+                baseBlurEnabled = advancedGlassController.isBaseBlurEnabled,
+                backgroundEffectReady = startupBackgroundGlassReady,
+                contentEffectReady = startupContentGlassReady
+            )
+        ) {
+            startupGlassGateReleased = true
+        }
+    }
     val preferredQuality by repo.audioQualityFlow.collectAsStateWithLifecycle(initialValue = "exhigh")
     val youtubePreferredQuality by repo.youtubeAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "high")
     val biliPreferredQuality by repo.biliAudioQualityFlow.collectAsStateWithLifecycle(initialValue = "high")
@@ -1395,7 +1766,88 @@ private fun NeriAppContent(
         ) {
             val navController = rememberNavController()
             val backEntry by navController.currentBackStackEntryAsState()
+            // Keep every NavHost entry that is still participating in the transition active
+            val visibleNavigationEntries by navController.visibleEntries
+                .collectAsStateWithLifecycle()
+            val visibleNavigationOwners: Set<Any> = remember(
+                visibleNavigationEntries,
+                backEntry,
+                lifecycleOwner
+            ) {
+                buildSet {
+                    if (visibleNavigationEntries.isNotEmpty()) {
+                        addAll(visibleNavigationEntries)
+                    } else {
+                        backEntry?.let(::add)
+                    }
+                    add(lifecycleOwner)
+                }
+            }
             val currentRoute = backEntry?.destination?.route
+            var mainTabDetailContentHeightPx by remember {
+                mutableIntStateOf(0)
+            }
+            val mainTabDetailContentOffsetTarget =
+                resolveMainTabDetailContentOffsetTarget(currentRoute)
+            val mainTabDetailContentOffsetFraction by animateFloatAsState(
+                targetValue = mainTabDetailContentOffsetTarget,
+                animationSpec = tween(
+                    durationMillis = resolveMainTabDetailContentOffsetDurationMillis(
+                        mainTabDetailContentOffsetTarget
+                    ),
+                    easing = mainTabDetailContentOffsetEasing()
+                ),
+                label = "main_tab_detail_content_handoff"
+            )
+            val showHomeTab =
+                (showHomeContinueCard && homeUsageEntries.isNotEmpty()) ||
+                    showHomeTrendingCard ||
+                    showHomeRadarCard ||
+                    showHomeRecommendedCard
+            val effectiveStartDestination = remember(
+                defaultStartDestination,
+                showHomeTab,
+                devModeEnabled
+            ) {
+                resolveMainStartDestination(
+                    preferredRoute = defaultStartDestination,
+                    showHomeTab = showHomeTab,
+                    devModeEnabled = devModeEnabled
+                )
+            }
+            // Changing NavHost's start destination rebuilds its graph and clears the live stack
+            val navHostStartDestination = remember { effectiveStartDestination }
+            var selectedMainTabRoute by rememberSaveable(navHostStartDestination) {
+                mutableStateOf(navHostStartDestination)
+            }
+            LaunchedEffect(currentRoute, navHostStartDestination) {
+                if (currentRoute in MAIN_TAB_ROUTES) {
+                    selectedMainTabRoute = currentRoute ?: navHostStartDestination
+                }
+            }
+            var visibleMainTabGlassOwners by remember(navHostStartDestination) {
+                mutableStateOf<Set<MainTabGlassOwner>>(
+                    setOf(MainTabGlassOwner(navHostStartDestination))
+                )
+            }
+            val activeAdvancedGlassOwners: Set<Any> = remember(
+                visibleNavigationOwners,
+                visibleMainTabGlassOwners,
+                selectedMainTabRoute
+            ) {
+                visibleNavigationOwners +
+                    visibleMainTabGlassOwners +
+                    MainTabGlassOwner(selectedMainTabRoute)
+            }
+            fun navigateToMainTab(route: String) {
+                navController.navigate(route) {
+                    popUpTo(navController.graph.startDestinationId) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
             fun navigateToNeteaseArtist(artist: NeteaseArtistSummary) {
                 val json = Uri.encode(navigationGson.toJson(artist))
                 val currentEntry = navController.currentBackStackEntry
@@ -1435,18 +1887,6 @@ private fun NeriAppContent(
                     showNowPlaying = true
                 }
             }
-            val showHomeTab =
-                (showHomeContinueCard && homeUsageEntries.isNotEmpty()) ||
-                    showHomeTrendingCard ||
-                    showHomeRadarCard ||
-                    showHomeRecommendedCard
-            val effectiveStartDestination = remember(defaultStartDestination, showHomeTab, devModeEnabled) {
-                resolveMainStartDestination(
-                    preferredRoute = defaultStartDestination,
-                    showHomeTab = showHomeTab,
-                    devModeEnabled = devModeEnabled
-                )
-            }
             val bottomBarItems = remember(showHomeTab, devModeEnabled) {
                 buildList {
                     if (showHomeTab) add(Destinations.Home to Icons.Outlined.Home)
@@ -1458,6 +1898,459 @@ private fun NeriAppContent(
             }
 
             val snackbarHostState = remember { SnackbarHostState() }
+
+            @Composable
+            fun RenderMainTabRoute(route: String) {
+                when (route) {
+                    Destinations.Home.route -> HomeHostScreen(
+                        showContinueCard = showHomeContinueCard,
+                        showTrendingCard = showHomeTrendingCard,
+                        showRadarCard = showHomeRadarCard,
+                        showRecommendedCard = showHomeRecommendedCard,
+                        offlineMode = offlineMode,
+                        onSongClick = ::playSongsAndOpenNowPlaying
+                    )
+
+                    Destinations.Explore.route -> ExploreHostScreen(
+                        offlineMode = offlineMode,
+                        onSongClick = ::playSongsAndOpenNowPlaying,
+                        onSongPlayPreservingQueue =
+                            ::playSongPreservingQueueAndOpenNowPlaying,
+                        onSongPlayNext = ::addSongToQueueNextFromSearch,
+                        onSongAddToQueueEnd = ::addSongToQueueEndFromSearch,
+                        onPlayParts = ::playBiliPartsAndOpenNowPlaying
+                    )
+
+                    Destinations.Library.route -> LibraryHostScreen(
+                        onSongClick = ::playSongsAndOpenNowPlaying,
+                        onPlayParts = ::playBiliPartsAndOpenNowPlaying,
+                        onOpenRecent = {
+                            navController.navigate(Destinations.Recent.route)
+                        },
+                        onOpenStats = {
+                            navController.navigate(Destinations.PlaybackStats.route)
+                        },
+                        offlineMode = offlineMode
+                    )
+
+                    Destinations.Settings.route -> SettingsHostScreen(
+                        dynamicColor = dynamicColorEnabled,
+                        onDynamicColorChange = { scope.launch { repo.setDynamicColor(it) } },
+                        isDarkTheme = isDark,
+                        themeMode = themeMode,
+                        onThemeToggleRequest = ::requestThemeToggle,
+                        onThemeModeRequest = ::requestThemeModeChange,
+                        preferredQuality = preferredQuality,
+                        onQualityChange = { scope.launch { repo.setAudioQuality(it) } },
+                        youtubePreferredQuality = youtubePreferredQuality,
+                        onYouTubeQualityChange = {
+                            scope.launch { repo.setYouTubeAudioQuality(it) }
+                        },
+                        biliPreferredQuality = biliPreferredQuality,
+                        onBiliQualityChange = { scope.launch { repo.setBiliAudioQuality(it) } },
+                        mobileDataFollowDefaultAudioQuality =
+                            mobileDataFollowDefaultAudioQuality,
+                        onMobileDataFollowDefaultAudioQualityChange = { enabled ->
+                            scope.launch {
+                                repo.setMobileDataFollowDefaultAudioQuality(enabled)
+                            }
+                        },
+                        mobileDataNeteaseAudioQuality = mobileDataNeteaseAudioQuality,
+                        onMobileDataNeteaseAudioQualityChange = { quality ->
+                            scope.launch {
+                                repo.setMobileDataNeteaseAudioQuality(quality)
+                            }
+                        },
+                        mobileDataYouTubeAudioQuality = mobileDataYouTubeAudioQuality,
+                        onMobileDataYouTubeAudioQualityChange = { quality ->
+                            scope.launch {
+                                repo.setMobileDataYouTubeAudioQuality(quality)
+                            }
+                        },
+                        mobileDataBiliAudioQuality = mobileDataBiliAudioQuality,
+                        onMobileDataBiliAudioQualityChange = { quality ->
+                            scope.launch {
+                                repo.setMobileDataBiliAudioQuality(quality)
+                            }
+                        },
+                        seedColorHex = themeSeedColor,
+                        onSeedColorChange = { hex ->
+                            scope.launch { repo.setThemeSeedColor(hex) }
+                        },
+                        themeColorPalette = themeColorPalette,
+                        onAddColorToPalette = { hex ->
+                            scope.launch { repo.addThemePaletteColor(hex) }
+                        },
+                        onRemoveColorFromPalette = { hex ->
+                            scope.launch { repo.removeThemePaletteColor(hex) }
+                        },
+                        themePaletteStyle = themePaletteStyleValue,
+                        onThemePaletteStyleChange = { style ->
+                            scope.launch { repo.setThemePaletteStyle(style) }
+                        },
+                        themeColorSpec = themeColorSpecValue,
+                        onThemeColorSpecChange = { spec ->
+                            scope.launch { repo.setThemeColorSpec(spec) }
+                        },
+                        devModeEnabled = devModeEnabled,
+                        onDevModeChange = { enabled ->
+                            scope.launch { repo.setDevModeEnabled(enabled) }
+                        },
+                        lyricBlurEnabled = lyricBlurEnabled,
+                        onLyricBlurEnabledChange = { enabled ->
+                            scope.launch { repo.setLyricBlurEnabled(enabled) }
+                        },
+                        lyricBlurAmount = lyricBlurAmount,
+                        onLyricBlurAmountChange = { amount ->
+                            scope.launch { repo.setLyricBlurAmount(amount) }
+                        },
+                        cloudMusicLyricDefaultOffsetMs = cloudMusicLyricDefaultOffsetMs,
+                        onCloudMusicLyricDefaultOffsetMsChange = { offsetMs ->
+                            scope.launch {
+                                val previousOffset = cloudMusicLyricDefaultOffsetMs
+                                if (previousOffset == offsetMs) {
+                                    return@launch
+                                }
+                                PlayerManager.rebaseUserLyricOffsetsForSource(
+                                    targetSource = MusicPlatform.CLOUD_MUSIC,
+                                    previousDefaultOffsetMs = previousOffset,
+                                    newDefaultOffsetMs = offsetMs
+                                )
+                                runCatching {
+                                    repo.setCloudMusicLyricDefaultOffsetMs(offsetMs)
+                                }.onFailure {
+                                    PlayerManager.rebaseUserLyricOffsetsForSource(
+                                        targetSource = MusicPlatform.CLOUD_MUSIC,
+                                        previousDefaultOffsetMs = offsetMs,
+                                        newDefaultOffsetMs = previousOffset
+                                    )
+                                }.getOrThrow()
+                            }
+                        },
+                        qqMusicLyricDefaultOffsetMs = qqMusicLyricDefaultOffsetMs,
+                        onQqMusicLyricDefaultOffsetMsChange = { offsetMs ->
+                            scope.launch {
+                                val previousOffset = qqMusicLyricDefaultOffsetMs
+                                if (previousOffset == offsetMs) {
+                                    return@launch
+                                }
+                                PlayerManager.rebaseUserLyricOffsetsForSource(
+                                    targetSource = MusicPlatform.QQ_MUSIC,
+                                    previousDefaultOffsetMs = previousOffset,
+                                    newDefaultOffsetMs = offsetMs
+                                )
+                                runCatching {
+                                    repo.setQqMusicLyricDefaultOffsetMs(offsetMs)
+                                }.onFailure {
+                                    PlayerManager.rebaseUserLyricOffsetsForSource(
+                                        targetSource = MusicPlatform.QQ_MUSIC,
+                                        previousDefaultOffsetMs = offsetMs,
+                                        newDefaultOffsetMs = previousOffset
+                                    )
+                                }.getOrThrow()
+                            }
+                        },
+                        floatingLyricsPreferences = floatingLyricsPreferences,
+                        onFloatingLyricsPreferencesChange = { preferences ->
+                            scope.launch { repo.setFloatingLyricsPreferences(preferences) }
+                        },
+                        advancedBlurEnabled = advancedBlurEnabled,
+                        onAdvancedBlurEnabledChange = { enabled ->
+                            scope.launch { repo.setAdvancedBlurEnabled(enabled) }
+                        },
+                        enhancedAdvancedBlurEnabled = enhancedAdvancedBlurEnabled,
+                        onEnhancedAdvancedBlurEnabledChange = { enabled ->
+                            scope.launch {
+                                repo.setEnhancedAdvancedBlurEnabled(enabled)
+                            }
+                        },
+                        enhancedAdvancedBlurRadiusDp = enhancedAdvancedBlurRadiusDp,
+                        onEnhancedAdvancedBlurRadiusDpChange = { radiusDp ->
+                            scope.launch {
+                                repo.setEnhancedAdvancedBlurRadiusDp(radiusDp)
+                            }
+                        },
+                        nowPlayingAudioReactiveEnabled = nowPlayingAudioReactiveEnabled,
+                        onNowPlayingAudioReactiveEnabledChange = { enabled ->
+                            scope.launch { repo.setNowPlayingAudioReactiveEnabled(enabled) }
+                        },
+                        nowPlayingDynamicBackgroundEnabled = nowPlayingDynamicBackgroundEnabled,
+                        onNowPlayingDynamicBackgroundEnabledChange = { enabled ->
+                            scope.launch { repo.setNowPlayingDynamicBackgroundEnabled(enabled) }
+                        },
+                        nowPlayingCoverBlurBackgroundEnabled =
+                            nowPlayingCoverBlurBackgroundEnabled,
+                        onNowPlayingCoverBlurBackgroundEnabledChange = { enabled ->
+                            scope.launch {
+                                repo.setNowPlayingCoverBlurBackgroundEnabled(enabled)
+                            }
+                        },
+                        nowPlayingCoverBlurAmount = nowPlayingCoverBlurAmount,
+                        onNowPlayingCoverBlurAmountChange = { amount ->
+                            scope.launch { repo.setNowPlayingCoverBlurAmount(amount) }
+                        },
+                        nowPlayingCoverBlurDarken = nowPlayingCoverBlurDarken,
+                        onNowPlayingCoverBlurDarkenChange = { amount ->
+                            scope.launch { repo.setNowPlayingCoverBlurDarken(amount) }
+                        },
+                        lyricFontScale = lyricFontScale,
+                        onLyricFontScaleChange = { scale ->
+                            scope.launch { repo.setLyricFontScale(scale) }
+                        },
+                        uiDensityScale = uiDensityScale,
+                        onUiDensityScaleChange = { scale ->
+                            scope.launch { repo.setUiDensityScale(scale) }
+                        },
+                        bypassProxy = bypassProxy,
+                        onBypassProxyChange = { enabled ->
+                            scope.launch { repo.setBypassProxy(enabled) }
+                        },
+                        backgroundImageUri = backgroundImageUri,
+                        onBackgroundImageChange = { uri ->
+                            scope.launch { repo.setBackgroundImageUri(uri?.toString()) }
+                        },
+                        downloadDirectoryUri = downloadDirectoryUri,
+                        downloadFileNameTemplate = downloadFileNameTemplate,
+                        onDownloadDirectoryUriChange = { uri, label ->
+                            scope.launch {
+                                repo.setDownloadDirectory(uri, label)
+                                ManagedDownloadStorage.updateConfiguredTreeUri(uri)
+                                ManagedDownloadStorage.updateCustomDirectoryLabel(label)
+                            }
+                        },
+                        onDownloadFileNameTemplateChange = { template ->
+                            scope.launch { repo.setDownloadFileNameTemplate(template) }
+                        },
+                        backgroundImageBlur = backgroundImageBlur,
+                        onBackgroundImageBlurChange = {},
+                        onBackgroundImageBlurChangeFinished = { blur ->
+                            scope.launch { repo.setBackgroundImageBlur(blur) }
+                        },
+                        backgroundImageAlpha = effectiveBackgroundImageAlpha,
+                        onBackgroundImageAlphaChange = { alpha ->
+                            pendingBackgroundImageAlpha = alpha
+                        },
+                        onBackgroundImageAlphaChangeFinished = { alpha ->
+                            pendingBackgroundImageAlpha = alpha
+                            scope.launch { repo.setBackgroundImageAlpha(alpha) }
+                        },
+                        defaultStartDestination = defaultStartDestination,
+                        onDefaultStartDestinationChange = { route ->
+                            scope.launch { repo.setDefaultStartDestination(route) }
+                        },
+                        showHomeContinueCard = showHomeContinueCard,
+                        onShowHomeContinueCardChange = { enabled ->
+                            scope.launch { repo.setHomeCardContinue(enabled) }
+                        },
+                        showHomeTrendingCard = showHomeTrendingCard,
+                        onShowHomeTrendingCardChange = { enabled ->
+                            scope.launch { repo.setHomeCardTrending(enabled) }
+                        },
+                        showHomeRadarCard = showHomeRadarCard,
+                        onShowHomeRadarCardChange = { enabled ->
+                            scope.launch { repo.setHomeCardRadar(enabled) }
+                        },
+                        showHomeRecommendedCard = showHomeRecommendedCard,
+                        onShowHomeRecommendedCardChange = { enabled ->
+                            scope.launch { repo.setHomeCardRecommended(enabled) }
+                        },
+                        homeHasRecentUsage = homeUsageEntries.isNotEmpty(),
+                        playbackFadeIn = playbackFadeIn,
+                        onPlaybackFadeInChange = { enabled ->
+                            scope.launch { repo.setPlaybackFadeIn(enabled) }
+                        },
+                        playbackCrossfadeNext = playbackCrossfadeNext,
+                        onPlaybackCrossfadeNextChange = { enabled ->
+                            scope.launch { repo.setPlaybackCrossfadeNext(enabled) }
+                        },
+                        sleepTimerFinishCurrentOnExpiry = sleepTimerFinishCurrentOnExpiry,
+                        onSleepTimerFinishCurrentOnExpiryChange = { enabled ->
+                            scope.launch {
+                                repo.setSleepTimerFinishCurrentOnExpiry(enabled)
+                            }
+                        },
+                        playbackFadeInDurationMs = playbackFadeInDurationMs,
+                        onPlaybackFadeInDurationMsChange = { duration ->
+                            scope.launch { repo.setPlaybackFadeInDurationMs(duration) }
+                        },
+                        playbackFadeOutDurationMs = playbackFadeOutDurationMs,
+                        onPlaybackFadeOutDurationMsChange = { duration ->
+                            scope.launch { repo.setPlaybackFadeOutDurationMs(duration) }
+                        },
+                        playbackCrossfadeInDurationMs = playbackCrossfadeInDurationMs,
+                        onPlaybackCrossfadeInDurationMsChange = { duration ->
+                            scope.launch { repo.setPlaybackCrossfadeInDurationMs(duration) }
+                        },
+                        playbackCrossfadeOutDurationMs = playbackCrossfadeOutDurationMs,
+                        onPlaybackCrossfadeOutDurationMsChange = { duration ->
+                            scope.launch { repo.setPlaybackCrossfadeOutDurationMs(duration) }
+                        },
+                        playbackVolumeNormalizationEnabled =
+                            playbackVolumeNormalizationEnabled,
+                        onPlaybackVolumeNormalizationEnabledChange = { enabled ->
+                            PlayerManager.setPlaybackVolumeNormalizationEnabled(enabled)
+                        },
+                        playbackHighResolutionOutputEnabled =
+                            playbackHighResolutionOutputEnabled,
+                        onPlaybackHighResolutionOutputEnabledChange = { enabled ->
+                            PlayerManager.setPlaybackHighResolutionOutputEnabled(enabled)
+                        },
+                        playbackVolumeBalance = playbackVolumeBalance,
+                        onPlaybackVolumeBalanceChange = { balance ->
+                            PlayerManager.setPlaybackVolumeBalance(balance)
+                        },
+                        keepLastPlaybackProgress = keepLastPlaybackProgress,
+                        onKeepLastPlaybackProgressChange = { enabled ->
+                            scope.launch { repo.setKeepLastPlaybackProgress(enabled) }
+                        },
+                        keepPlaybackModeState = keepPlaybackModeState,
+                        onKeepPlaybackModeStateChange = { enabled ->
+                            scope.launch { repo.setKeepPlaybackModeState(enabled) }
+                        },
+                        neteaseAutoSourceSwitch = neteaseAutoSourceSwitch,
+                        onNeteaseAutoSourceSwitchChange = { enabled ->
+                            scope.launch { repo.setNeteaseAutoSourceSwitch(enabled) }
+                        },
+                        stopOnBluetoothDisconnect = stopOnBluetoothDisconnect,
+                        onStopOnBluetoothDisconnectChange = { enabled ->
+                            scope.launch { repo.setStopOnBluetoothDisconnect(enabled) }
+                        },
+                        usbExclusivePlayback = usbExclusivePlayback,
+                        onUsbExclusivePlaybackChange = { enabled ->
+                            if (PlayerManager.beginUsbExclusiveToggleTransitionFromUi(enabled)) {
+                                scope.launch { repo.setUsbExclusivePlayback(enabled) }
+                                if (
+                                    enabled &&
+                                    !usbExclusivePlayback &&
+                                    !usbExclusiveBackgroundPermissionPromptSuppressed &&
+                                    !context.readBackgroundBehaviorAllowance().fullyAllowed
+                                ) {
+                                    showUsbExclusiveBackgroundPermissionDialog = true
+                                }
+                            }
+                        },
+                        allowMixedPlayback = allowMixedPlayback,
+                        onAllowMixedPlaybackChange = { enabled ->
+                            scope.launch { repo.setAllowMixedPlayback(enabled) }
+                        },
+                        preemptAudioFocus = preemptAudioFocus,
+                        onPreemptAudioFocusChange = { enabled ->
+                            scope.launch { repo.setPreemptAudioFocus(enabled) }
+                        },
+                        maxCacheSizeBytes = maxCacheSizeBytes,
+                        onMaxCacheSizeBytesChange = { size ->
+                            scope.launch { repo.setMaxCacheSizeBytes(size) }
+                        },
+                        onClearCacheClick = { options ->
+                            scope.launch {
+                                val messages = mutableListOf<String>()
+                                if (options.needsPlayerCacheClear) {
+                                    val (_, message) = PlayerManager.clearCache(
+                                        clearAudio = options.audioCache,
+                                        clearImage = options.imageCache
+                                    )
+                                    messages += message
+                                }
+                                if (options.needsExtraCacheClear) {
+                                    val result = clearExtraStorageCaches(context, options)
+                                    messages += if (result.success) {
+                                        context.getString(
+                                            R.string.storage_extra_cache_clear_complete,
+                                            formatFileSize(result.freedBytes)
+                                        )
+                                    } else {
+                                        context.getString(
+                                            R.string.storage_extra_cache_clear_partial
+                                        )
+                                    }
+                                }
+                                snackbarHostState.showSnackbar(messages.joinToString(" · "))
+                            }
+                        },
+                        onBeforeLanguageRestart = clearThemeRevealState
+                    )
+
+                    Destinations.Debug.route -> DebugHomeScreen(
+                        alwaysRecordLogsEnabled = alwaysRecordLogsEnabled,
+                        onAlwaysRecordLogsChange = { enabled ->
+                            scope.launch { repo.setAlwaysRecordLogsEnabled(enabled) }
+                        },
+                        onOpenListenTogetherDebug = {
+                            navController.navigate(Destinations.DebugListenTogether.route)
+                        },
+                        onOpenUsbExclusiveDebug = {
+                            navController.navigate(Destinations.DebugUsbExclusive.route)
+                        },
+                        onOpenYouTubeDebug = {
+                            navController.navigate(Destinations.DebugYouTube.route)
+                        },
+                        onOpenBiliDebug = {
+                            navController.navigate(Destinations.DebugBili.route)
+                        },
+                        onOpenNeteaseDebug = {
+                            navController.navigate(Destinations.DebugNetease.route)
+                        },
+                        onOpenSearchDebug = {
+                            navController.navigate(Destinations.DebugSearch.route)
+                        },
+                        onOpenLogs = { navController.navigate(Destinations.DebugLogsList.route) },
+                        onOpenCrashLogs = {
+                            navController.navigate(Destinations.DebugCrashLogsList.route)
+                        },
+                        onTestExceptionHandler = { crashType ->
+                            val crashMessage = context.getString(R.string.test_exception_message)
+                            when (crashType) {
+                                DebugCrashTestType.JvmHandled -> {
+                                    ExceptionHandler.safeExecute("DebugTestHandled") {
+                                        throw RuntimeException(crashMessage)
+                                    }
+                                }
+
+                                DebugCrashTestType.JvmUncaughtMain -> {
+                                    Handler(Looper.getMainLooper()).post {
+                                        throw RuntimeException(crashMessage)
+                                    }
+                                }
+
+                                DebugCrashTestType.JvmUncaughtWorker -> {
+                                    Thread {
+                                        throw RuntimeException(crashMessage)
+                                    }.start()
+                                }
+
+                                DebugCrashTestType.MainThreadAnr -> {
+                                    AnrWatchdog.triggerTestAnr(context)
+                                }
+
+                                DebugCrashTestType.NativeSigSegv -> {
+                                    Handler(Looper.getMainLooper()).post {
+                                        NativeCrashHandler.triggerTestCrash(
+                                            context = context,
+                                            crashType = NativeCrashHandler.TestCrashType.SigSegv
+                                        )
+                                    }
+                                }
+
+                                DebugCrashTestType.NativeSigAbrt -> {
+                                    Handler(Looper.getMainLooper()).post {
+                                        NativeCrashHandler.triggerTestCrash(
+                                            context = context,
+                                            crashType = NativeCrashHandler.TestCrashType.SigAbrt
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        onHideDebugMode = {
+                            scope.launch { repo.setDevModeEnabled(false) }
+                            navController.navigate(Destinations.Settings.route) {
+                                popUpTo(Destinations.Debug.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+            }
 
             val effectiveDynamicBackgroundEnabled =
                 nowPlayingDynamicBackgroundEnabled && !nowPlayingCoverBlurBackgroundEnabled
@@ -1490,33 +2383,30 @@ private fun NeriAppContent(
                 }
             }
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                val modifier = if (backgroundImageUri == null || !effectiveAdvancedBlurEnabled) {
-                    Modifier
-                } else Modifier
-                    .haze(
-                        hazeState,
-                        HazeStyle(
-                            tint = MaterialTheme.colorScheme.onSurface.copy(.0f),
-                            blurRadius = 30.dp,
-                            noiseFactor = HazeDefaults.noiseFactor
-                        )
+            AdvancedGlassHost(
+                controller = advancedGlassController,
+                backgroundBackdrop = backgroundGlassBackdrop,
+                contentBackdrop = contentGlassBackdrop,
+                activeNavigationOwners = activeAdvancedGlassOwners,
+                disableStretchOverscroll = backgroundImageUri != null
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .captureAdvancedGlassBackdrop(backgroundGlassBackdrop)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    CustomBackground(
+                        imageUri = backgroundImageUri,
+                        blur = backgroundImageBlur,
+                        alpha = effectiveBackgroundImageAlpha
                     )
+                }
 
-                CustomBackground(
-                    imageUri = backgroundImageUri,
-                    blur = backgroundImageBlur,
-                    alpha = effectiveBackgroundImageAlpha,
-                    modifier = modifier
-                )
-
-                val containerColor = if (backgroundImageUri == null) {
-                    MaterialTheme.colorScheme.background
-                } else Color.Transparent
+                val containerColor = Color.Transparent
 
                 val selectAlpha = if (backgroundImageUri == null) 1f else 0f
-                val bottomBarHazeModifier =
-                    if (effectiveAdvancedBlurEnabled) Modifier.hazeChild(state = hazeState) else Modifier
 
                 val isMiniPlayerVisible = currentSong != null && !showNowPlaying
                 val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsStateWithLifecycle()
@@ -1588,7 +2478,6 @@ private fun NeriAppContent(
                                                     .toFloat()
                                             alpha = bottomBarVisibilityProgress
                                         }
-                                        .then(bottomBarHazeModifier)
                                 ) {
                                     AnimatedVisibility(visible = offlineMode) {
                                         OfflineModeBottomBanner()
@@ -1601,13 +2490,7 @@ private fun NeriAppContent(
                                         currentDestination = backEntry?.destination,
                                         onItemSelected = { dest ->
                                             if (currentRoute != dest.route) {
-                                                navController.navigate(dest.route) {
-                                                    popUpTo(navController.graph.startDestinationId) {
-                                                        saveState = true
-                                                    }
-                                                    launchSingleTop = true
-                                                    restoreState = true
-                                                }
+                                                navigateToMainTab(dest.route)
                                             }
                                         }
                                     )
@@ -1615,90 +2498,78 @@ private fun NeriAppContent(
                             }
                         }
                     ) { innerPadding ->
-                        Box(
-                            modifier = Modifier.padding(
-                                bottom = innerPadding.calculateBottomPadding()
-                                    .coerceAtLeast(0.dp)
-                            ).clipToBounds()
+                        val bottomBarInset = innerPadding.calculateBottomPadding()
+                            .coerceAtLeast(0.dp)
+                        val bottomBarLayoutInsets = resolveBottomBarLayoutInsets(
+                            baseBlurRequested = advancedGlassController.isBaseBlurRequested,
+                            bottomBarInset = bottomBarInset,
+                            reservedMiniPlayerHeight = reservedMiniPlayerHeightDp
+                        )
+                        CompositionLocalProvider(
+                            LocalMiniPlayerHeight provides bottomBarLayoutInsets.screenBottomInset
                         ) {
-                            NavHost(
-                                navController = navController,
-                                startDestination = effectiveStartDestination,
+                            Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .then(
-                                        if (effectiveAdvancedBlurEnabled) {
-                                            Modifier.haze(
-                                                hazeState,
-                                                HazeStyle(
-                                                    tint = MaterialTheme.colorScheme.onSurface.copy(.0f),
-                                                    blurRadius = ROOT_HAZE_BLUR_RADIUS,
-                                                    noiseFactor = HazeDefaults.noiseFactor
-                                                )
-                                            )
-                                        } else {
-                                            Modifier
-                                        }
+                                    .padding(
+                                        bottom = bottomBarLayoutInsets.navContentBottomPadding
                                     )
+                                    .clipToBounds()
                             ) {
+                                // Keep the effect on a stable layer outside NavHost transitions
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .captureAdvancedGlassBackdrop(contentGlassBackdrop)
+                                ) {
+                                    MainTabLayerHost(
+                                        selectedRoute = selectedMainTabRoute,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .onSizeChanged { size ->
+                                                if (size.height > 0) {
+                                                    mainTabDetailContentHeightPx = size.height
+                                                }
+                                            }
+                                            .offset {
+                                                IntOffset(
+                                                    x = 0,
+                                                    y = (
+                                                        mainTabDetailContentOffsetFraction *
+                                                            mainTabDetailContentHeightPx
+                                                    ).roundToInt()
+                                                )
+                                            },
+                                        onVisibleGlassOwnersChanged = {
+                                            visibleMainTabGlassOwners = it
+                                        },
+                                        content = { route -> RenderMainTabRoute(route) }
+                                    )
+                                    AdvancedGlassNavigationHandoff(
+                                        enabled = visibleNavigationEntries.size > 1
+                                    ) {
+                                        NavHost(
+                                            navController = navController,
+                                            startDestination = navHostStartDestination,
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
                                 composable(
                                     Destinations.Home.route,
-                                    enterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.85f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    exitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.95f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    },
-                                    popEnterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.95f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    popExitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.85f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    }
-                                ) {
-                                    HomeHostScreen(
-                                        showContinueCard = showHomeContinueCard,
-                                        showTrendingCard = showHomeTrendingCard,
-                                        showRadarCard = showHomeRadarCard,
-                                        showRecommendedCard = showHomeRecommendedCard,
-                                        offlineMode = offlineMode,
-                                        onSongClick = ::playSongsAndOpenNowPlaying
-                                    )
-                                }
+                                    enterTransition = { mainTabEnterTransition() },
+                                    exitTransition = { mainTabExitTransition() },
+                                    popEnterTransition = { mainTabEnterTransition() },
+                                    popExitTransition = { mainTabExitTransition() }
+                                ) {}
 
                                 composable(
                                     route = Destinations.PlaylistDetail.route,
                                     arguments = listOf(navArgument("playlistJson") {
                                         type = NavType.StringType
                                     }),
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
                                     val playlist = navigationGson.fromJson(playlistJson, PlaylistSummary::class.java)
@@ -1715,16 +2586,10 @@ private fun NeriAppContent(
                                     arguments = listOf(navArgument("playlistJson") {
                                         type = NavType.StringType
                                     }),
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
                                     val album = navigationGson.fromJson(playlistJson, AlbumSummary::class.java)
@@ -1741,16 +2606,10 @@ private fun NeriAppContent(
                                     arguments = listOf(navArgument("artistJson") {
                                         type = NavType.StringType
                                     }),
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) { backStackEntry ->
                                     val artistJson = backStackEntry.arguments?.getString("artistJson")
                                     val artist = navigationGson.fromJson(artistJson, NeteaseArtistSummary::class.java)
@@ -1771,16 +2630,10 @@ private fun NeriAppContent(
                                     arguments = listOf(navArgument("playlistJson") {
                                         type = NavType.StringType
                                     }),
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) { backStackEntry ->
                                     val playlistJson = backStackEntry.arguments?.getString("playlistJson")
                                     val playlist = navigationGson.fromJson(playlistJson, BiliPlaylist::class.java)
@@ -1795,102 +2648,27 @@ private fun NeriAppContent(
 
                                 composable(
                                     Destinations.Explore.route,
-                                    enterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.85f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    exitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.95f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    },
-                                    popEnterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.95f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    popExitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.85f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    }
-                                ) {
-                                    ExploreHostScreen(
-                                        offlineMode = offlineMode,
-                                        onSongClick = ::playSongsAndOpenNowPlaying,
-                                        onSongPlayPreservingQueue = ::playSongPreservingQueueAndOpenNowPlaying,
-                                        onSongPlayNext = ::addSongToQueueNextFromSearch,
-                                        onSongAddToQueueEnd = ::addSongToQueueEndFromSearch,
-                                        onPlayParts = ::playBiliPartsAndOpenNowPlaying
-                                    )
-                                }
+                                    enterTransition = { mainTabEnterTransition() },
+                                    exitTransition = { mainTabExitTransition() },
+                                    popEnterTransition = { mainTabEnterTransition() },
+                                    popExitTransition = { mainTabExitTransition() }
+                                ) {}
 
                                 composable(
                                     Destinations.Library.route,
-                                    enterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.85f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    exitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.95f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    },
-                                    popEnterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.95f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    popExitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.85f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    }
-                                ) {
-                                    LibraryHostScreen(
-                                        onSongClick = ::playSongsAndOpenNowPlaying,
-                                        onPlayParts = ::playBiliPartsAndOpenNowPlaying,
-                                        onOpenRecent = { navController.navigate(Destinations.Recent.route) },
-                                        onOpenStats = { navController.navigate(Destinations.PlaybackStats.route) },
-                                        offlineMode = offlineMode
-                                    )
-                                }
+                                    enterTransition = { mainTabEnterTransition() },
+                                    exitTransition = { mainTabExitTransition() },
+                                    popEnterTransition = { mainTabEnterTransition() },
+                                    popExitTransition = { mainTabExitTransition() }
+                                ) {}
 
                                 composable(
                                     route = Destinations.LocalPlaylistDetail.route,
                                     arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) { backStackEntry ->
                                     val id = backStackEntry.arguments?.getLong("playlistId") ?: 0L
                                     LocalPlaylistDetailScreen(
@@ -1904,10 +2682,10 @@ private fun NeriAppContent(
 
                                 composable(
                                     route = Destinations.Recent.route,
-                                    enterTransition = { slideInVertically(animationSpec = tween(220)) { it } + fadeIn() },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = { slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn() },
-                                    popExitTransition = { slideOutVertically(animationSpec = tween(240)) { it } + fadeOut() }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) {
                                     RecentScreen(
                                         onBack = { navController.popBackStack() },
@@ -1918,10 +2696,10 @@ private fun NeriAppContent(
 
                                 composable(
                                     route = Destinations.PlaybackStats.route,
-                                    enterTransition = { slideInVertically(animationSpec = tween(220)) { it } + fadeIn() },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = { slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn() },
-                                    popExitTransition = { slideOutVertically(animationSpec = tween(240)) { it } + fadeOut() }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) {
                                     PlaybackStatsScreen(
                                         onBack = { navController.popBackStack() },
@@ -1932,367 +2710,18 @@ private fun NeriAppContent(
 
                                 composable(
                                     Destinations.Settings.route,
-                                    enterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.85f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    exitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.95f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    },
-                                    popEnterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.95f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    popExitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.85f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    }
-                                ) {
-                                    SettingsHostScreen(
-                                        dynamicColor = dynamicColorEnabled,
-                                        onDynamicColorChange = { scope.launch { repo.setDynamicColor(it) } },
-                                        isDarkTheme = isDark,
-                                        themeMode = themeMode,
-                                        onThemeToggleRequest = ::requestThemeToggle,
-                                        onThemeModeRequest = ::requestThemeModeChange,
-                                        preferredQuality = preferredQuality,
-                                        onQualityChange = { scope.launch { repo.setAudioQuality(it) } },
-                                        youtubePreferredQuality = youtubePreferredQuality,
-                                        onYouTubeQualityChange = {
-                                            scope.launch { repo.setYouTubeAudioQuality(it) }
-                                        },
-                                        biliPreferredQuality = biliPreferredQuality,
-                                        onBiliQualityChange = { scope.launch { repo.setBiliAudioQuality(it) } },
-                                        mobileDataFollowDefaultAudioQuality =
-                                            mobileDataFollowDefaultAudioQuality,
-                                        onMobileDataFollowDefaultAudioQualityChange = { enabled ->
-                                            scope.launch {
-                                                repo.setMobileDataFollowDefaultAudioQuality(enabled)
-                                            }
-                                        },
-                                        mobileDataNeteaseAudioQuality =
-                                            mobileDataNeteaseAudioQuality,
-                                        onMobileDataNeteaseAudioQualityChange = { quality ->
-                                            scope.launch {
-                                                repo.setMobileDataNeteaseAudioQuality(quality)
-                                            }
-                                        },
-                                        mobileDataYouTubeAudioQuality =
-                                            mobileDataYouTubeAudioQuality,
-                                        onMobileDataYouTubeAudioQualityChange = { quality ->
-                                            scope.launch {
-                                                repo.setMobileDataYouTubeAudioQuality(quality)
-                                            }
-                                        },
-                                        mobileDataBiliAudioQuality = mobileDataBiliAudioQuality,
-                                        onMobileDataBiliAudioQualityChange = { quality ->
-                                            scope.launch {
-                                                repo.setMobileDataBiliAudioQuality(quality)
-                                            }
-                                        },
-                                        seedColorHex = themeSeedColor,
-                                        onSeedColorChange = { hex -> scope.launch { repo.setThemeSeedColor(hex) } },
-                                        themeColorPalette = themeColorPalette,
-                                        onAddColorToPalette = { hex -> scope.launch { repo.addThemePaletteColor(hex) } },
-                                        onRemoveColorFromPalette = { hex -> scope.launch { repo.removeThemePaletteColor(hex) } },
-                                        themePaletteStyle = themePaletteStyleValue,
-                                        onThemePaletteStyleChange = { style ->
-                                            scope.launch { repo.setThemePaletteStyle(style) }
-                                        },
-                                        themeColorSpec = themeColorSpecValue,
-                                        onThemeColorSpecChange = { spec ->
-                                            scope.launch { repo.setThemeColorSpec(spec) }
-                                        },
-                                        devModeEnabled = devModeEnabled,
-                                        onDevModeChange = { enabled -> scope.launch { repo.setDevModeEnabled(enabled) } },
-                                        lyricBlurEnabled = lyricBlurEnabled,
-                                        onLyricBlurEnabledChange = { enabled ->
-                                            scope.launch { repo.setLyricBlurEnabled(enabled) }
-                                        },
-                                        lyricBlurAmount = lyricBlurAmount,
-                                        onLyricBlurAmountChange = { amount ->
-                                            scope.launch { repo.setLyricBlurAmount(amount) }
-                                        },
-                                        cloudMusicLyricDefaultOffsetMs = cloudMusicLyricDefaultOffsetMs,
-                                        onCloudMusicLyricDefaultOffsetMsChange = { offsetMs ->
-                                            scope.launch {
-                                                val previousOffset = cloudMusicLyricDefaultOffsetMs
-                                                if (previousOffset == offsetMs) {
-                                                    return@launch
-                                                }
-                                                PlayerManager.rebaseUserLyricOffsetsForSource(
-                                                    targetSource = MusicPlatform.CLOUD_MUSIC,
-                                                    previousDefaultOffsetMs = previousOffset,
-                                                    newDefaultOffsetMs = offsetMs
-                                                )
-                                                runCatching {
-                                                    repo.setCloudMusicLyricDefaultOffsetMs(offsetMs)
-                                                }.onFailure {
-                                                    PlayerManager.rebaseUserLyricOffsetsForSource(
-                                                        targetSource = MusicPlatform.CLOUD_MUSIC,
-                                                        previousDefaultOffsetMs = offsetMs,
-                                                        newDefaultOffsetMs = previousOffset
-                                                    )
-                                                }.getOrThrow()
-                                            }
-                                        },
-                                        qqMusicLyricDefaultOffsetMs = qqMusicLyricDefaultOffsetMs,
-                                        onQqMusicLyricDefaultOffsetMsChange = { offsetMs ->
-                                            scope.launch {
-                                                val previousOffset = qqMusicLyricDefaultOffsetMs
-                                                if (previousOffset == offsetMs) {
-                                                    return@launch
-                                                }
-                                                PlayerManager.rebaseUserLyricOffsetsForSource(
-                                                    targetSource = MusicPlatform.QQ_MUSIC,
-                                                    previousDefaultOffsetMs = previousOffset,
-                                                    newDefaultOffsetMs = offsetMs
-                                                )
-                                                runCatching {
-                                                    repo.setQqMusicLyricDefaultOffsetMs(offsetMs)
-                                                }.onFailure {
-                                                    PlayerManager.rebaseUserLyricOffsetsForSource(
-                                                        targetSource = MusicPlatform.QQ_MUSIC,
-                                                        previousDefaultOffsetMs = offsetMs,
-                                                        newDefaultOffsetMs = previousOffset
-                                                    )
-                                                }.getOrThrow()
-                                            }
-                                        },
-                                        floatingLyricsPreferences = floatingLyricsPreferences,
-                                        onFloatingLyricsPreferencesChange = { preferences ->
-                                            scope.launch { repo.setFloatingLyricsPreferences(preferences) }
-                                        },
-                                        advancedBlurEnabled = advancedBlurEnabled,
-                                        onAdvancedBlurEnabledChange = { enabled ->
-                                            scope.launch { repo.setAdvancedBlurEnabled(enabled) }
-                                        },
-                                        nowPlayingAudioReactiveEnabled = nowPlayingAudioReactiveEnabled,
-                                        onNowPlayingAudioReactiveEnabledChange = { enabled ->
-                                            scope.launch { repo.setNowPlayingAudioReactiveEnabled(enabled) }
-                                        },
-                                        nowPlayingDynamicBackgroundEnabled = nowPlayingDynamicBackgroundEnabled,
-                                        onNowPlayingDynamicBackgroundEnabledChange = { enabled ->
-                                            scope.launch { repo.setNowPlayingDynamicBackgroundEnabled(enabled) }
-                                        },
-                                        nowPlayingCoverBlurBackgroundEnabled = nowPlayingCoverBlurBackgroundEnabled,
-                                        onNowPlayingCoverBlurBackgroundEnabledChange = { enabled ->
-                                            scope.launch { repo.setNowPlayingCoverBlurBackgroundEnabled(enabled) }
-                                        },
-                                        nowPlayingCoverBlurAmount = nowPlayingCoverBlurAmount,
-                                        onNowPlayingCoverBlurAmountChange = { amount ->
-                                            scope.launch { repo.setNowPlayingCoverBlurAmount(amount) }
-                                        },
-                                        nowPlayingCoverBlurDarken = nowPlayingCoverBlurDarken,
-                                        onNowPlayingCoverBlurDarkenChange = { amount ->
-                                            scope.launch { repo.setNowPlayingCoverBlurDarken(amount) }
-                                        },
-                                        lyricFontScale = lyricFontScale,
-                                        onLyricFontScaleChange = { scale ->
-                                            scope.launch { repo.setLyricFontScale(scale) }
-                                        },
-                                        uiDensityScale = uiDensityScale,
-                                        onUiDensityScaleChange = { scale ->
-                                            scope.launch { repo.setUiDensityScale(scale) }
-                                        },
-                                        bypassProxy = bypassProxy,
-                                        onBypassProxyChange = { enabled ->
-                                            scope.launch { repo.setBypassProxy(enabled) }
-                                        },
-                                        backgroundImageUri = backgroundImageUri,
-                                        onBackgroundImageChange = { uri ->
-                                            scope.launch { repo.setBackgroundImageUri(uri?.toString()) }
-                                        },
-                                        downloadDirectoryUri = downloadDirectoryUri,
-                                        downloadFileNameTemplate = downloadFileNameTemplate,
-                                        onDownloadDirectoryUriChange = { uri, label ->
-                                            scope.launch {
-                                                repo.setDownloadDirectory(uri, label)
-                                                ManagedDownloadStorage.updateConfiguredTreeUri(uri)
-                                                ManagedDownloadStorage.updateCustomDirectoryLabel(label)
-                                            }
-                                        },
-                                        onDownloadFileNameTemplateChange = { template ->
-                                            scope.launch { repo.setDownloadFileNameTemplate(template) }
-                                        },
-                                        backgroundImageBlur = backgroundImageBlur,
-                                        onBackgroundImageBlurChange = {},
-                                        onBackgroundImageBlurChangeFinished = { blur ->
-                                            scope.launch { repo.setBackgroundImageBlur(blur) }
-                                        },
-                                        backgroundImageAlpha = effectiveBackgroundImageAlpha,
-                                        onBackgroundImageAlphaChange = { alpha ->
-                                            pendingBackgroundImageAlpha = alpha
-                                        },
-                                        onBackgroundImageAlphaChangeFinished = { alpha ->
-                                            pendingBackgroundImageAlpha = alpha
-                                            scope.launch { repo.setBackgroundImageAlpha(alpha) }
-                                        },
-                                        defaultStartDestination = defaultStartDestination,
-                                        onDefaultStartDestinationChange = { route ->
-                                            scope.launch { repo.setDefaultStartDestination(route) }
-                                        },
-                                        showHomeContinueCard = showHomeContinueCard,
-                                        onShowHomeContinueCardChange = { enabled ->
-                                            scope.launch { repo.setHomeCardContinue(enabled) }
-                                        },
-                                        showHomeTrendingCard = showHomeTrendingCard,
-                                        onShowHomeTrendingCardChange = { enabled ->
-                                            scope.launch { repo.setHomeCardTrending(enabled) }
-                                        },
-                                        showHomeRadarCard = showHomeRadarCard,
-                                        onShowHomeRadarCardChange = { enabled ->
-                                            scope.launch { repo.setHomeCardRadar(enabled) }
-                                        },
-                                        showHomeRecommendedCard = showHomeRecommendedCard,
-                                        onShowHomeRecommendedCardChange = { enabled ->
-                                            scope.launch { repo.setHomeCardRecommended(enabled) }
-                                        },
-                                        homeHasRecentUsage = homeUsageEntries.isNotEmpty(),
-                                        playbackFadeIn = playbackFadeIn,
-                                        onPlaybackFadeInChange = { enabled ->
-                                            scope.launch { repo.setPlaybackFadeIn(enabled) }
-                                        },
-                                        playbackCrossfadeNext = playbackCrossfadeNext,
-                                        onPlaybackCrossfadeNextChange = { enabled ->
-                                            scope.launch { repo.setPlaybackCrossfadeNext(enabled) }
-                                        },
-                                        sleepTimerFinishCurrentOnExpiry =
-                                            sleepTimerFinishCurrentOnExpiry,
-                                        onSleepTimerFinishCurrentOnExpiryChange = { enabled ->
-                                            scope.launch {
-                                                repo.setSleepTimerFinishCurrentOnExpiry(enabled)
-                                            }
-                                        },
-                                        playbackFadeInDurationMs = playbackFadeInDurationMs,
-                                        onPlaybackFadeInDurationMsChange = { duration ->
-                                            scope.launch { repo.setPlaybackFadeInDurationMs(duration) }
-                                        },
-                                        playbackFadeOutDurationMs = playbackFadeOutDurationMs,
-                                        onPlaybackFadeOutDurationMsChange = { duration ->
-                                            scope.launch { repo.setPlaybackFadeOutDurationMs(duration) }
-                                        },
-                                        playbackCrossfadeInDurationMs = playbackCrossfadeInDurationMs,
-                                        onPlaybackCrossfadeInDurationMsChange = { duration ->
-                                            scope.launch { repo.setPlaybackCrossfadeInDurationMs(duration) }
-                                        },
-                                        playbackCrossfadeOutDurationMs = playbackCrossfadeOutDurationMs,
-                                        onPlaybackCrossfadeOutDurationMsChange = { duration ->
-                                            scope.launch { repo.setPlaybackCrossfadeOutDurationMs(duration) }
-                                        },
-                                        playbackVolumeNormalizationEnabled =
-                                            playbackVolumeNormalizationEnabled,
-                                        onPlaybackVolumeNormalizationEnabledChange = { enabled ->
-                                            PlayerManager.setPlaybackVolumeNormalizationEnabled(enabled)
-                                        },
-                                        playbackHighResolutionOutputEnabled =
-                                            playbackHighResolutionOutputEnabled,
-                                        onPlaybackHighResolutionOutputEnabledChange = { enabled ->
-                                            PlayerManager.setPlaybackHighResolutionOutputEnabled(
-                                                enabled
-                                            )
-                                        },
-                                        playbackVolumeBalance = playbackVolumeBalance,
-                                        onPlaybackVolumeBalanceChange = { balance ->
-                                            PlayerManager.setPlaybackVolumeBalance(balance)
-                                        },
-                                        keepLastPlaybackProgress = keepLastPlaybackProgress,
-                                        onKeepLastPlaybackProgressChange = { enabled ->
-                                            scope.launch { repo.setKeepLastPlaybackProgress(enabled) }
-                                        },
-                                        keepPlaybackModeState = keepPlaybackModeState,
-                                        onKeepPlaybackModeStateChange = { enabled ->
-                                            scope.launch { repo.setKeepPlaybackModeState(enabled) }
-                                        },
-                                        neteaseAutoSourceSwitch = neteaseAutoSourceSwitch,
-                                        onNeteaseAutoSourceSwitchChange = { enabled ->
-                                            scope.launch { repo.setNeteaseAutoSourceSwitch(enabled) }
-                                        },
-                                        stopOnBluetoothDisconnect = stopOnBluetoothDisconnect,
-                                        onStopOnBluetoothDisconnectChange = { enabled ->
-                                            scope.launch { repo.setStopOnBluetoothDisconnect(enabled) }
-                                        },
-                                        usbExclusivePlayback = usbExclusivePlayback,
-                                        onUsbExclusivePlaybackChange = { enabled ->
-                                            if (PlayerManager.beginUsbExclusiveToggleTransitionFromUi(enabled)) {
-                                                scope.launch { repo.setUsbExclusivePlayback(enabled) }
-                                                if (
-                                                    enabled &&
-                                                    !usbExclusivePlayback &&
-                                                    !usbExclusiveBackgroundPermissionPromptSuppressed &&
-                                                    !context.readBackgroundBehaviorAllowance().fullyAllowed
-                                                ) {
-                                                    showUsbExclusiveBackgroundPermissionDialog = true
-                                                }
-                                            }
-                                        },
-                                        allowMixedPlayback = allowMixedPlayback,
-                                        onAllowMixedPlaybackChange = { enabled ->
-                                            scope.launch { repo.setAllowMixedPlayback(enabled) }
-                                        },
-                                        preemptAudioFocus = preemptAudioFocus,
-                                        onPreemptAudioFocusChange = { enabled ->
-                                            scope.launch { repo.setPreemptAudioFocus(enabled) }
-                                        },
-                                        maxCacheSizeBytes = maxCacheSizeBytes,
-                                        onMaxCacheSizeBytesChange = { size ->
-                                            scope.launch { repo.setMaxCacheSizeBytes(size) }
-                                        },
-                                        onClearCacheClick = { options ->
-                                            scope.launch {
-                                                val messages = mutableListOf<String>()
-                                                if (options.needsPlayerCacheClear) {
-                                                    val (_, message) = PlayerManager.clearCache(
-                                                        clearAudio = options.audioCache,
-                                                        clearImage = options.imageCache
-                                                    )
-                                                    messages += message
-                                                }
-                                                if (options.needsExtraCacheClear) {
-                                                    val result = clearExtraStorageCaches(context, options)
-                                                    messages += if (result.success) {
-                                                        context.getString(
-                                                            R.string.storage_extra_cache_clear_complete,
-                                                            formatFileSize(result.freedBytes)
-                                                        )
-                                                    } else {
-                                                        context.getString(R.string.storage_extra_cache_clear_partial)
-                                                    }
-                                                }
-                                                snackbarHostState.showSnackbar(messages.joinToString(" · "))
-                                            }
-                                        },
-                                        onBeforeLanguageRestart = clearThemeRevealState
-                                    )
-                                }
+                                    enterTransition = { mainTabEnterTransition() },
+                                    exitTransition = { mainTabExitTransition() },
+                                    popEnterTransition = { mainTabEnterTransition() },
+                                    popExitTransition = { mainTabExitTransition() }
+                                ) {}
 
                                 composable(
                                     route = Destinations.DownloadManager.route,
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) {
                                     DownloadManagerScreen(
                                         onBack = { navController.popBackStack() },
@@ -2303,132 +2732,70 @@ private fun NeriAppContent(
 
                                 composable(
                                     route = Destinations.DownloadProgress.route,
-                                    enterTransition = {
-                                        slideInVertically(animationSpec = tween(220)) { it } + fadeIn()
-                                    },
-                                    exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                    popEnterTransition = {
-                                        slideInVertically(animationSpec = tween(200)) { full -> -full / 6 } + fadeIn()
-                                    },
-                                    popExitTransition = {
-                                        slideOutVertically(animationSpec = tween(240)) { it } + fadeOut()
-                                    }
+                                    enterTransition = { transparentDetailEnterTransition() },
+                                    exitTransition = { transparentDetailExitTransition() },
+                                    popEnterTransition = { transparentDetailPopEnterTransition() },
+                                    popExitTransition = { transparentDetailPopExitTransition() }
                                 ) {
                                     DownloadProgressScreen(onBack = { navController.popBackStack() })
                                 }
 
                                 composable(
                                     Destinations.Debug.route,
-                                    enterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.85f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    exitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.95f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    },
-                                    popEnterTransition = {
-                                        scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            ),
-                                            initialScale = 0.95f
-                                        ) + fadeIn(animationSpec = tween(300, easing = EaseInOutCubic))
-                                    },
-                                    popExitTransition = {
-                                        scaleOut(
-                                            animationSpec = tween(200, easing = EaseInOutCubic),
-                                            targetScale = 0.85f
-                                        ) + fadeOut(animationSpec = tween(200, easing = EaseInOutCubic))
-                                    }
+                                    enterTransition = { mainTabEnterTransition() },
+                                    exitTransition = { mainTabExitTransition() },
+                                    popEnterTransition = { mainTabEnterTransition() },
+                                    popExitTransition = { mainTabExitTransition() }
+                                ) {}
+                                composable(
+                                    route = Destinations.DebugListenTogether.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { ListenTogetherDebugScreen() }
+                                composable(
+                                    route = Destinations.DebugUsbExclusive.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { UsbExclusiveDebugScreen() }
+                                composable(
+                                    route = Destinations.DebugYouTube.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { YouTubeApiProbeScreen() }
+                                composable(
+                                    route = Destinations.DebugBili.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { BiliApiProbeScreen() }
+                                composable(
+                                    route = Destinations.DebugNetease.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { NeteaseApiProbeScreen() }
+                                composable(
+                                    route = Destinations.DebugSearch.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) { SearchApiProbeScreen() }
+                                composable(
+                                    route = Destinations.DebugLogsList.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
                                 ) {
-                                    DebugHomeScreen(
-                                        alwaysRecordLogsEnabled = alwaysRecordLogsEnabled,
-                                        onAlwaysRecordLogsChange = { enabled ->
-                                            scope.launch { repo.setAlwaysRecordLogsEnabled(enabled) }
-                                        },
-                                        onOpenListenTogetherDebug = {
-                                            navController.navigate(Destinations.DebugListenTogether.route)
-                                        },
-                                        onOpenUsbExclusiveDebug = {
-                                            navController.navigate(Destinations.DebugUsbExclusive.route)
-                                        },
-                                        onOpenYouTubeDebug = {
-                                            navController.navigate(Destinations.DebugYouTube.route)
-                                        },
-                                        onOpenBiliDebug = { navController.navigate(Destinations.DebugBili.route) },
-                                        onOpenNeteaseDebug = { navController.navigate(Destinations.DebugNetease.route) },
-                                        onOpenSearchDebug = { navController.navigate(Destinations.DebugSearch.route) },
-                                        onOpenLogs = { navController.navigate(Destinations.DebugLogsList.route) },
-                                        onOpenCrashLogs = { navController.navigate(Destinations.DebugCrashLogsList.route) },
-                                        onTestExceptionHandler = { crashType ->
-                                            val crashMessage = context.getString(R.string.test_exception_message)
-                                            when (crashType) {
-                                                DebugCrashTestType.JvmHandled -> {
-                                                    ExceptionHandler.safeExecute("DebugTestHandled") {
-                                                        throw RuntimeException(crashMessage)
-                                                    }
-                                                }
-
-                                                DebugCrashTestType.JvmUncaughtMain -> {
-                                                    Handler(Looper.getMainLooper()).post {
-                                                        throw RuntimeException(crashMessage)
-                                                    }
-                                                }
-
-                                                DebugCrashTestType.JvmUncaughtWorker -> {
-                                                    Thread {
-                                                        throw RuntimeException(crashMessage)
-                                                    }.start()
-                                                }
-
-                                                DebugCrashTestType.MainThreadAnr -> {
-                                                    AnrWatchdog.triggerTestAnr(context)
-                                                }
-
-                                                DebugCrashTestType.NativeSigSegv -> {
-                                                    Handler(Looper.getMainLooper()).post {
-                                                        NativeCrashHandler.triggerTestCrash(
-                                                            context = context,
-                                                            crashType = NativeCrashHandler.TestCrashType.SigSegv
-                                                        )
-                                                    }
-                                                }
-
-                                                DebugCrashTestType.NativeSigAbrt -> {
-                                                    Handler(Looper.getMainLooper()).post {
-                                                        NativeCrashHandler.triggerTestCrash(
-                                                            context = context,
-                                                            crashType = NativeCrashHandler.TestCrashType.SigAbrt
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        onHideDebugMode = {
-                                            scope.launch { repo.setDevModeEnabled(false) }
-                                            navController.navigate(Destinations.Settings.route) {
-                                                popUpTo(Destinations.Debug.route) { inclusive = true }
-                                                launchSingleTop = true
-                                            }
-                                        }
-                                    )
-                                }
-                                composable(Destinations.DebugListenTogether.route) { ListenTogetherDebugScreen() }
-                                composable(Destinations.DebugUsbExclusive.route) { UsbExclusiveDebugScreen() }
-                                composable(Destinations.DebugYouTube.route) { YouTubeApiProbeScreen() }
-                                composable(Destinations.DebugBili.route) { BiliApiProbeScreen() }
-                                composable(Destinations.DebugNetease.route) { NeteaseApiProbeScreen() }
-                                composable(Destinations.DebugSearch.route) { SearchApiProbeScreen() }
-                                composable(Destinations.DebugLogsList.route) {
                                     LogListScreen(
                                         onBack = { navController.popBackStack() },
                                         onLogFileClick = { filePath ->
@@ -2439,7 +2806,13 @@ private fun NeriAppContent(
                                     )
                                 }
 
-                                composable(Destinations.DebugCrashLogsList.route) {
+                                composable(
+                                    route = Destinations.DebugCrashLogsList.route,
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
+                                ) {
                                     CrashLogListScreen(
                                         onBack = { navController.popBackStack() },
                                         onLogFileClick = { filePath ->
@@ -2452,7 +2825,11 @@ private fun NeriAppContent(
 
                                 composable(
                                     route = Destinations.DebugLogViewer.route,
-                                    arguments = listOf(navArgument("filePath") { type = NavType.StringType })
+                                    arguments = listOf(navArgument("filePath") { type = NavType.StringType }),
+                                    enterTransition = { debugNavigationEnterTransition() },
+                                    exitTransition = { debugNavigationExitTransition() },
+                                    popEnterTransition = { debugNavigationEnterTransition() },
+                                    popExitTransition = { debugNavigationExitTransition() }
                                 ) { backStackEntry ->
                                     val filePath = backStackEntry.arguments?.getString("filePath") ?: ""
                                     LogViewerScreen(
@@ -2460,11 +2837,17 @@ private fun NeriAppContent(
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
-                            }
+                                        }
+                                    }
+                                }
 
-                            AnimatedVisibility(
-                                visible = currentSong != null && !showNowPlaying,
-                                modifier = Modifier.align(Alignment.BottomStart),
+                                AnimatedVisibility(
+                                    visible = currentSong != null && !showNowPlaying,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(
+                                            bottom = bottomBarLayoutInsets.miniPlayerBottomPadding
+                                        ),
                                 enter = slideInVertically(
                                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                                     initialOffsetY = { it / 2 }
@@ -2473,8 +2856,8 @@ private fun NeriAppContent(
                                     animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
                                     targetOffsetY = { it / 2 }
                                 ) + fadeOut(animationSpec = tween(durationMillis = 120))
-                            ) {
-                                NeriMiniPlayer(
+                                ) {
+                                    NeriMiniPlayer(
                                     title = currentSong?.displayName()
                                         ?: context.getString(R.string.nowplaying_no_playback),
                                     artist = currentSong?.displayArtist() ?: "",
@@ -2486,13 +2869,12 @@ private fun NeriAppContent(
                                     onPrevious = { PlayerManager.previous() },
                                     onNext = { PlayerManager.next() },
                                     onExpand = { showNowPlaying = true },
-                                    hazeState = hazeState,
-                                    enableHaze = effectiveAdvancedBlurEnabled,
+                                    enableBlur = effectiveAdvancedBlurEnabled,
                                     offlineMode = offlineMode,
                                     isPlaybackWaiting = isPlaybackWaiting
-                                )
+                                    )
+                                }
                             }
-
                         }
                     }
                 }
@@ -2838,6 +3220,21 @@ private fun NeriAppContent(
                     )
                 }
 
+                if (
+                    shouldShowStartupGlassGate(
+                        baseBlurEnabled = advancedGlassController.isBaseBlurEnabled,
+                        gateReleased = startupGlassGateReleased,
+                        backgroundEffectReady = startupBackgroundGlassReady,
+                        contentEffectReady = startupContentGlassReady
+                    )
+                ) {
+                    StartupGlassGateOverlay(
+                        isDark = isDark,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                }
             }
         }
     }

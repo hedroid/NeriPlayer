@@ -254,6 +254,12 @@ class SettingsRepository(private val context: Context) {
     val advancedBlurEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.advancedBlurEnabledFlow
 
+    val enhancedAdvancedBlurEnabledFlow: Flow<Boolean> =
+        autoSettingsRepository.enhancedAdvancedBlurEnabledFlow
+
+    val enhancedAdvancedBlurRadiusDpFlow: Flow<Float> =
+        autoSettingsRepository.enhancedAdvancedBlurRadiusDpFlow
+
     val nowPlayingAudioReactiveEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingAudioReactiveEnabledFlow
 
@@ -488,6 +494,9 @@ class SettingsRepository(private val context: Context) {
 
     val internationalizationEnabledFlow: Flow<Boolean> =
         dataStoreSettingFlow { it[SettingsKeys.INTERNATIONALIZATION_ENABLED] ?: defaultInternationalization }
+
+    val youtubeEnabledFlow: Flow<Boolean> =
+        settingFlow(AutoSettingsSchema.general.youtubeEnabled)
 
     suspend fun setDynamicColor(value: Boolean) {
         context.dataStore.edit { it[SettingsKeys.DYNAMIC_COLOR] = value }
@@ -756,6 +765,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAdvancedBlurEnabled(enabled: Boolean) {
         autoSettingsRepository.setAdvancedBlurEnabled(enabled)
+    }
+
+    suspend fun setEnhancedAdvancedBlurEnabled(enabled: Boolean) {
+        autoSettingsRepository.setEnhancedAdvancedBlurEnabled(enabled)
+    }
+
+    suspend fun setEnhancedAdvancedBlurRadiusDp(radiusDp: Float) {
+        autoSettingsRepository.setEnhancedAdvancedBlurRadiusDp(radiusDp)
     }
 
     suspend fun setNowPlayingAudioReactiveEnabled(enabled: Boolean) {
@@ -1145,6 +1162,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setInternationalizationEnabled(enabled: Boolean) {
         context.dataStore.edit { it[SettingsKeys.INTERNATIONALIZATION_ENABLED] = enabled }
+    }
+
+    suspend fun setYouTubeEnabled(enabled: Boolean) {
+        setSetting(AutoSettingsSchema.general.youtubeEnabled, enabled)
     }
 }
 
