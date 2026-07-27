@@ -87,8 +87,14 @@ internal fun shouldTriggerYouTubeRefreshLogin(
     pageReady: Boolean,
     hasYtcfg: Boolean,
     hasLiveSessionSignal: Boolean,
-    loginUrl: String
+    loginUrl: String,
+    hasActiveSessionCookies: Boolean = false
 ): Boolean {
+    // 手里还握着完整的登录 cookie 时不能因为页面没暴露会话信号就跳登录页，
+    // 那一跳在用户看来就是登录态凭空没了
+    if (hasActiveSessionCookies) {
+        return false
+    }
     return pageReady &&
         hasYtcfg &&
         !hasLiveSessionSignal &&
@@ -113,6 +119,27 @@ internal fun shouldAcceptYouTubeRefreshResult(
     }
     // 页面和 ytcfg 都稳定了却还没确认登录，说明这份 cookie 快照大概率是游客态
     return false
+}
+
+/**
+ * 快照被判成游客态时, 里面还有哪些身份 cookie 值得单独捞回来
+ *
+ * HSID 和 LOGIN_INFO 是 HttpOnly, 早期存档从没收录过, 而刷新一旦被判游客态就整份丢弃,
+ * 存档于是永远补不齐这两项, 之后每次请求都是匿名, 匿名又会再触发一次刷新, 循环出不来;
+ * 只挑存档里缺的那几项, 已有值不参与, 所以不存在把有效凭据换成陈旧值的风险
+ */
+internal fun collectSalvageableYouTubeIdentityCookies(
+    persistedCookies: Map<String, String>,
+    observedCookies: Map<String, String>
+): Map<String, String> {
+    if (!YouTubeCookieSupport.isLoggedIn(observedCookies)) {
+        return emptyMap()
+    }
+    return observedCookies.filter { (key, value) ->
+        value.isNotBlank() &&
+            YouTubeCookieSupport.isIdentityCookieKey(key) &&
+            persistedCookies[key].isNullOrBlank()
+    }
 }
 
 internal fun resolveObservedYouTubeAuthUser(
@@ -175,6 +202,7 @@ class YouTubeAuthAutoRefreshManager(
 
     private val applicationContext = context.applicationContext
     private val accessMutex = Mutex()
+    private val cookieRotator = YouTubeCookieRotator()
 
     @Volatile
     private var webView: WebView? = null
@@ -224,6 +252,35 @@ class YouTubeAuthAutoRefreshManager(
             val currentAuth = authProvider().normalized()
             val currentHealth = authHealthProvider()
             val now = System.currentTimeMillis()
+
+            // *PSIDTS 十分钟就换一次, 先走一次轻量轮换, 成了就完全不必起 WebView
+            val rotatedCookies = cookieRotator.rotate(
+                cookies = currentAuth.cookies,
+                userAgent = currentAuth.userAgent.ifBlank { webViewUserAgent },
+                force = force
+            )
+            if (rotatedCookies.isNotEmpty()) {
+                authUpdater(
+                    mergeYouTubeAuthBundle(
+                        base = currentAuth,
+                        observedCookies = rotatedCookies
+                    )
+                )
+                syncRotatedCookiesToWebView(rotatedCookies)
+                consecutiveFailures = 0
+                circuitOpenUntilMs = 0L
+                NPLogger.i(
+                    TAG,
+                    "refresh rotated cookies reason=$reason keys=${rotatedCookies.keys.joinToString()} nextIntervalMs=${cookieRotator.nextRotationIntervalMs()}"
+                )
+                return@withLock YouTubeAuthAutoRefreshResult(
+                    attempted = true,
+                    refreshed = true,
+                    authChanged = true,
+                    reason = "rotated"
+                )
+            }
+
             val gateDecision = shouldAttemptRefresh(
                 auth = currentAuth,
                 health = currentHealth,
@@ -270,7 +327,8 @@ class YouTubeAuthAutoRefreshManager(
                             pageReady = isYouTubeRefreshPageSettled(pageSnapshot?.readyState.orEmpty()),
                             hasYtcfg = pageSnapshot?.hasYtcfg == true,
                             hasLiveSessionSignal = pageSnapshot?.hasLiveSessionSignal() == true,
-                            loginUrl = loginUrl
+                            loginUrl = loginUrl,
+                            hasActiveSessionCookies = YouTubeCookieSupport.isLoggedIn(refreshedAuth.cookies)
                         )
                     ) {
                         NPLogger.i(
@@ -320,6 +378,23 @@ class YouTubeAuthAutoRefreshManager(
                             TAG,
                             "refresh skipped reason=$reason url=$url pageReady=${pageSnapshot?.readyState.orEmpty()} hasYtcfg=${pageSnapshot?.hasYtcfg == true} liveSession=$pageConfirmedSession"
                         )
+                        // 整份结果不可信不代表这几项也不可信, 丢掉存档就再也补不回来了
+                        val salvageableCookies = collectSalvageableYouTubeIdentityCookies(
+                            persistedCookies = currentAuth.cookies,
+                            observedCookies = refreshedAuth.cookies
+                        )
+                        if (salvageableCookies.isNotEmpty()) {
+                            authUpdater(
+                                mergeYouTubeAuthBundle(
+                                    base = currentAuth,
+                                    observedCookies = salvageableCookies
+                                )
+                            )
+                            NPLogger.i(
+                                TAG,
+                                "refresh salvaged identity cookies reason=$reason url=$url keys=${salvageableCookies.keys.joinToString()}"
+                            )
+                        }
                         return@forEach
                     }
 
@@ -532,6 +607,23 @@ class YouTubeAuthAutoRefreshManager(
                 signInUrl = root.optString("signInUrl")
             )
         }.getOrNull()
+    }
+
+    /**
+     * 轮换出来的新值也要写回浏览器
+     *
+     * 存档和 WebView 各存一份, 只更新存档的话下次页面加载还是拿旧值去请求
+     */
+    private fun syncRotatedCookiesToWebView(rotatedCookies: Map<String, String>) {
+        runCatching {
+            applyYouTubeWebCookies(
+                cookieManager = CookieManager.getInstance(),
+                cookies = rotatedCookies,
+                skipExisting = false
+            )
+        }.onFailure { error ->
+            NPLogger.w(TAG, "sync rotated cookies to webview failed: ${error.message}")
+        }
     }
 
     private fun buildObservedAuthBundle(

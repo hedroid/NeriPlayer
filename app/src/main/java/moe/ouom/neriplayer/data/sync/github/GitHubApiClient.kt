@@ -24,7 +24,6 @@ package moe.ouom.neriplayer.data.sync.github
  */
 
 import android.content.Context
-import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +36,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.Base64
 
 /**
  * Token过期异常
@@ -212,7 +212,7 @@ class GitHubApiClient(
     /**
      * 读取文件内容
      */
-    suspend fun getFileContent(owner: String, repo: String, path: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+    suspend fun getFileContent(owner: String, repo: String, path: String): Result<Pair<ByteArray, String>> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("$GITHUB_API_BASE/repos/$owner/$repo/contents/$path")
@@ -225,18 +225,33 @@ class GitHubApiClient(
                     val body = response.body?.string()
                         ?: return@withContext Result.failure(IOException("Empty response"))
                     val fileResponse = gson.fromJson(body, GitHubFileResponse::class.java)
+                    // 打印实际体积, 便于确认备份大小与是否触发 raw 通道
+                    NPLogger.d(
+                        TAG,
+                        "getFileContent path=$path size=${fileResponse.size} " +
+                            "inlineContentEmpty=${fileResponse.content.isEmpty()} encoding=${fileResponse.encoding}"
+                    )
                     if (fileResponse.size > MAX_SYNC_FILE_BYTES) {
                         return@withContext Result.failure(IOException("Remote backup file is too large"))
                     }
 
-                    // 解码Base64内容
-                    val decodedContent = String(
-                        Base64.decode(fileResponse.content.replace("\n", ""), Base64.DEFAULT)
-                    )
-                    return@withContext Result.success(Pair(decodedContent, fileResponse.sha))
+                    // GitHub Contents API 对 >1MB 文件返回空 content 且 encoding=none
+                    // 需改走 raw 通道读取原始字节; sha 仍取自当前 JSON 响应
+                    if (fileResponse.content.isEmpty() && fileResponse.size > 0) {
+                        val rawContent = fetchRawFileContent(owner, repo, path)
+                            ?: return@withContext Result.failure(
+                                IOException("Failed to read large remote backup via raw channel: $path")
+                            )
+                        return@withContext Result.success(Pair(rawContent, fileResponse.sha))
+                    }
+
+                    // 单次 Base64 解码得到原始文件字节 (GitHub 内联 content 为带换行的 base64, MIME 解码器可直接处理)
+                    val decodedBytes = Base64.getMimeDecoder().decode(fileResponse.content)
+                    return@withContext Result.success(Pair(decodedBytes, fileResponse.sha))
                 }
+                // 404 表示文件不存在, 返回空字节对; ">1MB content 为空"已在上方走 raw 通道, 二者不再混淆
                 if (response.code == 404) {
-                    return@withContext Result.success(Pair("", ""))
+                    return@withContext Result.success(Pair(ByteArray(0), ""))
                 }
                 Result.failure(IOException("Failed to get file: ${response.code}"))
             }
@@ -246,7 +261,7 @@ class GitHubApiClient(
         }
     }
 
-    suspend fun getFileContentStrict(owner: String, repo: String, path: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+    suspend fun getFileContentStrict(owner: String, repo: String, path: String): Result<Pair<ByteArray, String>> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("$GITHUB_API_BASE/repos/$owner/$repo/contents/$path")
@@ -259,13 +274,25 @@ class GitHubApiClient(
                     val body = response.body?.string()
                         ?: return@withContext Result.failure(IOException("Empty response"))
                     val fileResponse = gson.fromJson(body, GitHubFileResponse::class.java)
+                    // 打印实际体积, 桌面端据此确认实际备份大小
+                    NPLogger.d(
+                        TAG,
+                        "getFileContentStrict path=$path size=${fileResponse.size} " +
+                            "inlineContentEmpty=${fileResponse.content.isEmpty()} encoding=${fileResponse.encoding}"
+                    )
                     if (fileResponse.size > MAX_SYNC_FILE_BYTES) {
                         return@withContext Result.failure(IOException("Remote backup file is too large"))
                     }
-                    val decodedContent = String(
-                        Base64.decode(fileResponse.content.replace("\n", ""), Base64.DEFAULT)
-                    )
-                    return@withContext Result.success(decodedContent to fileResponse.sha)
+                    // >1MB 文件 content 为空, encoding=none, 改走 raw 通道; sha 仍取自 JSON 响应
+                    if (fileResponse.content.isEmpty() && fileResponse.size > 0) {
+                        val rawContent = fetchRawFileContent(owner, repo, path)
+                            ?: return@withContext Result.failure(
+                                IOException("Failed to read large remote backup via raw channel: $path")
+                            )
+                        return@withContext Result.success(rawContent to fileResponse.sha)
+                    }
+                    val decodedBytes = Base64.getMimeDecoder().decode(fileResponse.content)
+                    return@withContext Result.success(decodedBytes to fileResponse.sha)
                 }
 
                 if (response.code == 401) {
@@ -295,19 +322,41 @@ class GitHubApiClient(
     }
 
     /**
+     * 通过 raw 媒体类型读取文件原始字节
+     * GitHub Contents API 对 >1MB 文件不再内联 base64 content (encoding=none)
+     * 必须用单独的 Accept: application/vnd.github.raw 请求获取原始内容 (raw 上限约 100MB)
+     * 该方法在 Dispatchers.IO 上下文内被调用, 直接执行阻塞请求
+     */
+    private fun fetchRawFileContent(owner: String, repo: String, path: String): ByteArray? {
+        val request = Request.Builder()
+            .url("$GITHUB_API_BASE/repos/$owner/$repo/contents/$path")
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/vnd.github.raw")
+            .build()
+        return client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                NPLogger.e(TAG, "Raw content fetch failed for $path: ${response.code}")
+                null
+            } else {
+                response.body?.bytes()
+            }
+        }
+    }
+
+    /**
      * 创建或更新文件
      */
     suspend fun updateFileContent(
         owner: String,
         repo: String,
-        content: String,
+        content: ByteArray,
         sha: String? = null,
         path: String,
         message: String = "Update backup data",
         branch: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            // 如果没有指定分支，先获取仓库的默认分支
+            // 如果没有指定分支, 先获取仓库的默认分支
             val targetBranch = branch ?: run {
                 val repoResult = checkRepository(owner, repo)
                 if (repoResult.isSuccess) {
@@ -319,10 +368,10 @@ class GitHubApiClient(
                 }
             }
 
-            // Base64编码内容
-            val encodedContent = Base64.encodeToString(content.toByteArray(), Base64.NO_WRAP)
+            // 对原始字节做"一次"Base64 (Contents API 硬性要求) , 不再叠加历史的第二层
+            val encodedContent = Base64.getEncoder().encodeToString(content)
 
-            // 使用JSONObject构建请求体，确保sha为null或空字符串时不包含该字段
+            // 使用JSONObject构建请求体, 确保sha为null或空字符串时不包含该字段
             val jsonObject = org.json.JSONObject().apply {
                 put("message", message)
                 put("content", encodedContent)

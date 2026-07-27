@@ -367,6 +367,7 @@
     <string name="playlist_search_hint">搜索歌单内歌曲</string>
     <string name="playlist_favorite_hint">在歌单详情页点击收藏按钮，或长按首页推荐歌单收藏</string>
     <string name="playlist_play_count_format" formatted="false">播放量 %1$s · %2$d 首</string>
+    <string name="collection_track_count_format" formatted="false">%d 首</string>
     <string name="playlist_loading_content">正在加载歌单内容…</string>
     <string name="youtube_music_playlist_partial_loaded">歌单还有内容没加载完，已先显示当前已获取的歌曲</string>
     <string name="youtube_music_playlist_wait_full_load">歌单还没完整加载，稍后再试或点刷新重试</string>
@@ -751,6 +752,7 @@
     <string name="settings_netease_status_missing">未检测到可用 Cookie，点击重新登录或导入</string>
     <string name="settings_youtube_login_methods">浏览器/Cookie 导入</string>
     <string name="settings_youtube_auth_missing">未读取到可用的 YouTube / YouTube Music 鉴权信息</string>
+    <string name="settings_youtube_auth_verifying">正在校验登录状态，请稍候…</string>
     <string name="settings_youtube_status_valid">已保存，最近更新于 %1$s</string>
     <string name="settings_youtube_status_saved_invalid">检测到已保存的 YouTube 鉴权信息，但当前可能无效，点击可刷新或退出登录</string>
     <string name="settings_youtube_status_missing">未检测到可用 YouTube 登录态，点击重新登录或导入</string>
@@ -774,6 +776,8 @@
     <string name="auth_cookie_empty">Cookie 为空</string>
     <string name="settings_netease_auto_source_switch">网易云自动换源</string>
     <string name="settings_netease_auto_source_switch_desc">网易云歌曲无权限或仅返回试听片段时，自动在哔哩哔哩查找音源</string>
+    <string name="settings_netease_local_source_fallback">本地音频兜底</string>
+    <string name="settings_netease_local_source_fallback_desc">网易云歌曲无权限或仅返回试听片段时，优先播放已匹配相同歌曲信息的本地音频</string>
     <string name="settings_netease_quality">网易云默认音质</string>
     <string name="settings_bili_quality">B 站默认音质</string>
     <string name="netease_web_login">网易云登录</string>

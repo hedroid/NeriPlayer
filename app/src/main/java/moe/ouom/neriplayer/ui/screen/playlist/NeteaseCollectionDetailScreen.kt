@@ -176,16 +176,16 @@ fun NeteasePlaylistDetailScreen(
     )
 
     val ui by vm.uiState.collectAsState()
-    // 使用 Unit 作为 key，确保每次进入都重新加载最新数据
+    // 使用 Unit 作为 key, 确保每次进入都重新加载最新数据
     LaunchedEffect(Unit) { vm.startPlaylist(playlist) }
 
-    // 保存最新的header数据，用于在Screen销毁时更新使用记录
+    // 保存最新的header数据, 用于在Screen销毁时更新使用记录
     var latestHeader by remember { mutableStateOf<NeteaseCollectionHeader?>(null) }
     LaunchedEffect(ui.header) {
         ui.header?.let { latestHeader = it }
     }
 
-    // 在 Screen 销毁时更新使用记录，确保返回主页时卡片显示最新信息
+    // 在 Screen 销毁时更新使用记录, 确保返回主页时卡片显示最新信息
     DisposableEffect(Unit) {
         onDispose {
             latestHeader?.let { header ->
@@ -230,16 +230,16 @@ fun NeteaseAlbumDetailScreen(
     )
 
     val ui by vm.uiState.collectAsState()
-    // 使用 Unit 作为 key，确保每次进入都重新加载最新数据
+    // 使用 Unit 作为 key, 确保每次进入都重新加载最新数据
     LaunchedEffect(Unit) { vm.startAlbum(album) }
 
-    // 保存最新的header数据，用于在Screen销毁时更新使用记录
+    // 保存最新的header数据, 用于在Screen销毁时更新使用记录
     var latestHeader by remember { mutableStateOf<NeteaseCollectionHeader?>(null) }
     LaunchedEffect(ui.header) {
         ui.header?.let { latestHeader = it }
     }
 
-    // 在 Screen 销毁时更新使用记录，确保返回主页时卡片显示最新信息
+    // 在 Screen 销毁时更新使用记录, 确保返回主页时卡片显示最新信息
     DisposableEffect(Unit) {
         onDispose {
             latestHeader?.let { header ->
@@ -344,7 +344,7 @@ fun DetailScreen(
             ) {
                 val miniPlayerHeight = LocalMiniPlayerHeight.current
                 Column {
-                    // 顶部栏：普通模式 / 多选模式
+                    // 顶部栏: 普通模式 / 多选模式
                     if (!selectionMode) {
                         TopAppBar(
                             title = {
@@ -573,11 +573,19 @@ fun DetailScreen(
                                         )
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            text = stringResource(
-                                                R.string.playlist_play_count_format,
-                                                formatPlayCount(context, ui.header?.playCount ?: 0),
-                                                ui.header?.trackCount ?: 0
-                                            ),
+                                            // 专辑没有播放量概念(网易云专辑接口不返回 playCount), 只显示曲目数, 避免出现误导性的"播放量 0"
+                                            text = if (ui.header?.isAlbum == true) {
+                                                stringResource(
+                                                    R.string.collection_track_count_format,
+                                                    ui.header?.trackCount ?: 0
+                                                )
+                                            } else {
+                                                stringResource(
+                                                    R.string.playlist_play_count_format,
+                                                    formatPlayCount(context, ui.header?.playCount ?: 0),
+                                                    ui.header?.trackCount ?: 0
+                                                )
+                                            },
                                             style = MaterialTheme.typography.bodySmall.copy(
                                                 shadow = Shadow(
                                                     color = Color.Black.copy(alpha = 0.6f),

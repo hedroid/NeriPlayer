@@ -468,17 +468,22 @@ class WebDavSyncManager private constructor(context: Context) {
             remote = remote.recentPlays,
             deletions = mergedRecentPlayDeletions
         )
-        val mergedPlaybackStats = mergePlaybackStats(
-            local = local.playbackStats,
-            remote = remote.playbackStats,
-            playbackStatsClearedAt = maxOf(local.playbackStatsClearedAt, remote.playbackStatsClearedAt)
-        )
-        val mergedPlaybackStatBuckets = mergePlaybackStatBuckets(
-            local = local.playbackStatBuckets,
-            remote = remote.playbackStatBuckets,
-            playbackStatsClearedAt = maxOf(local.playbackStatsClearedAt, remote.playbackStatsClearedAt)
-        )
         val playbackStatsClearedAt = maxOf(local.playbackStatsClearedAt, remote.playbackStatsClearedAt)
+        // 收尾顺序与桌面 three_way_merge / GitHub 路径逐字一致: 先用"未裁剪"的合并日桶抬升 (消除"年 > 总") , 再分别裁剪
+        val finalizedPlaybackStats = SyncPlaybackStatsMergePolicy.finalizeMergedStats(
+            mergedStats = mergePlaybackStats(
+                local = local.playbackStats,
+                remote = remote.playbackStats,
+                playbackStatsClearedAt = playbackStatsClearedAt
+            ),
+            mergedBuckets = mergePlaybackStatBuckets(
+                local = local.playbackStatBuckets,
+                remote = remote.playbackStatBuckets,
+                playbackStatsClearedAt = playbackStatsClearedAt
+            )
+        )
+        val mergedPlaybackStats = finalizedPlaybackStats.stats
+        val mergedPlaybackStatBuckets = finalizedPlaybackStats.buckets
 
         val mergedData = SyncData(
             deviceId = local.deviceId,
@@ -1055,8 +1060,8 @@ class WebDavSyncManager private constructor(context: Context) {
         }
 
         val remoteData = try {
-            SyncDataSerializer.ensureRemoteContentSize(snapshot.content, false)
-            sanitizeSyncData(SyncDataSerializer.deserialize(snapshot.content, false))
+            SyncDataSerializer.ensureRemoteContentSize(snapshot.content)
+            sanitizeSyncData(SyncDataSerializer.deserialize(snapshot.content))
         } catch (e: Exception) {
             NPLogger.e(TAG, "Failed to parse remote data", e)
             return Result.failure(e)
@@ -1082,8 +1087,17 @@ class WebDavSyncManager private constructor(context: Context) {
         val playlistsAdded = localData.playlists.count { !it.isDeleted }
         val playlistsDeleted = localData.playlists.count(SyncPlaylist::isDeleted)
         val songsAdded = localData.playlists.sumOf { playlist -> playlist.songs.size }
+        // 首次同步同样走收尾 (与 GitHub / 桌面一致: 先用"未裁剪"桶抬升, 再裁剪) , 避免首个备份文件无界增长
+        val finalizedInitialStats = SyncPlaybackStatsMergePolicy.finalizeMergedStats(
+            mergedStats = localData.playbackStats,
+            mergedBuckets = localData.playbackStatBuckets
+        )
         return MergeResult(
-            mergedData = localData.copy(lastModified = System.currentTimeMillis()),
+            mergedData = localData.copy(
+                lastModified = System.currentTimeMillis(),
+                playbackStats = finalizedInitialStats.stats,
+                playbackStatBuckets = finalizedInitialStats.buckets
+            ),
             syncResult = SyncResult(
                 success = true,
                 message = localizedContext.getString(R.string.sync_initial_uploaded),
@@ -1101,15 +1115,23 @@ class WebDavSyncManager private constructor(context: Context) {
         version: WebDavRemoteVersion
     ): Result<WebDavRemoteVersion> {
         val localizedContext = LanguageManager.applyLanguage(appContext)
-        val content = SyncDataSerializer.serialize(data, false)
+        val useDataSaver = storage.isDataSaverMode()
+        val content = SyncDataSerializer.serialize(data, useDataSaver)
+        // 省流传 Base64(GZIP(ProtoBuf)) 文本字节 (老端可读) ; 非省流传 UTF-8 JSON 字节
+        val mediaType = if (useDataSaver) {
+            "text/plain; charset=utf-8"
+        } else {
+            "application/json; charset=utf-8"
+        }
         NPLogger.d(
             TAG,
-            "Upload data size: ${SyncDataSerializer.getDataSize(data, false)} bytes (WebDAV)"
+            "Upload data size: ${SyncDataSerializer.getDataSize(data, useDataSaver)} bytes (DataSaver: $useDataSaver, WebDAV)"
         )
 
         val uploadResult = apiClient.updateFileContent(
             remoteUrl = remoteUrl,
             content = content,
+            mediaType = mediaType,
             expectedVersion = version.token,
             createOnly = version.createOnly
         )

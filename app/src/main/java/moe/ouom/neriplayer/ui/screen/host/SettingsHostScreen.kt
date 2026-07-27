@@ -203,6 +203,8 @@ fun SettingsHostScreen(
     onKeepPlaybackModeStateChange: (Boolean) -> Unit,
     neteaseAutoSourceSwitch: Boolean,
     onNeteaseAutoSourceSwitchChange: (Boolean) -> Unit,
+    neteaseLocalSourceFallback: Boolean,
+    onNeteaseLocalSourceFallbackChange: (Boolean) -> Unit,
     stopOnBluetoothDisconnect: Boolean,
     onStopOnBluetoothDisconnectChange: (Boolean) -> Unit,
     usbExclusivePlayback: Boolean,
@@ -220,8 +222,9 @@ fun SettingsHostScreen(
         revealTopFraction: Float,
         contentTranslationYFraction: Float,
         contentScale: Float,
+        sceneDepth: Int,
         content: @Composable () -> Unit
-    ) -> Unit = { _, _, _, content ->
+    ) -> Unit = { _, _, _, _, content ->
         content()
     },
 ) {
@@ -345,7 +348,8 @@ fun SettingsHostScreen(
             renderScene(
                 sceneMotion.revealTopFraction,
                 sceneMotion.contentTranslationYFraction,
-                sceneMotion.contentScale
+                sceneMotion.contentScale,
+                state.navigationDepth
             ) {
                     saveableStateHolder.SaveableStateProvider(state.saveableKey()) {
                         when (state) {
@@ -475,6 +479,8 @@ fun SettingsHostScreen(
                             onKeepPlaybackModeStateChange = onKeepPlaybackModeStateChange,
                             neteaseAutoSourceSwitch = neteaseAutoSourceSwitch,
                             onNeteaseAutoSourceSwitchChange = onNeteaseAutoSourceSwitchChange,
+                            neteaseLocalSourceFallback = neteaseLocalSourceFallback,
+                            onNeteaseLocalSourceFallbackChange = onNeteaseLocalSourceFallbackChange,
                             stopOnBluetoothDisconnect = stopOnBluetoothDisconnect,
                             onStopOnBluetoothDisconnectChange = onStopOnBluetoothDisconnectChange,
                             usbExclusivePlayback = usbExclusivePlayback,

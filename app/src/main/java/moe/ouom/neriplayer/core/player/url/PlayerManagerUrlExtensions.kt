@@ -41,6 +41,7 @@ import moe.ouom.neriplayer.core.player.quality.effectiveNeteaseQuality
 import moe.ouom.neriplayer.core.player.quality.effectiveYouTubeQuality
 import moe.ouom.neriplayer.core.player.resolver.netease.NeteasePlaybackResponseParser
 import moe.ouom.neriplayer.core.player.resolver.netease.tryResolveNeteaseAutoBiliSource
+import moe.ouom.neriplayer.core.player.resolver.netease.tryResolveNeteaseMatchedLocalSource
 import moe.ouom.neriplayer.core.player.watchdog.configureActivePlaybackCandidates
 import moe.ouom.neriplayer.core.player.watchdog.currentPlaybackCandidate
 import moe.ouom.neriplayer.core.player.watchdog.resetPlaybackProgressAdvanceBaseline
@@ -53,7 +54,7 @@ import java.io.File
 
 private const val OFFLINE_CACHE_URL_PREFIX = "http://offline.cache/"
 internal const val YOUTUBE_PLAYBACK_PREFER_M4A = false
-private const val YOUTUBE_STABLE_RECOVERY_QUALITY = "high"
+internal const val YOUTUBE_STABLE_RECOVERY_QUALITY = "high"
 
 internal suspend fun PlayerManager.resolveSongUrl(
     song: SongItem,
@@ -202,7 +203,8 @@ internal suspend fun PlayerManager.resolveShareableListenTogetherStreamUrl(
         else -> getNeteaseSongUrl(
             song = song,
             suppressError = true,
-            sideEffects = sideEffects
+            sideEffects = sideEffects,
+            allowLocalFallback = false
         )
     }
     if (result is SongUrlResult.Success && !isDirectStreamUrl(result.url)) {
@@ -265,9 +267,22 @@ internal fun resolveYouTubePlaybackRecoveryStrategy(
     if (!shouldAttemptYouTubePlaybackRecovery(error, isOfflineCache)) return null
     return YouTubePlaybackRecoveryStrategy(
         preferredQualityOverride = YOUTUBE_STABLE_RECOVERY_QUALITY,
-        requireDirect = true,
+        requireDirect = shouldRequireDirectOnYouTubeRecovery(error, isOfflineCache),
         preferM4a = true
     )
+}
+
+/**
+ * googlevideo 拒了直链时不能再强制直链, 否则恢复必然拿回同一条 403
+ *
+ * 机房和被风控的出口上直链常年不可用, 只有放开这个约束才能落到 HLS
+ */
+internal fun shouldRequireDirectOnYouTubeRecovery(
+    error: PlaybackException,
+    isOfflineCache: Boolean
+): Boolean {
+    if (isOfflineCache) return true
+    return error.errorCode != PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
 }
 
 internal fun offlineCacheKeyFromUrl(url: String?): String? {
@@ -858,7 +873,8 @@ private suspend fun PlayerManager.invalidateCachedResourceBeforeResolve(
 private suspend fun PlayerManager.getNeteaseSongUrl(
     song: SongItem,
     suppressError: Boolean = false,
-    sideEffects: RefreshResolverSideEffects = RefreshResolverSideEffects()
+    sideEffects: RefreshResolverSideEffects = RefreshResolverSideEffects(),
+    allowLocalFallback: Boolean = true
 ): SongUrlResult = withContext(Dispatchers.IO) {
     try {
         val effectiveQuality = effectiveNeteaseQuality()
@@ -924,6 +940,11 @@ private suspend fun PlayerManager.getNeteaseSongUrl(
         if (previewFallback != null ||
             lastFailureReason == NeteasePlaybackResponseParser.FailureReason.NO_PERMISSION
         ) {
+            if (allowLocalFallback) {
+                tryResolveNeteaseMatchedLocalSource(song)?.let {
+                    return@withContext it
+                }
+            }
             tryResolveNeteaseAutoBiliSource(song, sideEffects)?.let {
                 return@withContext it
             }
@@ -1048,7 +1069,7 @@ private suspend fun PlayerManager.getYouTubeMusicAudioUrl(
         val preferredQuality = youtubeRecoveryStrategy?.preferredQualityOverride
             ?: effectiveYouTubeQuality()
         val requireDirect = youtubeRecoveryStrategy?.requireDirect ?: false
-        // 首播保留用户选择；出错恢复时才切到更稳的 m4a 直链
+        // 首播保留用户选择; 出错恢复时才切到更稳的 m4a 直链
         val preferM4a = youtubeRecoveryStrategy?.preferM4a ?: false
         val resolvedPlayableAudio = youtubeMusicPlaybackRepository.getBestPlayableAudio(
             videoId = videoId,

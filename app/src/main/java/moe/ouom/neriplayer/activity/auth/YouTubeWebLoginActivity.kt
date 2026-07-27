@@ -69,7 +69,9 @@ import moe.ouom.neriplayer.data.auth.youtube.YouTubeWebLoginVerifier
 import moe.ouom.neriplayer.data.auth.youtube.YOUTUBE_MUSIC_ORIGIN
 import moe.ouom.neriplayer.data.auth.youtube.evaluateYouTubeAuthHealth
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthState
+import moe.ouom.neriplayer.data.platform.youtube.YOUTUBE_DEFAULT_WEB_USER_AGENT
 import moe.ouom.neriplayer.data.platform.youtube.isTrustedYouTubeLoginHost
+import moe.ouom.neriplayer.data.platform.youtube.resolveYouTubeMobileWebLoginUserAgent
 import moe.ouom.neriplayer.util.network.DynamicProxySelector
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.network.isAllowedMainFrameRequest
@@ -93,6 +95,8 @@ class YouTubeWebLoginActivity : ComponentActivity() {
             "youtube.com",
             "m.youtube.com"
         )
+        private const val YOUTUBE_MUSIC_RETURN_URL = "https://music.youtube.com/"
+        private const val MAX_OFF_SITE_LOGIN_RETURNS = 2
         private val WEB_STORAGE_ORIGINS = listOf(
             "https://accounts.google.com",
             "https://music.youtube.com",
@@ -150,6 +154,10 @@ class YouTubeWebLoginActivity : ComponentActivity() {
 
     @Volatile
     private var loginVerificationInFlight: Boolean = false
+
+    /** 校验期间的常驻提示, 避免误判点完成无响应 */
+    private var verifyingSnack: Snackbar? = null
+    private var offSiteLoginReturns = 0
 
     @Volatile
     private var lastRejectedVerificationKey: String = ""
@@ -218,14 +226,24 @@ class YouTubeWebLoginActivity : ComponentActivity() {
                 setSupportZoom(true)
                 builtInZoomControls = true
                 displayZoomControls = false
+                // 用剥掉 WebView 标记的移动 Chrome UA 导航:桌面 UA 会被 Google 判定为不安全浏览器
+                // 并硬封锁("此浏览器或应用可能不安全"),移动 UA 规避该硬封锁;去掉 "; wv" 与
+                // "Version/4.0" 标记后更像真实移动浏览器,尽量规避跳转 Play/app
+                userAgentString = resolveYouTubeMobileWebLoginUserAgent(
+                    runCatching {
+                        WebSettings.getDefaultUserAgent(this@YouTubeWebLoginActivity)
+                    }.getOrNull()
+                )
             }
-            webViewUserAgent = settings.userAgentString.orEmpty()
+            // 存入 bundle 的 UA 仍固定为桌面 Web UA(WEB_REMIX 播放经 resolveBootstrapUserAgent 也用它),
+            // 登录导航用移动 UA, 播放请求用桌面 UA,二者解耦,登录 UA 不污染播放指纹语义
+            webViewUserAgent = YOUTUBE_DEFAULT_WEB_USER_AGENT
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webChromeClient = WebChromeClient()
             webViewClient = InnerClient()
         }
-        // WebView 的 JS 定时器是进程级的，前台登录页先主动恢复一次更稳
+        // WebView 的 JS 定时器是进程级的, 前台登录页先主动恢复一次更稳
         webView.resumeTimers()
 
         restorePersistedCookies()
@@ -370,7 +388,7 @@ class YouTubeWebLoginActivity : ComponentActivity() {
         }
         resetPersistedWebStorage()
 
-        // Google 登录页对历史 cookie 很敏感，这里只保留最小 consent 基线
+        // Google 登录页对历史 cookie 很敏感, 这里只保留最小 consent 基线
         applyYouTubeWebCookies(
             cookieManager = cookieManager,
             cookies = emptyMap(),
@@ -443,7 +461,14 @@ class YouTubeWebLoginActivity : ComponentActivity() {
         pageSessionState: ObservedPageSessionState,
         showFailureSnack: Boolean
     ) {
-        if (hasReturned || loginVerificationInFlight) {
+        if (hasReturned) {
+            return
+        }
+        if (loginVerificationInFlight) {
+            // 静默吞掉重复点击会表现为按钮无响应
+            if (showFailureSnack) {
+                showVerifyingSnack()
+            }
             return
         }
 
@@ -466,6 +491,9 @@ class YouTubeWebLoginActivity : ComponentActivity() {
         }
 
         loginVerificationInFlight = true
+        if (showFailureSnack) {
+            showVerifyingSnack()
+        }
         lifecycleScope.launch {
             val verification = runCatching {
                 withContext(Dispatchers.IO) {
@@ -473,6 +501,7 @@ class YouTubeWebLoginActivity : ComponentActivity() {
                 }
             }
             loginVerificationInFlight = false
+            dismissVerifyingSnack()
             if (hasReturned) {
                 return@launch
             }
@@ -534,11 +563,29 @@ class YouTubeWebLoginActivity : ComponentActivity() {
     }
 
     private fun showCookieMissingSnack() {
+        dismissVerifyingSnack()
         Snackbar.make(
             webView,
             getString(R.string.settings_youtube_auth_missing),
             Snackbar.LENGTH_LONG
         ).show()
+    }
+
+    /** 校验走网络可能耗时数秒, 期间没有反馈用户会误判为无响应并中途退出 */
+    private fun showVerifyingSnack() {
+        if (verifyingSnack?.isShown == true) {
+            return
+        }
+        verifyingSnack = Snackbar.make(
+            webView,
+            getString(R.string.settings_youtube_auth_verifying),
+            Snackbar.LENGTH_INDEFINITE
+        ).also { it.show() }
+    }
+
+    private fun dismissVerifyingSnack() {
+        verifyingSnack?.dismiss()
+        verifyingSnack = null
     }
 
     private fun executeLoginVerificationRequest(request: Request): String {
@@ -731,9 +778,54 @@ class YouTubeWebLoginActivity : ComponentActivity() {
             CookieManager.getInstance().flush()
             capturePageSessionState()
             persistObservedAuthIfNeeded()
+            if (shouldReturnToYouTubeAfterLogin(url)) {
+                NPLogger.d(
+                    "YouTubeWebLogin",
+                    "login landed off-site, returning to YouTube Music to harvest cookies"
+                )
+                view?.loadUrl(YOUTUBE_MUSIC_RETURN_URL)
+                return
+            }
             loginCompletionWatcher.scheduleCheck()
             super.onPageFinished(view, url)
         }
+    }
+
+    /**
+     * 登录链路有时会停在 Play 商店的 YouTube Music 页而不是 music.youtube.com
+     * 此时账号其实已经登上, 但收割只认 YouTube 域, 界面就会一直卡在等 cookie
+     */
+    private fun shouldReturnToYouTubeAfterLogin(url: String?): Boolean {
+        if (offSiteLoginReturns >= MAX_OFF_SITE_LOGIN_RETURNS) {
+            return false
+        }
+        val host = runCatching { Uri.parse(url.orEmpty()).host }
+            .getOrNull()
+            ?.lowercase()
+            .orEmpty()
+        if (host.isEmpty() || host in AUTH_HOSTS || host.endsWith("google.com")) {
+            return false
+        }
+        val cookieHeader = runCatching {
+            CookieManager.getInstance().getCookie(YOUTUBE_MUSIC_RETURN_URL)
+        }.getOrNull().orEmpty()
+        if (!YouTubeCookieSupport.isLoggedIn(parseYouTubeCookieHeader(cookieHeader))) {
+            return false
+        }
+        offSiteLoginReturns++
+        return true
+    }
+
+    private fun parseYouTubeCookieHeader(raw: String): Map<String, String> {
+        return raw.split(';')
+            .mapNotNull { segment ->
+                val trimmed = segment.trim()
+                val index = trimmed.indexOf('=')
+                if (index <= 0) return@mapNotNull null
+                trimmed.substring(0, index).trim() to trimmed.substring(index + 1).trim()
+            }
+            .filter { (key, value) -> key.isNotBlank() && value.isNotBlank() }
+            .toMap()
     }
 
     private fun isAllowedLoginUri(uri: Uri?): Boolean {

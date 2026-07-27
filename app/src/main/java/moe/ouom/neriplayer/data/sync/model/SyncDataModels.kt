@@ -58,8 +58,9 @@ internal fun mergePositiveTimestamp(left: Long, right: Long): Long {
 @Serializable
 data class SyncData(
     @ProtoNumber(1) val version: String = "2.0",
-    @ProtoNumber(2) val deviceId: String,
-    @ProtoNumber(3) val deviceName: String,
+    // proto3 语义下标量默认值不写入报文, 桌面端可能省略, 解码侧必须提供默认值以免 MissingFieldException
+    @ProtoNumber(2) val deviceId: String = "",
+    @ProtoNumber(3) val deviceName: String = "",
     @ProtoNumber(4) val lastModified: Long = System.currentTimeMillis(),
     @ProtoNumber(5) val playlists: List<SyncPlaylist> = emptyList(),
     @ProtoNumber(6) val favoritePlaylists: List<SyncFavoritePlaylist> = emptyList(),
@@ -75,11 +76,11 @@ data class SyncData(
 /**
  * 同步歌单
  * 包含时间戳用于冲突检测
- * 桌面端 ProtoBuf 编码会省略默认值，因此可为空或为零的字段需要提供解码默认值
+ * 桌面端 ProtoBuf 编码会省略默认值, 因此可为空或为零的字段需要提供解码默认值
  */
 @Serializable
 data class SyncPlaylist(
-    @ProtoNumber(1) val id: Long,
+    @ProtoNumber(1) val id: Long = 0L,
     @ProtoNumber(2) val name: String = "",
     @ProtoNumber(3) val songs: List<SyncSong> = emptyList(),
     @ProtoNumber(4) val createdAt: Long = 0L,
@@ -103,7 +104,7 @@ data class SyncPlaylist(
         }
     }
 
-    internal fun normalizedForDisplayOrder(now: Long = System.currentTimeMillis()): SyncPlaylist {
+    internal fun normalizedForDisplayOrder(): SyncPlaylist {
         if (isDeleted) {
             return copy(
                 songs = emptyList(),
@@ -114,7 +115,7 @@ data class SyncPlaylist(
         val displaySongs = if (songOrderVersion >= DISPLAY_ORDER_SONG_ORDER_VERSION) {
             songs.sortedByAddedAtForDisplay()
         } else {
-            songs.migrateLegacySongsToDisplayOrder(modifiedAt, now)
+            songs.migrateLegacySongsToDisplayOrder(modifiedAt)
         }
         return if (
             songOrderVersion >= DISPLAY_ORDER_SONG_ORDER_VERSION &&
@@ -142,15 +143,16 @@ data class SyncPlaylist(
 }
 
 private fun List<SyncSong>.migrateLegacySongsToDisplayOrder(
-    playlistModifiedAt: Long,
-    now: Long
+    playlistModifiedAt: Long
 ): List<SyncSong> {
     if (isEmpty()) return emptyList()
+    // 锚点必须与设备墙钟无关: 只用歌单自身 modifiedAt (快照产生时刻) 而非 now
+    // 否则被抬高的 addedAt 恒大于任何历史 deletedAt, 使 identity 删除墓碑永久失效并被
+    // pruneResolvedDeletions 裁剪, 导致已删歌曲复活 (P1-1)
     val newestAddedAt = maxOf(
-        now,
         playlistModifiedAt,
         maxOfOrNull { it.addedAt } ?: 0L
-    )
+    ).coerceAtLeast(1L)
     return asReversed().mapIndexed { index, song ->
         song.copyWithNormalizedMembershipTokens(
             addedAt = (newestAddedAt - index).coerceAtLeast(1L)
@@ -371,7 +373,7 @@ internal fun SyncPlaylistSongDeletion.copyWithNormalizedMembershipTokens(
  */
 @Serializable
 data class SyncFavoritePlaylist(
-    @ProtoNumber(1) val id: Long,
+    @ProtoNumber(1) val id: Long = 0L,
     @ProtoNumber(2) val name: String = "",
     @ProtoNumber(3) val coverUrl: String? = null,
     @ProtoNumber(4) val trackCount: Int = 0,
@@ -456,9 +458,10 @@ data class SyncFavoritePlaylist(
  */
 @Serializable
 data class SyncLogEntry(
-    @ProtoNumber(1) val timestamp: Long,
-    @ProtoNumber(2) val deviceId: String,
-    @ProtoNumber(3) val action: SyncAction,
+    // action 枚举序数 0 (CREATE_PLAYLIST) 在 proto3 会被省略, 缺省值必须与 tag=0 语义一致
+    @ProtoNumber(1) val timestamp: Long = 0L,
+    @ProtoNumber(2) val deviceId: String = "",
+    @ProtoNumber(3) val action: SyncAction = SyncAction.CREATE_PLAYLIST,
     @ProtoNumber(4) val playlistId: Long? = null,
     @ProtoNumber(5) val songId: Long? = null,
     @ProtoNumber(6) val details: String? = null

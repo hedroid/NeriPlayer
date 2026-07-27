@@ -195,6 +195,7 @@ import moe.ouom.neriplayer.core.download.shouldHideRemoteDownloadAction
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioInfo
 import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
+import moe.ouom.neriplayer.core.player.model.forSource
 import moe.ouom.neriplayer.core.player.model.PlaybackQualityOption
 import moe.ouom.neriplayer.data.local.media.isLocalSong
 import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
@@ -389,6 +390,7 @@ fun NowPlayingScreen(
     val durationMs by PlayerManager.playbackDurationFlow.collectAsStateWithLifecycle()
     val sleepTimerState by PlayerManager.sleepTimerManager.timerState.collectAsStateWithLifecycle()
     val currentPlaybackAudioInfo by PlayerManager.currentPlaybackAudioInfoFlow.collectAsStateWithLifecycle()
+    val preferredQualityKeys by PlayerManager.preferredQualityKeys.collectAsStateWithLifecycle()
     val playbackSoundState by PlayerManager.playbackSoundStateFlow.collectAsStateWithLifecycle()
     val settingsRepo = remember { AppContainer.settingsRepo }
     val listenTogetherSessionManager = remember { AppContainer.listenTogetherSessionManager }
@@ -452,7 +454,7 @@ fun NowPlayingScreen(
         currentSong?.displayCoverUrl(context)
     }
 
-    // 点击即切换，回流后撤销覆盖
+    // 点击即切换, 回流后撤销覆盖
     var favOverride by remember(currentSong) { mutableStateOf<Boolean?>(null) }
     val isFavoriteComputed = remember(currentSong, playlists) {
         val song = currentSong ?: return@remember false
@@ -679,7 +681,7 @@ fun NowPlayingScreen(
                     }
                 }
                 shouldDelayOnlineLyrics -> {
-                    // 当前曲目还在抢首播地址，先别让歌词请求去争 EJS 和鉴权链路
+                    // 当前曲目还在抢首播地址, 先别让歌词请求去争 EJS 和鉴权链路
                     emptyList()
                 }
                 song != null -> {
@@ -791,7 +793,7 @@ fun NowPlayingScreen(
         }
     }
 
-    // 当仓库回流或歌曲切换时，撤销本地乐观覆盖，用真实状态对齐
+    // 当仓库回流或歌曲切换时, 撤销本地乐观覆盖, 用真实状态对齐
     LaunchedEffect(playlists, currentSong?.id) { favOverride = null }
 
     fun launchWithLocalSyncWarning(
@@ -833,7 +835,7 @@ fun NowPlayingScreen(
         else -> 20.dp
     }
 
-    // 歌词偏移（平台 + 用户自定义）
+    // 歌词偏移 (平台 + 用户自定义)
     val platformOffset = resolveLyricDefaultOffsetMs(
         lyricSource = currentSong?.matchedLyricSource,
         cloudMusicDefaultOffsetMs = cloudMusicLyricDefaultOffsetMs,
@@ -940,7 +942,7 @@ fun NowPlayingScreen(
                         detectVerticalDragGestures { _, dragAmount -> if (dragAmount > 60) onNavigateUp() }
                     }
 
-                // 手机或竖屏下，左滑进入歌词页
+                // 手机或竖屏下, 左滑进入歌词页
                 if (!useWideLandscapeLayout && lyrics.isNotEmpty()) {
                     contentModifier = contentModifier.pointerInput(lyrics) {
                         detectHorizontalDragGestures { _, dragAmount ->
@@ -1351,7 +1353,7 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    // 手机/竖屏，内嵌迷你歌词
+                    // 手机/竖屏, 内嵌迷你歌词
                     if (!useWideLandscapeLayout && lyrics.isNotEmpty()) {
                         Spacer(Modifier.weight(1f))
 
@@ -1376,10 +1378,10 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    // 将下面的内容推到底部，平板横屏也保持贴近底部的手感
+                    // 将下面的内容推到底部, 平板横屏也保持贴近底部的手感
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // 底部操作栏（固定在底部）
+                    // 底部操作栏 (固定在底部)
                     Column(
                         modifier = if (useWideLandscapeLayout) {
                             Modifier
@@ -1451,7 +1453,7 @@ fun NowPlayingScreen(
                                     )
                                 }
 
-                                // 音量按钮（根据设备显示不同图标，居中）
+                                // 音量按钮 (根据设备显示不同图标, 居中)
                                 val audioDeviceInfo = rememberAudioDeviceInfo()
                                 HapticIconButton(onClick = { showVolumeSheet = true },
                                     modifier = Modifier
@@ -1795,7 +1797,10 @@ fun NowPlayingScreen(
             if (showQualitySwitchDialog && currentPlaybackAudioInfo != null) {
                 NowPlayingQualityOptionsDialog(
                     title = stringResource(R.string.nowplaying_quality_switch_title),
-                    selectedKey = currentPlaybackAudioInfo?.qualityKey,
+                    selectedKey = currentPlaybackAudioInfo
+                        ?.source
+                        ?.let(preferredQualityKeys::forSource)
+                        ?: currentPlaybackAudioInfo?.qualityKey,
                     options = currentPlaybackAudioInfo?.qualityOptions.orEmpty(),
                     onDismiss = { showQualitySwitchDialog = false },
                     onSelect = { option ->
@@ -2552,7 +2557,7 @@ fun EditSongInfoSheet(
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
-    // 监听当前播放的歌曲，以便在"获取歌曲信息"后更新UI
+    // 监听当前播放的歌曲, 以便在"获取歌曲信息"后更新UI
     val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
     val actualSong = if (currentSong?.sameIdentityAs(originalSong) == true) {
         currentSong!!
@@ -2575,14 +2580,14 @@ fun EditSongInfoSheet(
     var shouldRestoreArtistBase by remember { mutableStateOf(false) }
     var shouldClearMatchedMetadata by remember { mutableStateOf(false) }
 
-    // 标记用户是否手动编辑过，避免自动重置
+    // 标记用户是否手动编辑过, 避免自动重置
     var userHasEdited by remember { mutableStateOf(false) }
 
     val searchState by viewModel.manualSearchState.collectAsStateWithLifecycle()
 
     val scrollState = rememberScrollState()
 
-    // 当歌曲信息更新时，同步更新UI（仅在用户未手动编辑时）
+    // 当歌曲信息更新时, 同步更新UI (仅在用户未手动编辑时)
     LaunchedEffect(actualSong) {
         if (!userHasEdited) {
             coverUrl = actualSong.customCoverUrl ?: actualSong.coverUrl ?: ""
@@ -2641,7 +2646,7 @@ fun EditSongInfoSheet(
         }
     }
 
-    // 使用 AnimatedVisibility 控制内容显示，避免重叠
+    // 使用 AnimatedVisibility 控制内容显示, 避免重叠
     AnimatedVisibility(
         visible = lyricsEditorSeed == null,
         enter = fadeIn(),
@@ -2811,7 +2816,7 @@ fun EditSongInfoSheet(
                                 }.getOrNull().orEmpty()
                                 val displayedLyricsText = displayedLyricsSnapshot.toEditableLyricsText()
 
-                                // 把歌词准备挪到后台，避免打开编辑器时把主线程卡住
+                                // 把歌词准备挪到后台, 避免打开编辑器时把主线程卡住
                                 val fallbackLyricsText = run {
                                     val lyricEntries = PlayerManager.getLyrics(actualSong)
                                     if (lyricEntries.isNotEmpty()) {
@@ -2932,9 +2937,9 @@ fun EditSongInfoSheet(
                 onClick = {
                     coroutineScope.launch {
                         try {
-                            // 处理歌词：清除(B站)或恢复(网易云)
+                            // 处理歌词: 清除(B站)或恢复(网易云)
                             if (shouldClearLyrics) {
-                                // B站音源：清除歌词
+                                // B站音源: 清除歌词
                                 NPLogger.d("NowPlayingScreen", "=== 开始清除歌词流程 ===")
                                 NPLogger.d("NowPlayingScreen", "actualSong详情: id=${actualSong.id}, album='${actualSong.album}', name='${actualSong.name}', artist='${actualSong.artist}'")
                                 NPLogger.d("NowPlayingScreen", "当前歌词状态: matchedLyric=${actualSong.matchedLyric?.take(50)}, matchedTranslatedLyric=${actualSong.matchedTranslatedLyric?.take(50)}")
@@ -2949,7 +2954,7 @@ fun EditSongInfoSheet(
                                 shouldClearLyrics = false  // 重置标志
                                 NPLogger.d("NowPlayingScreen", "=== 清除歌词流程完成 ===")
                             } else if (shouldRestoreLyrics) {
-                                // 网易云音源：恢复歌词
+                                // 网易云音源: 恢复歌词
                                 NPLogger.d("NowPlayingScreen", "=== 开始恢复歌词流程 ===")
                                 NPLogger.d("NowPlayingScreen", "actualSong详情: id=${actualSong.id}, album='${actualSong.album}'")
                                 NPLogger.d("NowPlayingScreen", "原始歌词: lyric=${originalLyric?.take(50)}, translatedLyric=${originalTranslatedLyric?.take(50)}")
@@ -2979,7 +2984,7 @@ fun EditSongInfoSheet(
                                 clearMatchedMetadata = shouldClearMatchedMetadata
                             )
 
-                            // 重置编辑标志，允许自动更新
+                            // 重置编辑标志, 允许自动更新
                             userHasEdited = false
                             shouldRestoreCoverBase = false
                             shouldRestoreTitleBase = false
@@ -3018,7 +3023,7 @@ fun EditSongInfoSheet(
             songResult = selectedSongForFill!!,
             onDismiss = { selectedSongForFill = null },
             onConfirm = { fillCover, fillTitle, fillArtist, fillLyrics ->
-                // 标记用户已编辑，防止自动重置
+                // 标记用户已编辑, 防止自动重置
                 userHasEdited = true
 
                 if (fillCover) {

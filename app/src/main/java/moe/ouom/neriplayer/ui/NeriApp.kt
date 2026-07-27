@@ -36,6 +36,7 @@ import android.os.Looper
 import android.view.PixelCopy
 import android.view.View
 import android.view.ViewTreeObserver
+import android.widget.Toast
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -1182,7 +1183,7 @@ private fun NowPlayingAccentBackdrop(
                         )
                     )
                 )
-                // 亮色模式白色遮罩，整体柔化
+                // 亮色模式白色遮罩, 整体柔化
                 if (whiteMaskAlpha > 0f) {
                     drawRect(Color.White.copy(alpha = whiteMaskAlpha))
                 }
@@ -1221,7 +1222,7 @@ fun NeriApp(
     )
 
     LaunchedEffect(Unit) {
-        // 先交一个极轻的背景首帧，下一帧再挂整棵导航和状态订阅树
+        // 先交一个极轻的背景首帧, 下一帧再挂整棵导航和状态订阅树
         withFrameNanos { }
         appContentReady = true
     }
@@ -1276,7 +1277,7 @@ private fun NeriAppContent(
     val systemDark = rememberActualSystemDarkTheme()
     val application = remember(context) { context.applicationContext as Application }
     SideEffect {
-        // 播放点击可能早于启动预加载完成，先绑定上下文避免懒初始化缺入口
+        // 播放点击可能早于启动预加载完成, 先绑定上下文避免懒初始化缺入口
         PlayerManager.bindApplication(application)
     }
     val startupPlaybackPreferences = remember(application) {
@@ -1387,6 +1388,9 @@ private fun NeriAppContent(
     val neteaseAutoSourceSwitch by repo.neteaseAutoSourceSwitchFlow.collectAsStateWithLifecycle(
         initialValue = startupPlaybackPreferences.neteaseAutoSourceSwitch
     )
+    val neteaseLocalSourceFallback by repo.neteaseLocalSourceFallbackFlow.collectAsStateWithLifecycle(
+        initialValue = startupPlaybackPreferences.neteaseLocalSourceFallback
+    )
     val stopOnBluetoothDisconnect by repo.stopOnBluetoothDisconnectFlow.collectAsStateWithLifecycle(initialValue = true)
     val usbExclusivePlayback by repo.usbExclusivePlaybackFlow.collectAsStateWithLifecycle(
         initialValue = startupPlaybackPreferences.usbExclusivePlayback
@@ -1464,7 +1468,7 @@ private fun NeriAppContent(
         clearThemeRevealVisualState()
     }
 
-    // 缓存当前封面的取色结果，避免开关动态取色时先闪到默认种子色
+    // 缓存当前封面的取色结果, 避免开关动态取色时先闪到默认种子色
     var coverSeedHex by remember { mutableStateOf<String?>(null) }
     val currentSong by PlayerManager.currentSongFlow.collectAsStateWithLifecycle()
     val displayCoverUrl = rememberSongDisplayCoverUrl(currentSong)
@@ -1845,7 +1849,7 @@ private fun NeriAppContent(
             source = "ui_click_before_play"
         )
         showNowPlaying = true
-        // 播放队列可能包含歌词等大字段，避免通过 Binder 传整份歌单导致崩溃
+        // 播放队列可能包含歌词等大字段, 避免通过 Binder 传整份歌单导致崩溃
         PlayerManager.playPlaylist(songs, index)
         scheduleAudioServiceStart(
             "play_songs_and_open_now_playing",
@@ -2117,6 +2121,7 @@ private fun NeriAppContent(
                 revealTopFraction: Float = 0f,
                 contentTranslationYFraction: Float = 0f,
                 contentScale: Float = 1f,
+                fixedBackground: Boolean = false,
                 content: @Composable () -> Unit
             ) {
                 AdvancedGlassSceneLayer(
@@ -2127,7 +2132,9 @@ private fun NeriAppContent(
                         contentScale = contentScale
                     ),
                     disableStretchOverscroll = backgroundImageUri != null,
+                    fixedBackground = fixedBackground,
                     background = {
+                        // 场景自绘壁纸背景, 玻璃模糊要采样它
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -2167,6 +2174,7 @@ private fun NeriAppContent(
                     revealTopFraction = motion.revealTopFraction,
                     contentTranslationYFraction = motion.contentTranslationYFraction,
                     contentScale = motion.contentScale,
+                    fixedBackground = false,
                     content = content
                 )
             }
@@ -2176,6 +2184,7 @@ private fun NeriAppContent(
                 revealTopFraction: Float,
                 contentTranslationYFraction: Float,
                 contentScale: Float,
+                sceneDepth: Int = 0,
                 content: @Composable () -> Unit
             ) {
                 val applyExternalDrawerMotion =
@@ -2193,6 +2202,9 @@ private fun NeriAppContent(
                     } else {
                         1f
                     },
+                    // 只有 tab 根列表 (sceneDepth 0) 走固定背景, 横滑切 tab 时壁纸不动
+                    // 嵌套详情必须保留不透明自背景, 靠揭示裁剪盖住退出列表, 否则两页内容互透叠印
+                    fixedBackground = backgroundImageUri != null && sceneDepth == 0,
                     content = content
                 )
             }
@@ -2208,11 +2220,12 @@ private fun NeriAppContent(
                         offlineMode = offlineMode,
                         onSongClick = ::playSongsAndOpenNowPlaying,
                         coherentFeedbackEnabled = coherentFeedbackEnabled,
-                        renderScene = { revealTop, translationY, scale, sceneContent ->
+                        renderScene = { revealTop, translationY, scale, sceneDepth, sceneContent ->
                             RenderMainTabNavigationScene(
                                 revealTop,
                                 translationY,
                                 scale,
+                                sceneDepth = sceneDepth,
                                 content = sceneContent
                             )
                         }
@@ -2227,11 +2240,12 @@ private fun NeriAppContent(
                         onSongAddToQueueEnd = ::addSongToQueueEndFromSearch,
                         onPlayParts = ::playBiliPartsAndOpenNowPlaying,
                         coherentFeedbackEnabled = coherentFeedbackEnabled,
-                        renderScene = { revealTop, translationY, scale, sceneContent ->
+                        renderScene = { revealTop, translationY, scale, sceneDepth, sceneContent ->
                             RenderMainTabNavigationScene(
                                 revealTop,
                                 translationY,
                                 scale,
+                                sceneDepth = sceneDepth,
                                 content = sceneContent
                             )
                         }
@@ -2248,11 +2262,12 @@ private fun NeriAppContent(
                         },
                         offlineMode = offlineMode,
                         coherentFeedbackEnabled = coherentFeedbackEnabled,
-                        renderScene = { revealTop, translationY, scale, sceneContent ->
+                        renderScene = { revealTop, translationY, scale, sceneDepth, sceneContent ->
                             RenderMainTabNavigationScene(
                                 revealTop,
                                 translationY,
                                 scale,
+                                sceneDepth = sceneDepth,
                                 content = sceneContent
                             )
                         }
@@ -2519,6 +2534,13 @@ private fun NeriAppContent(
                             playbackHighResolutionOutputEnabled,
                         onPlaybackHighResolutionOutputEnabledChange = { enabled ->
                             PlayerManager.setPlaybackHighResolutionOutputEnabled(enabled)
+                            // 32-bit 输出在播放器初始化时绑定到 AudioSink, 运行时无法在不重建
+                            // player(会断播)的前提下切换, 因此明确提示用户重启后生效
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.settings_restart_hint),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         },
                         playbackVolumeBalance = playbackVolumeBalance,
                         onPlaybackVolumeBalanceChange = { balance ->
@@ -2535,6 +2557,10 @@ private fun NeriAppContent(
                         neteaseAutoSourceSwitch = neteaseAutoSourceSwitch,
                         onNeteaseAutoSourceSwitchChange = { enabled ->
                             scope.launch { repo.setNeteaseAutoSourceSwitch(enabled) }
+                        },
+                        neteaseLocalSourceFallback = neteaseLocalSourceFallback,
+                        onNeteaseLocalSourceFallbackChange = { enabled ->
+                            scope.launch { repo.setNeteaseLocalSourceFallback(enabled) }
                         },
                         stopOnBluetoothDisconnect = stopOnBluetoothDisconnect,
                         onStopOnBluetoothDisconnectChange = { enabled ->
@@ -2594,11 +2620,12 @@ private fun NeriAppContent(
                         },
                         onBeforeLanguageRestart = clearThemeRevealState,
                         coherentFeedbackEnabled = coherentFeedbackEnabled,
-                        renderScene = { revealTop, translationY, scale, sceneContent ->
+                        renderScene = { revealTop, translationY, scale, sceneDepth, sceneContent ->
                             RenderMainTabNavigationScene(
                                 revealTop,
                                 translationY,
                                 scale,
+                                sceneDepth = sceneDepth,
                                 content = sceneContent
                             )
                         }
@@ -3647,7 +3674,7 @@ private fun NeriAppContent(
                             }
 
                             if (useCoverBlurBackground) {
-                                // 先铺一层强调色背景，避免首次加载和旋转重建时黑底闪烁
+                                // 先铺一层强调色背景, 避免首次加载和旋转重建时黑底闪烁
                                 NowPlayingAccentBackdrop(
                                     coverUrl = blurBackdropCoverUrl,
                                     isDark = true,

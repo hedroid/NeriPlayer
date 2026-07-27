@@ -39,14 +39,24 @@ import moe.ouom.neriplayer.data.sync.model.SyncRecentPlay
 import moe.ouom.neriplayer.data.sync.model.SyncSong
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.Base64
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 /**
  * 同步数据序列化工具
- * 支持两种格式：
- * 1. JSON格式（兼容旧版本）-> backup.json
- * 2. ProtoBuf + GZIP压缩（省流模式）-> backup.bin
+ *
+ * 写路径 (迁移期保活) : 产物与旧客户端逐字节兼容, 保证老端仍能读新端写的备份
+ * - 非省流 (backup.json) : UTF-8 编码的 JSON 文本字节
+ * - 省流 (backup.bin) : Base64(GZIP(ProtoBuf)) 文本字节 (老端可读的历史格式)
+ *
+ * 写侧暂不切 raw GZIP: 旧端把 backup.bin 当 UTF-8 文本再 Base64 解码, raw 二进制必抛异常
+ * 导致旧端 fail-stop 断同步; 等全端更新后再由后续开关切到 write-raw
+ *
+ * 读路径按内容自动识别 (read-both) , 三种在野格式都不失败:
+ * - 以 GZIP 魔数 0x1F 0x8B 开头 -> 直接解压 -> ProtoBuf (为将来 write-raw 预留)
+ * - 文本且首个有效字节为 '{' -> JSON (旧/新 backup.json / 旧 WebDAV JSON)
+ * - 其余文本 -> Base64(GZIP(ProtoBuf)) -> Base64 解码 -> 解压 -> ProtoBuf (backup.bin)
  */
 @OptIn(ExperimentalSerializationApi::class)
 object SyncDataSerializer {
@@ -59,49 +69,43 @@ object SyncDataSerializer {
     }
     private val protoBuf = ProtoBuf
     private const val MAX_JSON_BYTES = 8 * 1024 * 1024
-    private const val MAX_COMPRESSED_BASE64_BYTES = 12 * 1024 * 1024
+    // 省流/二进制上限: 同时覆盖新的原始 GZIP 字节与历史 Base64 文本
+    private const val MAX_COMPRESSED_BYTES = 12 * 1024 * 1024
     private const val MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024
 
     /**
-     * 序列化数据为字符串（用于上传）
+     * 序列化数据为上传字节 (同时用于体积统计)
      * @param data 同步数据
      * @param useDataSaver 是否使用省流模式
-     * @return Base64编码的字符串
+     * @return useDataSaver=true 时为 Base64(GZIP(ProtoBuf)) 文本字节 (老端可读) ; 否则为 UTF-8 JSON 字节
      */
-    fun serialize(data: SyncData, useDataSaver: Boolean): String {
+    fun serialize(data: SyncData, useDataSaver: Boolean): ByteArray {
         return if (useDataSaver) {
-            serializeCompressed(data)
+            // 迁移期保活: 写老端可读的 Base64 文本, 而非原始 GZIP 字节
+            val rawGzip = compress(protoBuf.encodeToByteArray(data))
+            Base64.getEncoder().encodeToString(rawGzip).toByteArray(Charsets.UTF_8)
         } else {
-            serializeJson(data)
+            serializeJson(data).toByteArray(Charsets.UTF_8)
         }
     }
 
     /**
-     * 序列化数据为字节数组（用于计算大小）
-     * @param data 同步数据
-     * @param useDataSaver 是否使用省流模式
-     * @return 原始字节数组
+     * 反序列化数据 (按内容自动识别格式, read-both)
+     * 兼容三种在野格式, 确保读旧备份与新备份都不失败:
+     * 1. 原始 GZIP(ProtoBuf) 字节 (新 raw 格式, 魔数 0x1F 0x8B 开头)
+     * 2. JSON 文本 (旧 backup.json / 旧 WebDAV, 首个有效字节为 '{')
+     * 3. 旧 Base64(GZIP(ProtoBuf)) 文本 (旧 backup.bin)
      */
-    fun serializeToBytes(data: SyncData, useDataSaver: Boolean): ByteArray {
-        return if (useDataSaver) {
-            val protoBytes = protoBuf.encodeToByteArray(data)
-            compress(protoBytes)
-        } else {
-            serializeJson(data).toByteArray()
+    fun deserialize(content: ByteArray): SyncData {
+        if (looksLikeGzip(content)) {
+            return decodeGzipProto(content)
         }
-    }
-
-    /**
-     * 反序列化数据（根据文件名自动检测格式）
-     * @param content Base64编码的字符串
-     * @param isBinaryFormat 是否为二进制格式（通过文件名判断）
-     * @return 同步数据
-     */
-    fun deserialize(content: String, isBinaryFormat: Boolean): SyncData {
-        return if (isBinaryFormat) {
-            deserializeCompressed(content)
+        val text = content.toString(Charsets.UTF_8)
+        return if (looksLikeJson(content)) {
+            deserializeJson(text)
         } else {
-            deserializeJson(content)
+            // 旧 backup.bin: 先 Base64 解码得到 GZIP 字节, 再解压
+            decodeGzipProto(Base64.getMimeDecoder().decode(text.trim()))
         }
     }
 
@@ -121,42 +125,50 @@ object SyncDataSerializer {
     }
 
     /**
-     * ProtoBuf + GZIP压缩序列化
+     * GZIP(ProtoBuf) 原始字节 -> SyncData (含旧/错误字段编号 schema 的兼容回退)
      */
-    private fun serializeCompressed(data: SyncData): String {
-        // ProtoBuf序列化
-        val protoBytes = protoBuf.encodeToByteArray(data)
-
-        // GZIP压缩
-        val compressedBytes = compress(protoBytes)
-
-        // Base64编码（直接编码，无前缀）
-        return android.util.Base64.encodeToString(
-            compressedBytes,
-            android.util.Base64.NO_WRAP
-        )
-    }
-
-    /**
-     * ProtoBuf + GZIP解压反序列化
-     */
-    private fun deserializeCompressed(content: String): SyncData {
-        require(content.toByteArray(Charsets.UTF_8).size <= MAX_COMPRESSED_BASE64_BYTES) {
+    private fun decodeGzipProto(gzipBytes: ByteArray): SyncData {
+        require(gzipBytes.size <= MAX_COMPRESSED_BYTES) {
             "Compressed sync data is too large"
         }
-        // Base64解码
-        val compressedBytes = android.util.Base64.decode(content, android.util.Base64.NO_WRAP)
-
-        // GZIP解压
-        val protoBytes = decompress(compressedBytes)
-
-        // ProtoBuf反序列化
+        val protoBytes = decompress(gzipBytes)
         return runCatching { protoBuf.decodeFromByteArray<SyncData>(protoBytes) }
             .getOrElse { original ->
                 // 兼容旧/错误字段编号的 schema
-                val legacy = runCatching { protoBuf.decodeFromByteArray<LegacySyncData>(protoBytes) }.getOrElse { throw original }
+                val legacy = runCatching { protoBuf.decodeFromByteArray<LegacySyncData>(protoBytes) }
+                    .getOrElse { throw original }
                 legacy.toCurrent()
             }
+    }
+
+    /** 原始 GZIP 字节以魔数 0x1F 0x8B 开头, 用于区分新 raw 格式与历史文本格式 */
+    private fun looksLikeGzip(bytes: ByteArray): Boolean {
+        return bytes.size >= 2 &&
+            bytes[0] == 0x1F.toByte() &&
+            bytes[1] == 0x8B.toByte()
+    }
+
+    /** 跳过前导 UTF-8 BOM 与空白后, 首个有效字节为 '{' 即视为 JSON 对象 */
+    private fun looksLikeJson(bytes: ByteArray): Boolean {
+        var i = 0
+        if (bytes.size >= 3 &&
+            bytes[0] == 0xEF.toByte() &&
+            bytes[1] == 0xBB.toByte() &&
+            bytes[2] == 0xBF.toByte()
+        ) {
+            i = 3
+        }
+        while (i < bytes.size) {
+            when (bytes[i]) {
+                ' '.code.toByte(),
+                '\n'.code.toByte(),
+                '\r'.code.toByte(),
+                '\t'.code.toByte() -> i++
+                '{'.code.toByte() -> return true
+                else -> return false
+            }
+        }
+        return false
     }
 
     /**
@@ -190,17 +202,19 @@ object SyncDataSerializer {
         return outputStream.toByteArray()
     }
 
-    fun ensureRemoteContentSize(content: String, isBinaryFormat: Boolean) {
-        val size = content.toByteArray(Charsets.UTF_8).size
-        val maxBytes = if (isBinaryFormat) MAX_COMPRESSED_BASE64_BYTES else MAX_JSON_BYTES
-        require(size <= maxBytes) { "Remote sync data is too large" }
+    /**
+     * 远端内容大小上限校验 (按内容自动选择 JSON / 二进制上限)
+     */
+    fun ensureRemoteContentSize(content: ByteArray) {
+        val maxBytes = if (looksLikeJson(content)) MAX_JSON_BYTES else MAX_COMPRESSED_BYTES
+        require(content.size <= maxBytes) { "Remote sync data is too large" }
     }
 
     /**
-     * 获取数据大小（用于统计）
+     * 获取数据大小 (用于统计) , 返回实际上传的原始字节数
      */
     fun getDataSize(data: SyncData, useDataSaver: Boolean): Int {
-        return serializeToBytes(data, useDataSaver).size
+        return serialize(data, useDataSaver).size
     }
 
     /**
@@ -208,8 +222,8 @@ object SyncDataSerializer {
      */
     @Suppress("unused")
     fun getCompressionRatio(data: SyncData): Float {
-        val jsonSize = serializeToBytes(data, false).size
-        val compressedSize = serializeToBytes(data, true).size
+        val jsonSize = serialize(data, false).size
+        val compressedSize = serialize(data, true).size
         return if (jsonSize > 0) {
             (1 - compressedSize.toFloat() / jsonSize) * 100
         } else {
@@ -218,7 +232,7 @@ object SyncDataSerializer {
     }
 
     /**
-     * 获取文件名（根据格式）
+     * 获取文件名 (根据格式)
      */
     fun getFileName(useDataSaver: Boolean): String {
         return if (useDataSaver) "backup.bin" else "backup.json"
@@ -232,13 +246,14 @@ object SyncDataSerializer {
     }
 
     /**
-     * 兼容旧/错误字段编号的 schema（mediaUri 插入到 addedAt 之前的版本）
+     * 兼容旧/错误字段编号的 schema (mediaUri 插入到 addedAt 之前的版本)
      */
     @Serializable
     private data class LegacySyncData(
         @ProtoNumber(1) val version: String = "2.0",
-        @ProtoNumber(2) val deviceId: String,
-        @ProtoNumber(3) val deviceName: String,
+        // 回退路径同样按 proto3 语义补默认值, 避免二次抛出 MissingFieldException
+        @ProtoNumber(2) val deviceId: String = "",
+        @ProtoNumber(3) val deviceName: String = "",
         @ProtoNumber(4) val lastModified: Long = System.currentTimeMillis(),
         @ProtoNumber(5) val playlists: List<LegacySyncPlaylist> = emptyList(),
         @ProtoNumber(6) val favoritePlaylists: List<LegacySyncFavoritePlaylist> = emptyList(),
@@ -259,11 +274,11 @@ object SyncDataSerializer {
 
     @Serializable
     private data class LegacySyncPlaylist(
-        @ProtoNumber(1) val id: Long,
-        @ProtoNumber(2) val name: String,
-        @ProtoNumber(3) val songs: List<LegacySyncSong>,
-        @ProtoNumber(4) val createdAt: Long,
-        @ProtoNumber(5) val modifiedAt: Long,
+        @ProtoNumber(1) val id: Long = 0L,
+        @ProtoNumber(2) val name: String = "",
+        @ProtoNumber(3) val songs: List<LegacySyncSong> = emptyList(),
+        @ProtoNumber(4) val createdAt: Long = 0L,
+        @ProtoNumber(5) val modifiedAt: Long = 0L,
         @ProtoNumber(6) val isDeleted: Boolean = false
     ) {
         fun toCurrent(): SyncPlaylist = SyncPlaylist(
@@ -332,10 +347,10 @@ object SyncDataSerializer {
 
     @Serializable
     private data class LegacySyncRecentPlay(
-        @ProtoNumber(1) val songId: Long,
-        @ProtoNumber(2) val song: LegacySyncSong,
-        @ProtoNumber(3) val playedAt: Long,
-        @ProtoNumber(4) val deviceId: String
+        @ProtoNumber(1) val songId: Long = 0L,
+        @ProtoNumber(2) val song: LegacySyncSong = LegacySyncSong(),
+        @ProtoNumber(3) val playedAt: Long = 0L,
+        @ProtoNumber(4) val deviceId: String = ""
     ) {
         fun toCurrent(): SyncRecentPlay = SyncRecentPlay(
             songId = songId,
@@ -347,7 +362,7 @@ object SyncDataSerializer {
 
     @Serializable
     private data class LegacySyncFavoritePlaylist(
-        @ProtoNumber(1) val id: Long,
+        @ProtoNumber(1) val id: Long = 0L,
         @ProtoNumber(2) val name: String = "",
         @ProtoNumber(3) val coverUrl: String? = null,
         @ProtoNumber(4) val trackCount: Int = 0,
@@ -371,9 +386,9 @@ object SyncDataSerializer {
 
     @Serializable
     private data class LegacySyncLogEntry(
-        @ProtoNumber(1) val timestamp: Long,
-        @ProtoNumber(2) val deviceId: String,
-        @ProtoNumber(3) val action: SyncAction,
+        @ProtoNumber(1) val timestamp: Long = 0L,
+        @ProtoNumber(2) val deviceId: String = "",
+        @ProtoNumber(3) val action: SyncAction = SyncAction.CREATE_PLAYLIST,
         @ProtoNumber(4) val playlistId: Long? = null,
         @ProtoNumber(5) val songId: Long? = null,
         @ProtoNumber(6) val details: String? = null
