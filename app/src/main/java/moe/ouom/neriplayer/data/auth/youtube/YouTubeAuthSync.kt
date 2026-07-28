@@ -170,7 +170,7 @@ fun mergeYouTubeAuthCookieUpdates(
 
     setCookieHeaders.forEach { rawHeader ->
         val update = parseSetCookieUpdate(rawHeader) ?: return@forEach
-        val isLoginIdentityCookie = update.name in YouTubeCookieSupport.importantLoginCookieKeys
+        val isLoginIdentityCookie = update.name in YouTubeCookieSupport.deletionProtectedLoginCookieKeys
         if (update.shouldRemove) {
             if (loggedInBefore && isLoginIdentityCookie) {
                 return@forEach
@@ -202,13 +202,13 @@ fun mergeYouTubeAuthCookieUpdates(
     ).normalized(savedAt = savedAt)
 }
 
-private data class ParsedSetCookieUpdate(
+internal data class ParsedSetCookieUpdate(
     val name: String,
     val value: String,
     val shouldRemove: Boolean
 )
 
-private fun parseSetCookieUpdate(rawHeader: String): ParsedSetCookieUpdate? {
+internal fun parseSetCookieUpdate(rawHeader: String): ParsedSetCookieUpdate? {
     val segments = rawHeader
         .split(';')
         .map(String::trim)

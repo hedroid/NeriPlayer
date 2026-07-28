@@ -40,6 +40,7 @@ import moe.ouom.neriplayer.core.api.search.CloudMusicSearchApi
 import moe.ouom.neriplayer.core.api.search.QQMusicSearchApi
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicClient
 import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicPlaybackRepository
+import moe.ouom.neriplayer.core.api.youtube.YouTubePlaybackBootstrapCoordinator
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
 import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.data.listentogether.ListenTogetherPreferences
@@ -49,6 +50,7 @@ import moe.ouom.neriplayer.data.auth.netease.NeteaseCookieRepository
 import moe.ouom.neriplayer.data.auth.web.ForegroundWebLoginGuard
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthAutoRefreshManager
 import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthRepository
+import moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthRotationWorker
 import moe.ouom.neriplayer.data.auth.youtube.YOUTUBE_MUSIC_ORIGIN
 import moe.ouom.neriplayer.data.history.PlayHistoryRepository
 import moe.ouom.neriplayer.data.platform.bili.BiliFavoriteFolderCacheRepository
@@ -161,19 +163,23 @@ internal fun handleYouTubeAuthStateChanged(
     // 只移除旧请求引用, 避免 auth 恢复成功时把当前播放请求自己取消掉
     clearPlaybackAuthBoundCaches(false)
     evictConnections()
-    warmYouTubePlaybackIfAuthorized(
-        bundle = bundle,
+    warmYouTubePlaybackIfEnabled(
         youtubeEnabled = youtubeEnabled,
         warmBootstrapAsync = warmBootstrapAsync
     )
 }
 
-internal fun warmYouTubePlaybackIfAuthorized(
-    bundle: moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthBundle,
+/**
+ * 未登录也要预热
+ *
+ * bootstrap 和 player.js 这两笔匿名播放照样要付, 而且匿名用户没有任何别的流程会顺带
+ * 把它们捂热; 以前卡在登录判断上, 结果最需要预热的那批人反而一次都热不到
+ */
+internal fun warmYouTubePlaybackIfEnabled(
     youtubeEnabled: Boolean = true,
     warmBootstrapAsync: () -> Unit
 ) {
-    if (youtubeEnabled && bundle.hasEffectiveAuth() && !ForegroundWebLoginGuard.isActive) {
+    if (youtubeEnabled && !ForegroundWebLoginGuard.isActive) {
         warmBootstrapAsync()
     }
 }
@@ -203,8 +209,12 @@ private fun moe.ouom.neriplayer.data.auth.youtube.YouTubeAuthBundle.toWarmBootst
  */
 object AppContainer {
     private lateinit var application: Application
+    @Volatile
+    private var initialized = false
     val applicationContext: Application
         get() = application
+
+    internal fun isInitialized(): Boolean = initialized
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private const val YOUTUBE_DOWNLOAD_PLAYBACK_CALL_TIMEOUT_MS = 20_000L
@@ -215,14 +225,17 @@ object AppContainer {
     val neteaseCookieRepo by lazy { NeteaseCookieRepository(application) }
     val biliCookieRepo by lazy { BiliCookieRepository(application) }
     val youtubeAuthRepo by lazy { YouTubeAuthRepository(application) }
-    private val youtubeAuthAutoRefreshManager by lazy {
+    internal val youtubeAuthAutoRefreshManager by lazy {
         YouTubeAuthAutoRefreshManager(
             context = application,
             authProvider = youtubeAuthRepo::getAuthOnce,
             authHealthProvider = youtubeAuthRepo::getAuthHealthOnce,
-            authUpdater = youtubeAuthRepo::saveAuth
+            authUpdater = youtubeAuthRepo::saveAuth,
+            rotatedCookieUpdater = youtubeAuthRepo::mergeRotatedCookies
         )
     }
+
+    private val youtubePlaybackBootstrapCoordinator = YouTubePlaybackBootstrapCoordinator()
 
 
     val playHistoryRepo by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -343,7 +356,8 @@ object AppContainer {
             settings = settingsRepo,
             authProvider = youtubeAuthRepo::getAuthOnce,
             authAutoRefreshManager = youtubeAuthAutoRefreshManager,
-            applicationContext = application
+            applicationContext = application,
+            bootstrapCoordinator = youtubePlaybackBootstrapCoordinator
         )
     }
     val youtubeMusicPlaybackRepository: YouTubeMusicPlaybackRepository
@@ -356,7 +370,8 @@ object AppContainer {
             settings = settingsRepo,
             authProvider = youtubeAuthRepo::getAuthOnce,
             authAutoRefreshManager = youtubeAuthAutoRefreshManager,
-            applicationContext = application
+            applicationContext = application,
+            bootstrapCoordinator = youtubePlaybackBootstrapCoordinator
         )
     }
     val youtubeMusicDownloadPlaybackRepository: YouTubeMusicPlaybackRepository
@@ -400,6 +415,7 @@ object AppContainer {
 
     fun initialize(app: Application) {
         this.application = app
+        initialized = true
         AudioDownloadManager.initialize(app)
         warmLocalPlaylistRepository()
         primeProxySetting()
@@ -513,6 +529,7 @@ object AppContainer {
                 val wasEnabled = YouTubeFeatureGate.isEnabled()
                 YouTubeFeatureGate.update(enabled)
                 if (wasEnabled && !enabled) {
+                    YouTubeAuthRotationWorker.cancelPeriodicRotation(application)
                     if (youtubeMusicClientDelegate.isInitialized()) {
                         youtubeMusicClientDelegate.value.clearBootstrapCache()
                     }
@@ -525,6 +542,7 @@ object AppContainer {
                     AudioDownloadManager.cancelActiveYouTubeDownloads()
                     cancelYouTubeCalls()
                 } else if (!wasEnabled && enabled) {
+                    YouTubeAuthRotationWorker.schedulePeriodicRotation(application)
                     warmYouTubePlaybackOnAppStart()
                 }
             }
@@ -535,8 +553,7 @@ object AppContainer {
         if (!YouTubeFeatureGate.isEnabled()) {
             return
         }
-        warmYouTubePlaybackIfAuthorized(
-            bundle = youtubeAuthRepo.getAuthOnce().normalized(),
+        warmYouTubePlaybackIfEnabled(
             youtubeEnabled = YouTubeFeatureGate.isEnabled(),
             warmBootstrapAsync = youtubeMusicPlaybackRepository::warmBootstrapAsync
         )
