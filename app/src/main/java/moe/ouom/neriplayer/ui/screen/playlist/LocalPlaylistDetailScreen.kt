@@ -991,6 +991,10 @@ fun LocalPlaylistDetailScreen(
                     onQueryChange = vm::updateScanPreviewQuery,
                     metadataOnly = scanPreviewState.metadataOnly,
                     onMetadataOnlyChange = vm::updateScanPreviewMetadataOnly,
+                    hideExistingLocalPlaylistSongs = scanPreviewState.hideExistingLocalPlaylistSongs,
+                    onHideExistingLocalPlaylistSongsChange =
+                        vm::updateScanPreviewHideExistingLocalPlaylistSongs,
+                    existingLocalPlaylistKeys = scanPreviewState.existingLocalPlaylistKeys,
                     selectedKeys = scanPreviewState.selectedKeys,
                     onSelectedKeysChange = vm::updateScanPreviewSelection,
                     snackbarHostState = snackbarHostState,
@@ -1968,6 +1972,9 @@ private fun LocalScanPreviewScreen(
     onQueryChange: (String) -> Unit,
     metadataOnly: Boolean = false,
     onMetadataOnlyChange: ((Boolean) -> Unit)? = null,
+    hideExistingLocalPlaylistSongs: Boolean = false,
+    onHideExistingLocalPlaylistSongsChange: ((Boolean) -> Unit)? = null,
+    existingLocalPlaylistKeys: Set<String> = emptySet(),
     selectedKeys: Set<String>,
     onSelectedKeysChange: (Set<String>) -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -1997,31 +2004,49 @@ private fun LocalScanPreviewScreen(
         initialValue = emptyList(),
         previewItems,
         query,
-        metadataOnly
+        metadataOnly,
+        hideExistingLocalPlaylistSongs,
+        existingLocalPlaylistKeys
     ) {
         val keyword = query.trim()
         value = withContext(Dispatchers.Default) {
             previewItems
                 .asSequence()
                 .filter { item -> !metadataOnly || item.hasMetadata }
+                .filter {
+                    item -> !hideExistingLocalPlaylistSongs ||
+                        item.stableKey !in existingLocalPlaylistKeys
+                }
                 .filter { item -> keyword.isBlank() || item.searchText.contains(keyword, ignoreCase = true) }
                 .toList()
         }
     }
-    LaunchedEffect(metadataOnly, previewItems) {
-        if (metadataOnly) {
-            val metadataKeys = previewItems
-                .asSequence()
-                .filter { it.hasMetadata }
-                .mapTo(LinkedHashSet()) { it.stableKey }
-            val nextSelectedKeys = selectedKeys.intersect(metadataKeys)
-            if (nextSelectedKeys != selectedKeys) {
-                onSelectedKeysChange(nextSelectedKeys)
+    LaunchedEffect(
+        metadataOnly,
+        hideExistingLocalPlaylistSongs,
+        existingLocalPlaylistKeys,
+        previewItems
+    ) {
+        val hiddenKeys = buildSet {
+            if (metadataOnly) {
+                previewItems
+                    .asSequence()
+                    .filterNot { it.hasMetadata }
+                    .forEach { add(it.stableKey) }
             }
+            if (hideExistingLocalPlaylistSongs) {
+                addAll(existingLocalPlaylistKeys)
+            }
+        }
+        val nextSelectedKeys = selectedKeys - hiddenKeys
+        if (nextSelectedKeys != selectedKeys) {
+            onSelectedKeysChange(nextSelectedKeys)
         }
     }
     var showMoreMenu by remember { mutableStateOf(false) }
     val metadataFilterAvailable = onMetadataOnlyChange != null
+    val existingLocalPlaylistSongsFilterAvailable =
+        onHideExistingLocalPlaylistSongsChange != null
     val displayedKeys by remember(displayedItems) {
         derivedStateOf {
             displayedItems.mapTo(LinkedHashSet(displayedItems.size)) { it.stableKey }
@@ -2031,10 +2056,13 @@ private fun LocalScanPreviewScreen(
     val resolvedTitle = title ?: stringResource(R.string.local_playlist_scan_preview_title)
     val resolvedSearchPlaceholder =
         searchPlaceholder ?: stringResource(R.string.local_playlist_scan_preview_search)
-    val resolvedEmptyText = emptyText ?: if (metadataOnly) {
-        stringResource(R.string.local_playlist_scan_metadata_empty)
-    } else {
-        stringResource(R.string.download_scan_empty)
+    val resolvedEmptyText = emptyText ?: when {
+        metadataOnly && hideExistingLocalPlaylistSongs -> {
+            stringResource(R.string.local_playlist_scan_filtered_empty)
+        }
+        metadataOnly -> stringResource(R.string.local_playlist_scan_metadata_empty)
+        hideExistingLocalPlaylistSongs -> stringResource(R.string.local_playlist_scan_existing_empty)
+        else -> stringResource(R.string.download_scan_empty)
     }
     val resolvedActionLabel = actionLabel?.invoke(selectedKeys.size)
         ?: stringResource(R.string.download_scan_add_selected, selectedKeys.size)
@@ -2070,7 +2098,7 @@ private fun LocalScanPreviewScreen(
                             strokeWidth = 2.dp
                         )
                     }
-                    if (metadataFilterAvailable) {
+                    if (metadataFilterAvailable || existingLocalPlaylistSongsFilterAvailable) {
                         Box {
                             HapticIconButton(onClick = { showMoreMenu = true }) {
                                 Icon(
@@ -2082,21 +2110,42 @@ private fun LocalScanPreviewScreen(
                                 expanded = showMoreMenu,
                                 onDismissRequest = { showMoreMenu = false }
                             ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(stringResource(R.string.local_playlist_scan_filter_metadata))
-                                    },
-                                    trailingIcon = {
-                                        Checkbox(
-                                            checked = metadataOnly,
-                                            onCheckedChange = null
-                                        )
-                                    },
-                                    onClick = {
-                                        onMetadataOnlyChange?.invoke(!metadataOnly)
-                                        showMoreMenu = false
-                                    }
-                                )
+                                if (metadataFilterAvailable) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(stringResource(R.string.local_playlist_scan_filter_metadata))
+                                        },
+                                        trailingIcon = {
+                                            Checkbox(
+                                                checked = metadataOnly,
+                                                onCheckedChange = null
+                                            )
+                                        },
+                                        onClick = {
+                                            onMetadataOnlyChange?.invoke(!metadataOnly)
+                                            showMoreMenu = false
+                                        }
+                                    )
+                                }
+                                if (existingLocalPlaylistSongsFilterAvailable) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(stringResource(R.string.local_playlist_scan_filter_existing))
+                                        },
+                                        trailingIcon = {
+                                            Checkbox(
+                                                checked = hideExistingLocalPlaylistSongs,
+                                                onCheckedChange = null
+                                            )
+                                        },
+                                        onClick = {
+                                            onHideExistingLocalPlaylistSongsChange?.invoke(
+                                                !hideExistingLocalPlaylistSongs
+                                            )
+                                            showMoreMenu = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

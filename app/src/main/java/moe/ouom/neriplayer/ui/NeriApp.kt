@@ -159,6 +159,7 @@ import moe.ouom.neriplayer.core.player.effects.AudioReactive
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.core.player.lifecycle.recoverUsbExclusivePlaybackOnForeground
 import moe.ouom.neriplayer.core.player.lifecycle.updateUsbExclusiveForegroundState
+import moe.ouom.neriplayer.core.player.policy.usb.shouldPromptForUsbExclusiveBackgroundPermission
 import moe.ouom.neriplayer.core.player.service.AudioPlayerService
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.core.startup.player.PlayerStartupBootstrapper
@@ -182,6 +183,7 @@ import moe.ouom.neriplayer.data.storage.clearExtraStorageCaches
 import moe.ouom.neriplayer.data.traffic.TrafficNetworkType
 import moe.ouom.neriplayer.navigation.Destinations
 import moe.ouom.neriplayer.ui.component.navigation.NeriBottomBar
+import moe.ouom.neriplayer.ui.component.navigation.resolveBottomBarSelectionAlpha
 import moe.ouom.neriplayer.ui.component.playback.NeriMiniPlayer
 import moe.ouom.neriplayer.ui.component.playback.resolvePlaybackWaiting
 import moe.ouom.neriplayer.ui.component.common.ThemeRevealOverlay
@@ -708,12 +710,12 @@ private fun debugNavigationDurationMs(direction: Int): Int {
     }
 }
 
-private fun resolveMainStartDestination(
-    preferredRoute: String,
+internal fun resolveMainStartDestination(
+    preferredRoute: String?,
     showHomeTab: Boolean,
     devModeEnabled: Boolean
-): String {
-    return when (preferredRoute) {
+): String? {
+    return when (preferredRoute ?: return null) {
         Destinations.Home.route -> if (showHomeTab) Destinations.Home.route else Destinations.Explore.route
         Destinations.Explore.route -> Destinations.Explore.route
         Destinations.Library.route -> Destinations.Library.route
@@ -1357,7 +1359,10 @@ private fun NeriAppContent(
     val showNowPlayingProgressAudioCodec by repo.nowPlayingProgressShowAudioCodecFlow.collectAsStateWithLifecycle(initialValue = true)
     val showNowPlayingProgressAudioSpec by repo.nowPlayingProgressShowAudioSpecFlow.collectAsStateWithLifecycle(initialValue = true)
     val showLyricTranslation by repo.showLyricTranslationFlow.collectAsStateWithLifecycle(initialValue = true)
-    val defaultStartDestination by repo.defaultStartDestinationFlow.collectAsStateWithLifecycle(initialValue = Destinations.Home.route)
+    val defaultStartDestination: String? by repo.defaultStartDestinationFlow
+        .collectAsStateWithLifecycle(initialValue = null)
+    val alwaysUseNewTabStyle by repo.alwaysUseNewTabStyleFlow
+        .collectAsStateWithLifecycle(initialValue = true)
     val showHomeContinueCard by repo.homeCardContinueFlow.collectAsStateWithLifecycle(initialValue = true)
     val showHomeTrendingCard by repo.homeCardTrendingFlow.collectAsStateWithLifecycle(initialValue = true)
     val showHomeRadarCard by repo.homeCardRadarFlow.collectAsStateWithLifecycle(initialValue = true)
@@ -1384,6 +1389,10 @@ private fun NeriAppContent(
         initialValue = startupPlaybackPreferences.playbackVolumeBalance
     )
     val keepLastPlaybackProgress by repo.keepLastPlaybackProgressFlow.collectAsStateWithLifecycle(initialValue = true)
+    val rememberLongFormPlaybackProgress by repo.rememberLongFormPlaybackProgressFlow
+        .collectAsStateWithLifecycle(
+            initialValue = startupPlaybackPreferences.rememberLongFormPlaybackProgress
+        )
     val keepPlaybackModeState by repo.keepPlaybackModeStateFlow.collectAsStateWithLifecycle(initialValue = true)
     val neteaseAutoSourceSwitch by repo.neteaseAutoSourceSwitchFlow.collectAsStateWithLifecycle(
         initialValue = startupPlaybackPreferences.neteaseAutoSourceSwitch
@@ -1406,6 +1415,11 @@ private fun NeriAppContent(
         initialValue = startupPlaybackPreferences.maxCacheSizeBytes
     )
     val homeUsageEntries by AppContainer.playlistUsageRepo.frequentPlaylistsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val showHomeTab =
+        (showHomeContinueCard && homeUsageEntries.isNotEmpty()) ||
+            showHomeTrendingCard ||
+            showHomeRadarCard ||
+            showHomeRecommendedCard
     var pendingFollowSystemDark by remember { mutableStateOf<Boolean?>(null) }
     var pendingForceDark by remember { mutableStateOf<Boolean?>(null) }
     var themeRevealSnapshot by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -1418,6 +1432,7 @@ private fun NeriAppContent(
     var pendingBackgroundImageAlpha by remember { mutableStateOf<Float?>(null) }
     var coverArtRefreshToken by remember { mutableIntStateOf(0) }
     var showUsbExclusiveBackgroundPermissionDialog by rememberSaveable { mutableStateOf(false) }
+    var usbExclusiveBackgroundPermissionPromptHandled by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var lifecycleResumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
@@ -1439,6 +1454,40 @@ private fun NeriAppContent(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(
+        lifecycleResumed,
+        usbExclusivePlayback,
+        usbExclusiveBackgroundPermissionPromptSuppressed
+    ) {
+        if (!usbExclusivePlayback) {
+            usbExclusiveBackgroundPermissionPromptHandled = false
+            showUsbExclusiveBackgroundPermissionDialog = false
+            return@LaunchedEffect
+        }
+        val shouldInspectBackgroundBehavior = lifecycleResumed &&
+            !usbExclusiveBackgroundPermissionPromptSuppressed &&
+            !usbExclusiveBackgroundPermissionPromptHandled
+        val backgroundBehaviorAllowed = if (shouldInspectBackgroundBehavior) {
+            context.readBackgroundBehaviorAllowance().fullyAllowed
+        } else {
+            true
+        }
+        if (
+            shouldPromptForUsbExclusiveBackgroundPermission(
+                usbExclusiveEnabled = usbExclusivePlayback,
+                appResumed = lifecycleResumed,
+                promptSuppressed = usbExclusiveBackgroundPermissionPromptSuppressed,
+                backgroundBehaviorAllowed = backgroundBehaviorAllowed,
+                promptHandledInCurrentSession = usbExclusiveBackgroundPermissionPromptHandled
+            )
+        ) {
+            showUsbExclusiveBackgroundPermissionDialog = true
+        }
+        if (shouldInspectBackgroundBehavior) {
+            usbExclusiveBackgroundPermissionPromptHandled = true
         }
     }
 
@@ -1644,6 +1693,20 @@ private fun NeriAppContent(
         mode = themeMode,
         systemDark = systemDark
     )
+    val initialMainStartDestination = resolveMainStartDestination(
+        preferredRoute = defaultStartDestination,
+        showHomeTab = showHomeTab,
+        devModeEnabled = devModeEnabled
+    ) ?: run {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(if (isDark) Color(0xFF101010) else Color(0xFFF4EFE7))
+        )
+        return
+    }
+    val currentDefaultStartDestination =
+        defaultStartDestination ?: initialMainStartDestination
     val backgroundGlassBackdrop = rememberAdvancedGlassBackdrop()
     val contentGlassBackdrop = rememberAdvancedGlassBackdrop()
     val advancedGlassController = remember(
@@ -1932,6 +1995,8 @@ private fun NeriAppContent(
             colorSpec = themeColorSpec,
             systemDark = systemDark
         ) {
+            // changing NavHost's start destination rebuilds its graph and clears the live stack
+            val navHostStartDestination = remember { initialMainStartDestination }
             val navController = rememberNavController()
             val backEntry by navController.currentBackStackEntryAsState()
             // Keep every NavHost entry that is still participating in the transition active
@@ -2016,24 +2081,17 @@ private fun NeriAppContent(
                     alpha = 1f
                 )
             }
-            val showHomeTab =
-                (showHomeContinueCard && homeUsageEntries.isNotEmpty()) ||
-                    showHomeTrendingCard ||
-                    showHomeRadarCard ||
-                    showHomeRecommendedCard
             val effectiveStartDestination = remember(
-                defaultStartDestination,
+                currentDefaultStartDestination,
                 showHomeTab,
                 devModeEnabled
             ) {
                 resolveMainStartDestination(
-                    preferredRoute = defaultStartDestination,
+                    preferredRoute = currentDefaultStartDestination,
                     showHomeTab = showHomeTab,
                     devModeEnabled = devModeEnabled
-                )
+                ) ?: navHostStartDestination
             }
-            // Changing NavHost's start destination rebuilds its graph and clears the live stack
-            val navHostStartDestination = remember { effectiveStartDestination }
             var selectedMainTabRoute by rememberSaveable(navHostStartDestination) {
                 mutableStateOf(navHostStartDestination)
             }
@@ -2474,7 +2532,7 @@ private fun NeriAppContent(
                             pendingBackgroundImageAlpha = alpha
                             scope.launch { repo.setBackgroundImageAlpha(alpha) }
                         },
-                        defaultStartDestination = defaultStartDestination,
+                        defaultStartDestination = currentDefaultStartDestination,
                         onDefaultStartDestinationChange = { route ->
                             scope.launch { repo.setDefaultStartDestination(route) }
                         },
@@ -2550,6 +2608,12 @@ private fun NeriAppContent(
                         onKeepLastPlaybackProgressChange = { enabled ->
                             scope.launch { repo.setKeepLastPlaybackProgress(enabled) }
                         },
+                        rememberLongFormPlaybackProgress = rememberLongFormPlaybackProgress,
+                        onRememberLongFormPlaybackProgressChange = { enabled ->
+                            scope.launch {
+                                repo.setRememberLongFormPlaybackProgress(enabled)
+                            }
+                        },
                         keepPlaybackModeState = keepPlaybackModeState,
                         onKeepPlaybackModeStateChange = { enabled ->
                             scope.launch { repo.setKeepPlaybackModeState(enabled) }
@@ -2570,14 +2634,6 @@ private fun NeriAppContent(
                         onUsbExclusivePlaybackChange = { enabled ->
                             if (PlayerManager.beginUsbExclusiveToggleTransitionFromUi(enabled)) {
                                 scope.launch { repo.setUsbExclusivePlayback(enabled) }
-                                if (
-                                    enabled &&
-                                    !usbExclusivePlayback &&
-                                    !usbExclusiveBackgroundPermissionPromptSuppressed &&
-                                    !context.readBackgroundBehaviorAllowance().fullyAllowed
-                                ) {
-                                    showUsbExclusiveBackgroundPermissionDialog = true
-                                }
                             }
                         },
                         allowMixedPlayback = allowMixedPlayback,
@@ -2779,7 +2835,10 @@ private fun NeriAppContent(
 
                 val containerColor = Color.Transparent
 
-                val selectAlpha = if (backgroundImageUri == null) 1f else 0f
+                val selectAlpha = resolveBottomBarSelectionAlpha(
+                    hasCustomBackground = backgroundImageUri != null,
+                    alwaysUseNewTabStyle = alwaysUseNewTabStyle
+                )
 
                 val isMiniPlayerVisible = currentSong != null && !showNowPlaying
                 val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsStateWithLifecycle()

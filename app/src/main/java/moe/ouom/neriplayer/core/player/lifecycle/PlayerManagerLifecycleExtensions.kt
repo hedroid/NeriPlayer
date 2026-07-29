@@ -132,6 +132,7 @@ import moe.ouom.neriplayer.data.settings.UsbExclusivePreferences
 import moe.ouom.neriplayer.data.settings.readPlaybackPreferenceSnapshotSync
 import moe.ouom.neriplayer.data.settings.toUsbExclusivePreferences
 import moe.ouom.neriplayer.core.logging.NPLogger
+import moe.ouom.neriplayer.util.platform.readBackgroundBehaviorAllowance
 import java.io.File
 
 internal fun PlayerManager.initializeImpl(
@@ -170,6 +171,7 @@ internal fun PlayerManager.initializeImpl(
         lastPersistedPlaylistReference = null
         lastPersistedPlaybackState = null
         lastStatePersistAtMs = 0L
+        lastLongFormPlaybackProgressPersistAtMs = 0L
         playbackStatsTracker = PlaybackStatsTracker()
         playbackStatsPersistJob = null
         val initialPlaybackPreferences =
@@ -187,6 +189,8 @@ internal fun PlayerManager.initializeImpl(
             initialPlaybackPreferences.mobileDataBiliAudioQuality
         keepLastPlaybackProgressEnabled =
             initialPlaybackPreferences.keepLastPlaybackProgress
+        rememberLongFormPlaybackProgressEnabled =
+            initialPlaybackPreferences.rememberLongFormPlaybackProgress
         keepPlaybackModeStateEnabled =
             initialPlaybackPreferences.keepPlaybackModeState
         neteaseAutoSourceSwitchEnabled =
@@ -228,7 +232,7 @@ internal fun PlayerManager.initializeImpl(
             initialPlaybackPreferences.playbackHighResolutionOutputEnabled
         NPLogger.d(
             "NERI-PlayerManager",
-            "initialize(): prefs quality=$preferredQuality, youtubeQuality=$youtubePreferredQuality, biliQuality=$biliPreferredQuality, mobileDataFollowDefault=$mobileDataFollowDefaultAudioQuality, mobileDataQuality=$mobileDataNeteaseAudioQuality/$mobileDataYouTubeAudioQuality/$mobileDataBiliAudioQuality, keepProgress=$keepLastPlaybackProgressEnabled, keepMode=$keepPlaybackModeStateEnabled, neteaseAutoSourceSwitch=$neteaseAutoSourceSwitchEnabled, neteaseLocalSourceFallback=$neteaseLocalSourceFallbackEnabled, fadeIn=$playbackFadeInEnabled/${playbackFadeInDurationMs}ms, crossfade=$playbackCrossfadeNextEnabled/${playbackCrossfadeInDurationMs}ms, highResolutionOutput=$playbackHighResolutionOutputEnabled, stopOnBluetoothDisconnect=$stopOnBluetoothDisconnectEnabled, usbExclusivePlayback=$usbExclusivePlaybackEnabled, allowMixedPlayback=$allowMixedPlaybackEnabled"
+            "initialize(): prefs quality=$preferredQuality, youtubeQuality=$youtubePreferredQuality, biliQuality=$biliPreferredQuality, mobileDataFollowDefault=$mobileDataFollowDefaultAudioQuality, mobileDataQuality=$mobileDataNeteaseAudioQuality/$mobileDataYouTubeAudioQuality/$mobileDataBiliAudioQuality, keepProgress=$keepLastPlaybackProgressEnabled, rememberLongFormProgress=$rememberLongFormPlaybackProgressEnabled, keepMode=$keepPlaybackModeStateEnabled, neteaseAutoSourceSwitch=$neteaseAutoSourceSwitchEnabled, neteaseLocalSourceFallback=$neteaseLocalSourceFallbackEnabled, fadeIn=$playbackFadeInEnabled/${playbackFadeInDurationMs}ms, crossfade=$playbackCrossfadeNextEnabled/${playbackCrossfadeInDurationMs}ms, highResolutionOutput=$playbackHighResolutionOutputEnabled, stopOnBluetoothDisconnect=$stopOnBluetoothDisconnectEnabled, usbExclusivePlayback=$usbExclusivePlaybackEnabled, allowMixedPlayback=$allowMixedPlaybackEnabled"
         )
         val okHttpClient = AppContainer.sharedOkHttpClient
         val upstreamFactory: HttpDataSource.Factory = OkHttpDataSource.Factory(okHttpClient)
@@ -878,6 +882,11 @@ internal fun PlayerManager.initializeImpl(
             }
         }
         ioScope.launch {
+            settingsRepo.rememberLongFormPlaybackProgressFlow.collect { enabled ->
+                rememberLongFormPlaybackProgressEnabled = enabled
+            }
+        }
+        ioScope.launch {
             settingsRepo.keepPlaybackModeStateFlow.collect { enabled ->
                 val changed = keepPlaybackModeStateEnabled != enabled
                 keepPlaybackModeStateEnabled = enabled
@@ -1119,6 +1128,7 @@ internal fun PlayerManager.updateAudioOffloadPreferences(reason: String) {
         volumeNormalizationEnabled = playbackSoundConfig.volumeNormalizationEnabled,
         highResolutionOutputEnabled = playbackHighResolutionOutputEnabled,
         audioReactiveActive = AudioReactive.enabled,
+        audioSource = _currentPlaybackAudioInfo.value?.source,
         listenTogetherPlaybackRate = listenTogetherSyncPlaybackRate,
     )
     if (lastRequiresPcmAudioProcessing == requiresPcmProcessing) return
@@ -2258,10 +2268,14 @@ internal fun PlayerManager.updateUsbExclusiveForegroundState(
         usbExclusiveForegroundRecoveryJob?.cancel()
         usbExclusiveForegroundRecoveryJob = null
         scheduleUsbExclusiveBackgroundAudit(reason)
+        if (usbExclusivePlaybackEnabled) {
+            AudioPlayerService.reassertForegroundForActiveUsbExclusivePlayback(reason)
+        }
     } else {
         usbExclusiveBackgroundAuditJob?.cancel()
         usbExclusiveBackgroundAuditJob = null
     }
+    AudioPlayerService.updateUsbExclusiveBackgroundAudioAnchor(reason)
     if (!usbExclusivePlaybackEnabled) return
     applyActiveUsbExclusiveBuffer(reason)
 }
@@ -2292,6 +2306,7 @@ private fun PlayerManager.scheduleUsbExclusiveBackgroundAudit(reason: String) {
                 stage = "background_audit_$checkpointMs"
             )
             val pathState = UsbExclusiveAudioPathTracker.state.value
+            val backgroundAllowance = application.readBackgroundBehaviorAllowance()
             val playerPosition = runCatching { player.currentPosition }.getOrDefault(-1L)
             val playerState = runCatching { player.playbackState }.getOrDefault(Player.STATE_IDLE)
             NPLogger.i(
@@ -2300,6 +2315,8 @@ private fun PlayerManager.scheduleUsbExclusiveBackgroundAudit(reason: String) {
                     "serviceInstance=${AudioPlayerService.isInstanceActiveForDiagnostics()} " +
                     "serviceForeground=${AudioPlayerService.isForegroundActiveForDiagnostics()} " +
                     "wakeLock=${UsbExclusiveWakeLock.isHeld()} path=${pathState.effectivePath} " +
+                    "backgroundAllowance=battery=${backgroundAllowance.ignoringBatteryOptimizations} " +
+                    "appOps=${backgroundAllowance.backgroundAppOpsAllowed} " +
                     "sinkPlaying=${pathState.sinkPlaying} nativeStreaming=${nativeState.streaming} " +
                     "completedFrames=${nativeState.completedAudioFrames} " +
                     "queuedFrames=${nativeState.queuedAudioFrames} " +

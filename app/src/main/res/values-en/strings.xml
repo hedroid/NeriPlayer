@@ -258,12 +258,11 @@
     <string name="lyrics_favorite">Favorite</string>
     <string name="lyrics_more_options">More Options</string>
     <string name="lyric_share_selected_lines">Selected lines: %1$d</string>
-    <string name="lyric_share_character_count">Characters: %1$d/%2$d</string>
+    <string name="lyric_share_character_count">Characters: %1$d</string>
     <string name="lyric_share_copy_lyrics">Copy Lyrics</string>
     <string name="lyric_share_song">Share Song</string>
     <string name="lyric_share_card">Lyric Card</string>
     <string name="lyric_share_copied">Lyrics copied</string>
-    <string name="lyric_share_character_limit">Character limit: %1$d</string>
     <string name="lyric_share_card_failed">Unable to create lyric card</string>
     <string name="lyrics_previous">Previous</string>
     <string name="lyrics_pause">Pause</string>
@@ -474,7 +473,10 @@
     <string name="local_playlist_scan_preview_search">Search local files</string>
     <string name="local_playlist_scan_preview_apply">Import Selected Songs</string>
     <string name="local_playlist_scan_filter_metadata">Hide tracks without metadata</string>
+    <string name="local_playlist_scan_filter_existing">Ignore added tracks</string>
     <string name="local_playlist_scan_metadata_empty">No local audio with metadata</string>
+    <string name="local_playlist_scan_existing_empty">No unadded local audio</string>
+    <string name="local_playlist_scan_filtered_empty">No local audio matches the filters</string>
     <string name="local_playlist_import_audio_no_new">No new local tracks to import</string>
     <string name="local_playlist_add_scanned_no_new">Selected tracks are already in the target playlist</string>
     <string name="local_playlist_metadata_processing_title">Processing song info</string>
@@ -843,6 +845,8 @@
     <string name="settings_default_start_screen_desc">Current: %1$s</string>
     <string name="settings_auto_show_keyboard">Auto-Open Keyboard</string>
     <string name="settings_auto_show_keyboard_desc">Auto focus inputs and try to show the keyboard</string>
+    <string name="settings_always_use_new_tab_style">Always Use the New Tab Style</string>
+    <string name="settings_always_use_new_tab_style_desc">Use the new tab style even without a background image.</string>
     <string name="settings_home_cards">Home Cards</string>
     <string name="settings_home_cards_desc">You can hide any home card. Hide all cards to hide Home.</string>
     <string name="settings_home_cards_desc_international">When internationalization is enabled, these toggles switch to YouTube Music home sections.</string>
@@ -879,6 +883,8 @@
     <string name="settings_playback_source_desc">Configure automatic source switching and fallback sources</string>
     <string name="settings_keep_last_playback_progress">Keep Last Playback Progress</string>
     <string name="settings_keep_last_playback_progress_desc">Remember the current song position after restarting the app</string>
+    <string name="settings_remember_long_form_playback_progress">Remember Long Video Progress</string>
+    <string name="settings_remember_long_form_playback_progress_desc">Sync positions for content 15 minutes or longer and resume on other devices</string>
     <string name="settings_keep_playback_mode_state">Keep Playback Mode State</string>
     <string name="settings_keep_playback_mode_state_desc">Restore repeat and shuffle state after restarting the app</string>
     <string name="settings_stop_on_bluetooth_disconnect">Stop On Bluetooth Disconnect</string>
@@ -891,6 +897,9 @@
     <string name="settings_usb_exclusive_background_permission_app_settings">Open app settings</string>
     <string name="settings_usb_exclusive_background_permission_never">Don\'t show again</string>
     <string name="settings_usb_exclusive_background_permission_later">Later</string>
+    <string name="settings_usb_exclusive_background_behavior">USB exclusive background playback</string>
+    <string name="settings_usb_exclusive_background_behavior_allowed">Allowed</string>
+    <string name="settings_usb_exclusive_background_behavior_restricted">Allow background activity in system settings</string>
     <string name="settings_usb_exclusive_page_desc">USB exclusive output settings</string>
     <string name="settings_usb_exclusive_state_enabled">On</string>
     <string name="settings_usb_exclusive_state_disabled">Off</string>
@@ -1496,7 +1505,6 @@
     <string name="listen_together_title">Listen Together</string>
     <string name="listen_together_worker_base_url">Worker Base URL</string>
     <string name="listen_together_nickname">Current Nickname</string>
-    <string name="listen_together_join_secret">Invite Secret</string>
     <string name="listen_together_user_uuid">Identity UUID</string>
     <string name="listen_together_reset_uuid">Reset Unique Identity</string>
     <string name="listen_together_reset_uuid_confirm">Resetting the unique identity will invalidate the old identity and replace it with a new one. Continue?</string>
@@ -1533,7 +1541,10 @@
     <string name="listen_together_leave_room">Leave</string>
     <string name="listen_together_copy_invite">Copy Invite</string>
     <string name="listen_together_invite_copied">Invite copied</string>
-    <string name="listen_together_invite_share_text">%1$s invites you to join room %2$s in NeriPlayer. Tap the link below to open the app and join.</string>
+    <string name="listen_together_copy_join_secret">Copy Invite Secret</string>
+    <string name="listen_together_join_secret_copied">Invite secret copied</string>
+    <string name="listen_together_clipboard_invite_missing">No valid Listen Together invite was found in the clipboard.</string>
+    <string name="listen_together_invite_share_text">%1$s invites you to join room %2$s in NeriPlayer. Copy this invitation and open the app to join.</string>
     <string name="listen_together_creating_room">Creating room</string>
     <string name="listen_together_joining_room">Joining room</string>
     <string name="listen_together_refreshing_room_state">Refreshing room state</string>
@@ -1607,6 +1618,11 @@
     <string name="listen_together_action_unavailable">This action is temporarily unavailable. Please try again.</string>
     <string name="settings_listen_together_expand">Configure the server address and unique identity</string>
     <string name="settings_listen_together_server_title">Listen Together Server</string>
+    <string name="settings_listen_together_default_nickname_title">Default Nickname</string>
+    <string name="settings_listen_together_default_nickname_input_label">Nickname</string>
+    <string name="settings_listen_together_default_nickname_unset">Not set. A nickname will be generated automatically.</string>
+    <string name="settings_listen_together_default_nickname_saved">Default nickname saved</string>
+    <string name="settings_listen_together_default_nickname_disabled">Leave the room before changing the default nickname.</string>
     <string name="settings_listen_together_server_default_desc">Leave this empty to use the built-in default server. Invite links will not include a server address.</string>
     <string name="settings_listen_together_server_custom_desc">A custom Listen Together server is active. Invite links will include the server address.</string>
     <string name="settings_listen_together_server_input_label">Server Address</string>
@@ -1617,6 +1633,11 @@
     <string name="listen_together_error_room_id_chars">Room ID only supports uppercase letters and digits.</string>
     <string name="listen_together_error_user_uuid_required">User UUID is required.</string>
     <string name="listen_together_error_user_uuid_invalid">User UUID format is invalid.</string>
+    <string name="listen_together_error_join_secret_required">Invite secret is required.</string>
+    <string name="listen_together_error_join_secret_length">Invite secret length limit: %1$d.</string>
+    <string name="listen_together_error_current_track_missing">No track is playing, so a Listen Together room cannot be created.</string>
+    <string name="listen_together_error_current_track_not_shareable">Local or unshareable tracks cannot create a Listen Together room. Switch to an online track.</string>
+    <string name="listen_together_error_current_track_unavailable">The current track is not in the playback queue and cannot create a Listen Together room.</string>
     <string name="listen_together_error_nickname_length">Nickname length must be %1$d-%2$d characters.</string>
     <string name="listen_together_error_nickname_chars">Nickname only supports Chinese characters, letters, and digits.</string>
     <string name="settings_listen_together_server_test">Test Availability</string>

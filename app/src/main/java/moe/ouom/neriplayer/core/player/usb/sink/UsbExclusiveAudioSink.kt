@@ -52,6 +52,9 @@ import moe.ouom.neriplayer.core.player.lifecycle.stopPlaybackAfterUsbExclusiveNa
 import moe.ouom.neriplayer.core.player.lifecycle.tryRecoverUsbExclusivePlaybackAfterNativeTransferFailure
 import moe.ouom.neriplayer.core.player.usb.path.UsbExclusiveAudioPathTracker
 import moe.ouom.neriplayer.core.player.usb.session.UsbExclusiveSessionController
+import moe.ouom.neriplayer.core.player.usb.system.UsbExclusiveBackgroundAudioAnchorVolumeGuard
+import moe.ouom.neriplayer.core.player.usb.system.UsbExclusiveSystemVolumeBridge
+import moe.ouom.neriplayer.core.player.usb.system.UsbExclusiveSystemVolumeBridgeSubscription
 import moe.ouom.neriplayer.core.player.usb.system.UsbExclusiveSystemSoundGuard
 import moe.ouom.neriplayer.core.player.usb.system.usbExclusiveEffectiveNativeVolume
 import moe.ouom.neriplayer.core.player.usb.system.usbExclusiveFloatSampleForNativePipeline
@@ -129,7 +132,7 @@ internal class UsbExclusiveAudioSink(
     private var cachedMusicVolumeFraction = 1f
     private val systemVolumeObserver = object : ContentObserver(systemVolumeHandler) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
-            applySystemVolumeChange()
+            applySystemVolumeChange(acceptUserVolumeChange = true)
         }
     }
     private val systemVolumePoll = object : Runnable {
@@ -207,11 +210,21 @@ internal class UsbExclusiveAudioSink(
     private val sameHandleRecoveryPolicy = UsbExclusiveSameHandleRecoveryPolicy()
     private var lastReleaseBarrierHoldLogAtMs = 0L
     private var systemVolumeObserverRegistered = false
+    private var systemVolumeBridgeSubscription: UsbExclusiveSystemVolumeBridgeSubscription? = null
     private var lastReportedNativeVolume = Float.NaN
     private var lastSystemVolumeReadFailureLogAtMs = 0L
 
     init {
         cachedMusicVolumeFraction = readMusicVolumeFractionFromSystem()
+        systemVolumeBridgeSubscription = UsbExclusiveSystemVolumeBridge.subscribe { volumeFraction ->
+            systemVolumeHandler.post {
+                if (volumeFraction == null) {
+                    applySystemVolumeChange()
+                } else {
+                    applySessionVolumeChange(volumeFraction)
+                }
+            }
+        }
         if (observeSystemVolume) {
             registerSystemVolumeObserver()
         }
@@ -785,6 +798,8 @@ internal class UsbExclusiveAudioSink(
     override fun release() {
         clearSystemFallbackPlaybackSuppression()
         unregisterSystemVolumeObserver()
+        UsbExclusiveSystemVolumeBridge.unsubscribe(systemVolumeBridgeSubscription)
+        systemVolumeBridgeSubscription = null
         systemVolumeThread?.quitSafely()
         closeNative()
         directScratch = null
@@ -1497,9 +1512,16 @@ internal class UsbExclusiveAudioSink(
         }
     }
 
-    private fun readMusicVolumeFractionFromSystem(): Float {
-        val manager = audioManager ?: return 1f
-        return runCatching {
+    private fun readMusicVolumeFractionFromSystem(
+        acceptUserVolumeChange: Boolean = false
+    ): Float {
+        UsbExclusiveSystemVolumeBridge.currentSessionVolumeFractionOrNull()?.let {
+            return it
+        }
+        val manager = audioManager ?: return UsbExclusiveBackgroundAudioAnchorVolumeGuard
+            .currentVolumeFractionOrNull()
+            ?: 1f
+        val observedVolumeFraction = runCatching {
             val minVolume = manager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
             val maxVolume = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             val currentVolume = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -1515,7 +1537,17 @@ internal class UsbExclusiveAudioSink(
                 lastSystemVolumeReadFailureLogAtMs = nowMs
                 NPLogger.w("NERI-UsbExclusive", "failed to read system media volume", error)
             }
-            cachedMusicVolumeFraction
+            return UsbExclusiveBackgroundAudioAnchorVolumeGuard.currentVolumeFractionOrNull()
+                ?: cachedMusicVolumeFraction
+        }
+        return if (acceptUserVolumeChange) {
+            UsbExclusiveBackgroundAudioAnchorVolumeGuard
+                .applyUserVolumeChange(observedVolumeFraction)
+                ?: observedVolumeFraction
+        } else {
+            UsbExclusiveBackgroundAudioAnchorVolumeGuard
+                .observeRouteVolume(observedVolumeFraction)
+                ?: observedVolumeFraction
         }
     }
 
@@ -1546,8 +1578,16 @@ internal class UsbExclusiveAudioSink(
         systemVolumeObserverRegistered = false
     }
 
-    private fun applySystemVolumeChange() {
-        val nextVolumeFraction = readMusicVolumeFractionFromSystem()
+    private fun applySystemVolumeChange(acceptUserVolumeChange: Boolean = false) {
+        val nextVolumeFraction = readMusicVolumeFractionFromSystem(acceptUserVolumeChange)
+        if (abs(nextVolumeFraction - cachedMusicVolumeFraction) <= PARAMETER_EPSILON) return
+        cachedMusicVolumeFraction = nextVolumeFraction
+        if (!usingNative || nativeHandle == 0L) return
+        applyEffectiveNativeVolume()
+    }
+
+    private fun applySessionVolumeChange(volumeFraction: Float) {
+        val nextVolumeFraction = volumeFraction.coerceIn(0f, 1f)
         if (abs(nextVolumeFraction - cachedMusicVolumeFraction) <= PARAMETER_EPSILON) return
         cachedMusicVolumeFraction = nextVolumeFraction
         if (!usingNative || nativeHandle == 0L) return

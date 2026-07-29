@@ -258,12 +258,11 @@
     <string name="lyrics_favorite">收藏</string>
     <string name="lyrics_more_options">更多选项</string>
     <string name="lyric_share_selected_lines">已选择 %1$d 行</string>
-    <string name="lyric_share_character_count">%1$d/%2$d 个字符</string>
+    <string name="lyric_share_character_count">%1$d 个字符</string>
     <string name="lyric_share_copy_lyrics">复制歌词</string>
     <string name="lyric_share_song">分享歌曲</string>
     <string name="lyric_share_card">歌词卡片</string>
     <string name="lyric_share_copied">歌词已复制</string>
-    <string name="lyric_share_character_limit">最多选择 %1$d 个字符</string>
     <string name="lyric_share_card_failed">歌词卡片生成失败</string>
     <string name="lyrics_previous">上一首</string>
     <string name="lyrics_pause">暂停</string>
@@ -474,7 +473,10 @@
     <string name="local_playlist_scan_preview_search">搜索本地文件</string>
     <string name="local_playlist_scan_preview_apply">导入所选歌曲</string>
     <string name="local_playlist_scan_filter_metadata">隐藏无元数据歌曲</string>
+    <string name="local_playlist_scan_filter_existing">忽略已添加歌曲</string>
     <string name="local_playlist_scan_metadata_empty">没有带元数据的本地音频</string>
+    <string name="local_playlist_scan_existing_empty">没有未添加的本地音频</string>
+    <string name="local_playlist_scan_filtered_empty">没有符合筛选条件的本地音频</string>
     <string name="local_playlist_import_audio_no_new">没有新的本地音频需要导入</string>
     <string name="local_playlist_add_scanned_no_new">所选歌曲已在目标歌单中</string>
     <string name="local_playlist_metadata_processing_title">正在处理歌曲信息</string>
@@ -843,6 +845,8 @@
     <string name="settings_default_start_screen_desc">当前：%1$s</string>
     <string name="settings_auto_show_keyboard">自动弹出软键盘</string>
     <string name="settings_auto_show_keyboard_desc">输入框出现时自动聚焦并尝试打开软键盘</string>
+    <string name="settings_always_use_new_tab_style">始终使用新版 TAB 样式</string>
+    <string name="settings_always_use_new_tab_style_desc">无背景图时也使用新版 TAB 样式</string>
     <string name="settings_home_cards">首页卡片</string>
     <string name="settings_home_cards_desc">可分别关闭首页卡片，全部关闭后首页会隐藏</string>
     <string name="settings_home_cards_desc_international">国际化开启后，这里的开关会切换为 YouTube Music 首页栏目</string>
@@ -879,6 +883,8 @@
     <string name="settings_playback_source_desc">配置自动换源与音源兜底策略</string>
     <string name="settings_keep_last_playback_progress">保留上次播放进度</string>
     <string name="settings_keep_last_playback_progress_desc">应用重启后继续记住当前歌曲的播放进度</string>
+    <string name="settings_remember_long_form_playback_progress">记忆长视频播放进度</string>
+    <string name="settings_remember_long_form_playback_progress_desc">同步 15 分钟及以上内容的播放位置，并在其他设备续播</string>
     <string name="settings_keep_playback_mode_state">保留播放状态</string>
     <string name="settings_keep_playback_mode_state_desc">应用重启后恢复单曲循环、列表循环和随机播放状态</string>
     <string name="settings_stop_on_bluetooth_disconnect">蓝牙断开自动停止</string>
@@ -891,6 +897,9 @@
     <string name="settings_usb_exclusive_background_permission_app_settings">打开应用设置</string>
     <string name="settings_usb_exclusive_background_permission_never">不再提示</string>
     <string name="settings_usb_exclusive_background_permission_later">稍后</string>
+    <string name="settings_usb_exclusive_background_behavior">USB 独占后台运行</string>
+    <string name="settings_usb_exclusive_background_behavior_allowed">已允许</string>
+    <string name="settings_usb_exclusive_background_behavior_restricted">需要在系统设置中允许后台运行</string>
     <string name="settings_usb_exclusive_page_desc">USB 独占输出设置</string>
     <string name="settings_usb_exclusive_state_enabled">已开启</string>
     <string name="settings_usb_exclusive_state_disabled">已关闭</string>
@@ -1496,7 +1505,6 @@
     <string name="listen_together_title">一起听</string>
     <string name="listen_together_worker_base_url">Worker Base URL</string>
     <string name="listen_together_nickname">当前昵称</string>
-    <string name="listen_together_join_secret">邀请密钥</string>
     <string name="listen_together_user_uuid">身份 UUID</string>
     <string name="listen_together_reset_uuid">重置唯一身份标识符</string>
     <string name="listen_together_reset_uuid_confirm">重置后旧的唯一身份标识符将失效，并替换为新的身份标识，是否继续？</string>
@@ -1533,7 +1541,10 @@
     <string name="listen_together_leave_room">离开</string>
     <string name="listen_together_copy_invite">复制邀请信息</string>
     <string name="listen_together_invite_copied">邀请信息已复制</string>
-    <string name="listen_together_invite_share_text">%1$s 邀请你在 NeriPlayer 中加入房间 %2$s。请点击下面的链接打开 App 加入。</string>
+    <string name="listen_together_copy_join_secret">复制邀请密钥</string>
+    <string name="listen_together_join_secret_copied">邀请密钥已复制</string>
+    <string name="listen_together_clipboard_invite_missing">剪贴板中没有有效的一起听邀请信息</string>
+    <string name="listen_together_invite_share_text">%1$s 邀请你在 NeriPlayer 中加入房间 %2$s。复制后打开 App 加入。</string>
     <string name="listen_together_creating_room">正在创建房间</string>
     <string name="listen_together_joining_room">正在加入房间</string>
     <string name="listen_together_refreshing_room_state">正在刷新房间状态</string>
@@ -1607,6 +1618,11 @@
     <string name="listen_together_action_unavailable">当前页面状态不可执行该操作，请稍后重试</string>
     <string name="settings_listen_together_expand">配置服务器地址和唯一身份标识符</string>
     <string name="settings_listen_together_server_title">一起听服务器</string>
+    <string name="settings_listen_together_default_nickname_title">默认昵称</string>
+    <string name="settings_listen_together_default_nickname_input_label">昵称</string>
+    <string name="settings_listen_together_default_nickname_unset">未设置，将自动生成</string>
+    <string name="settings_listen_together_default_nickname_saved">默认昵称已保存</string>
+    <string name="settings_listen_together_default_nickname_disabled">当前在房间中，需先离开房间后才能修改默认昵称</string>
     <string name="settings_listen_together_server_default_desc">留空即可使用内置默认服务器</string>
     <string name="settings_listen_together_server_custom_desc">当前使用自定义一起听服务器，分享邀请时会附带服务器地址</string>
     <string name="settings_listen_together_server_input_label">服务器地址</string>
@@ -1617,6 +1633,11 @@
     <string name="listen_together_error_room_id_chars">房间 ID 仅支持大写字母和数字</string>
     <string name="listen_together_error_user_uuid_required">用户 UUID 不能为空</string>
     <string name="listen_together_error_user_uuid_invalid">用户 UUID 格式无效</string>
+    <string name="listen_together_error_join_secret_required">邀请密钥不能为空</string>
+    <string name="listen_together_error_join_secret_length">邀请密钥不能超过 %1$d 个字符</string>
+    <string name="listen_together_error_current_track_missing">当前没有正在播放的歌曲，无法创建一起听</string>
+    <string name="listen_together_error_current_track_not_shareable">本地或无法分享的歌曲不能创建一起听，请切换到在线歌曲</string>
+    <string name="listen_together_error_current_track_unavailable">当前歌曲不在播放队列中，无法创建一起听</string>
     <string name="listen_together_error_nickname_length">当前昵称长度需要为 %1$d-%2$d 位</string>
     <string name="listen_together_error_nickname_chars">当前昵称仅支持汉字、英文字母和数字</string>
     <string name="settings_listen_together_server_test">测试可用性</string>

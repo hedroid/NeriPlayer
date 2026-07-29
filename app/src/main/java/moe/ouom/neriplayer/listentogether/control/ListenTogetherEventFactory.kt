@@ -6,8 +6,10 @@ import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommand
 import moe.ouom.neriplayer.listentogether.compat.resolveListenTogetherPlaybackCommandShouldPlay
 import moe.ouom.neriplayer.listentogether.compat.resolveListenTogetherLinkReadyState
 import moe.ouom.neriplayer.listentogether.mapping.toListenTogetherTrackOrNull
-import moe.ouom.neriplayer.listentogether.mapping.withStreamUrl
+import moe.ouom.neriplayer.listentogether.mapping.withStreamUrls
+import moe.ouom.neriplayer.listentogether.playback.hasShareableListenTogetherTrackAt
 import moe.ouom.neriplayer.listentogether.playback.indexOfTrack
+import moe.ouom.neriplayer.listentogether.playback.isShareableForListenTogether
 import moe.ouom.neriplayer.listentogether.playback.mergeCurrentTrack
 import moe.ouom.neriplayer.listentogether.playback.normalizedDirectStreamUrl
 import moe.ouom.neriplayer.listentogether.playback.sameTrackAs
@@ -17,6 +19,7 @@ import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherRoomState
 import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherSocketEnvelope
 import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherTrack
 import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.core.player.url.currentListenTogetherShareableStreamUrls
 import java.util.UUID
 
 internal fun nextListenTogetherEventId(): String {
@@ -127,7 +130,8 @@ internal class ListenTogetherEventFactory(
     fun buildRequestLinkEvent(
         stableKey: String,
         currentIndex: Int? = null,
-        track: ListenTogetherTrack? = null
+        track: ListenTogetherTrack? = null,
+        forceRefresh: Boolean = false
     ): ListenTogetherEvent {
         return ListenTogetherEvent(
             type = "REQUEST_LINK",
@@ -137,18 +141,31 @@ internal class ListenTogetherEventFactory(
             clientSequence = clientSequenceFactory(),
             currentIndex = currentIndex,
             track = track,
-            requestTrackStableKey = stableKey
+            requestTrackStableKey = stableKey,
+            forceRefresh = forceRefresh.takeIf { it }
         )
     }
 
     fun buildLinkReadyEvent(
         stableKey: String,
         positionMs: Long,
-        streamUrlOverride: String? = null
+        streamUrlOverride: String? = null,
+        streamUrlsOverride: List<String> = emptyList()
     ): ListenTogetherEvent? {
         val queue = PlayerManager.currentQueueFlow.value
         val currentSong = PlayerManager.currentSongFlow.value ?: run {
             NPLogger.w(TAG, "buildLinkReadyEvent(): currentSong missing, stableKey=$stableKey")
+            return null
+        }
+        val currentTrack = currentSong.toListenTogetherTrackOrNull() ?: run {
+            NPLogger.w(TAG, "buildLinkReadyEvent(): current song is not shareable, stableKey=$stableKey")
+            return null
+        }
+        if (currentTrack.stableKey != stableKey) {
+            NPLogger.d(
+                TAG,
+                "buildLinkReadyEvent(): current stableKey mismatch, expected=$stableKey, actual=${currentTrack.stableKey}"
+            )
             return null
         }
         val rawIndex = queue.indexOfFirst { song -> song.sameTrackAs(currentSong) }
@@ -171,20 +188,19 @@ internal class ListenTogetherEventFactory(
             )
             return null
         }
-        val resolvedStreamUrl = normalizedDirectStreamUrl(streamUrlOverride)
-            ?: normalizedDirectStreamUrl(shareableTrack.streamUrl)
-            ?: run {
-                NPLogger.w(
-                    TAG,
-                    "buildLinkReadyEvent(): direct stream url missing, stableKey=$stableKey, track=${shareableTrack.name}"
-                )
-                return null
+        val trustedTrack = shareableTrack.withStreamUrls(
+            buildList {
+                addAll(streamUrlsOverride)
+                streamUrlOverride?.let(::add)
+                addAll(PlayerManager.currentListenTogetherShareableStreamUrls())
+                addAll(shareableTrack.streamUrls)
+                shareableTrack.streamUrl?.let(::add)
             }
-        val trustedTrack = shareableTrack.withStreamUrl(resolvedStreamUrl)
-        val trustedStreamUrl = normalizedDirectStreamUrl(trustedTrack.streamUrl) ?: run {
+        )
+        if (trustedTrack.streamUrls.isEmpty()) {
             NPLogger.w(
                 TAG,
-                "buildLinkReadyEvent(): rejected untrusted stream url, stableKey=$stableKey, track=${shareableTrack.name}, url=${resolvedStreamUrl.take(128)}"
+                "buildLinkReadyEvent(): direct stream urls missing, stableKey=$stableKey, track=${shareableTrack.name}"
             )
             return null
         }
@@ -202,7 +218,7 @@ internal class ListenTogetherEventFactory(
             track = trustedTrack,
             queue = shareableQueue.mergeCurrentTrack(
                 currentIndex = resolvedCurrentIndex,
-                currentTrack = trustedTrack.withStreamUrl(trustedStreamUrl)
+                currentTrack = trustedTrack
             ),
             state = resolveListenTogetherLinkReadyState(
                 roomPlaybackState = roomStateProvider()?.playback?.state,
@@ -239,6 +255,7 @@ internal class ListenTogetherEventFactory(
         val proposedNextIndex = command.currentIndex?.coerceIn(0, queue.lastIndex)
             ?: queue.indexOfTrack(currentSong).takeIf { it >= 0 }
             ?: 0
+        if (!queue.hasShareableListenTogetherTrackAt(proposedNextIndex)) return null
         val isController = isControllerProvider()
         val (shareableQueue, resolvedNextIndex) = queue.toShareableQueueSnapshot(
             currentIndex = proposedNextIndex,
@@ -309,30 +326,43 @@ internal class ListenTogetherEventFactory(
             "PLAY_PLAYLIST",
             "PLAY_FROM_QUEUE",
             "NEXT",
-            "PREVIOUS" -> if (isControllerProvider()) {
-                buildSetTrackEvent(
-                    queue = queue,
-                    currentIndex = currentIndex,
-                    positionMs = positionMs,
-                    shouldPlay = shouldPlay
-                )
-            } else {
-                buildRequestSetTrackEvent(
-                    queue = queue,
-                    currentIndex = currentIndex,
-                    positionMs = positionMs,
-                    shouldPlay = shouldPlay
-                )
+            "PREVIOUS" -> {
+                if (!queue.hasShareableListenTogetherTrackAt(currentIndex)) return null
+                if (isControllerProvider()) {
+                    buildSetTrackEvent(
+                        queue = queue,
+                        currentIndex = currentIndex,
+                        positionMs = positionMs,
+                        shouldPlay = shouldPlay
+                    )
+                } else {
+                    buildRequestSetTrackEvent(
+                        queue = queue,
+                        currentIndex = currentIndex,
+                        positionMs = positionMs,
+                        shouldPlay = shouldPlay
+                    )
+                }
             }
 
-            "PLAY" -> if (isControllerProvider()) buildPlayEvent(positionMs) else buildRequestPlayEvent(positionMs)
-            "PAUSE" -> if (isControllerProvider()) buildPauseEvent(positionMs) else buildRequestPauseEvent(positionMs)
+            "PLAY" -> {
+                if (!currentSong.isShareableForListenTogether()) return null
+                if (isControllerProvider()) buildPlayEvent(positionMs) else buildRequestPlayEvent(positionMs)
+            }
+
+            "PAUSE" -> {
+                if (!currentSong.isShareableForListenTogether()) return null
+                if (isControllerProvider()) buildPauseEvent(positionMs) else buildRequestPauseEvent(positionMs)
+            }
+
             "PLAYBACK_MODE" -> buildPlaybackModeEvent(
                 repeatMode = command.repeatMode ?: PlayerManager.repeatModeFlow.value,
                 shuffleEnabled = command.shuffleEnabled ?: PlayerManager.shuffleModeFlow.value
             )
             "TRACK_FINISHED" -> buildTrackFinishedEvent(command, queue, currentSong, positionMs)
             "SEEK" -> {
+                if (!currentSong.isShareableForListenTogether()) return null
+                if (!queue.hasShareableListenTogetherTrackAt(currentIndex)) return null
                 val (shareableQueue, resolvedCurrentIndex) = queue.toShareableQueueSnapshot(
                     currentIndex = currentIndex,
                     roomSettings = roomStateProvider()?.settings,
