@@ -25,10 +25,12 @@
     <string name="action_more">More</string>
     <string name="action_clear">Clear</string>
     <string name="action_paste">Paste</string>
+    <string name="action_select">Select</string>
     <string name="action_select_all">Select All</string>
     <string name="action_deselect_all">Deselect All</string>
     <string name="action_inverse_select">Invert Selection</string>
     <string name="action_multi_select">Multi-select</string>
+    <string name="action_enter_multi_select">Enter Multi-select</string>
     <string name="action_exit_multi_select">Exit Multi-select</string>
     <string name="action_copy_song_name">Copy Song Name</string>
     <string name="action_copy_artist">Copy Artist</string>
@@ -89,6 +91,8 @@
     <string name="cd_export_playlist">Export to Playlist</string>
     <string name="cd_download_selected">Download Selected</string>
     <string name="cd_locate_playing">Locate Now Playing</string>
+    <string name="cd_open_current_playback_source">Locate Current Playlist</string>
+    <string name="cd_queue_quick_actions">Queue Quick Actions</string>
     <string name="cd_close">Close</string>
     <string name="cd_recent">Recent Plays</string>
     <string name="cd_app_background">App background</string>
@@ -122,8 +126,8 @@
     <string name="player_loud_volume_warning_message_ceiling">%1$s is at %2$d%% media volume. No current PCM peak sample is available; its digital output ceiling can reach %3$.1f dBFS, with a risk threshold of %4$d dBFS (%5$s). Continue playback?</string>
     <string name="player_loud_volume_warning_calibration">This is a digital-output estimate, not an ear-level dB SPL measurement. The DAC output and headphone sensitivity are not calibrated.</string>
     <string name="player_loud_volume_device_unknown">Unknown USB DAC</string>
-    <string name="player_loud_volume_device_uac1">UAC1 USB DAC (%1$s)</string>
-    <string name="player_loud_volume_device_uac2">UAC2 USB DAC (%1$s)</string>
+    <string name="player_loud_volume_device_uac1">USB Audio Class 1 DAC (%1$s)</string>
+    <string name="player_loud_volume_device_uac2">USB Audio Class 2 DAC (%1$s)</string>
     <string name="player_loud_volume_device_unknown_usb">USB DAC (%1$s)</string>
     <string name="player_loud_volume_risk_elevated">Caution</string>
     <string name="player_loud_volume_risk_high">High risk</string>
@@ -232,6 +236,7 @@
     <string name="nowplaying_font_size_hint">Swipe left to decrease, right to increase</string>
     <string name="nowplaying_lyrics_sample">Sample lyrics: Spring breeze is not as good as you</string>
     <string name="nowplaying_youtube_music">YouTube</string>
+    <string name="nowplaying_queue_current_position">No. %d</string>
 
     <!-- Lyrics -->
     <string name="lyrics_title">Lyrics</string>
@@ -356,6 +361,15 @@
     <string name="playlist_importing">Importing playlists…</string>
     <string name="playlist_import_complete">Import Complete!</string>
     <string name="playlist_export_to_local">Export to Local</string>
+    <string name="playlist_play_in_order">Play in Order</string>
+    <string name="playlist_playback_mode">Playback Mode</string>
+    <string name="playlist_mode_order">Order Mode</string>
+    <string name="playlist_mode_shuffle">Shuffle Mode</string>
+    <string name="playlist_mode_repeat_off">Repeat Off</string>
+    <string name="playlist_mode_repeat_all">Repeat All</string>
+    <string name="playlist_mode_repeat_one">Repeat One</string>
+    <string name="playlist_all_songs">All Songs</string>
+    <string name="playlist_song_count_format" formatted="false">%1$d songs · %2$s</string>
     <string name="playlist_export_to">Export to Playlist</string>
     <string name="playlist_create_and_export">Create and Export</string>
     <string name="playlist_create_and_add">Create and Add</string>
@@ -517,7 +531,7 @@
     <string name="download_empty">No Downloads</string>
     <string name="download_desc">Manage downloads</string>
     <string name="download_manage_desc">Manage downloads</string>
-    <string name="download_expand_hint">Manage downloads</string>
+    <string name="download_expand_hint">Downloads and local files</string>
     <string name="download_select_hint">Select songs and tap download button</string>
     <string name="downloaded">Downloaded</string>
     <string name="downloaded_songs">Downloaded Songs</string>
@@ -733,7 +747,7 @@
     <string name="login_enter_code">Enter verification code</string>
     <string name="login_code_error">Invalid Code</string>
     <string name="login_phone_invalid">Invalid Phone Number</string>
-    <string name="login_expand_platforms">Select platform</string>
+    <string name="login_expand_platforms">NetEase, Bili, and YouTube sign-in</string>
     <string name="login_methods">Browser/SMS/Cookie Import</string>
     <string name="login_confirm_send_code">Confirm send verification code?</string>
     <string name="login_send_code_to">Will send code to &gt;%s&lt;</string>
@@ -759,7 +773,7 @@
     <string name="settings_youtube_status_saved_invalid">Saved YouTube auth information was found, but it may be invalid. Tap to refresh it or sign out</string>
     <string name="settings_youtube_status_missing">No usable YouTube sign-in state detected. Tap to sign in again or import one</string>
     <string name="settings_login_platforms">Third-party Sign-in</string>
-    <string name="settings_login_platforms_expand">Select platform</string>
+    <string name="settings_login_platforms_expand">NetEase, Bili, and YouTube sign-in status</string>
     <string name="settings_login_platforms_collapse">Collapse</string>
     <string name="auth_phone_invalid">Please enter 11-digit phone number</string>
     <string name="auth_phone_format_error">Invalid phone number</string>
@@ -780,6 +794,9 @@
     <string name="settings_netease_auto_source_switch_desc">Search Bilibili automatically when a NetEase song is unavailable or only returns a preview clip</string>
     <string name="settings_netease_local_source_fallback">Local Audio Fallback</string>
     <string name="settings_netease_local_source_fallback_desc">Prefer a local audio file matched to the same song when a NetEase song is unavailable or only returns a preview clip</string>
+    <string name="settings_bili_sponsor_block">BilibiliSponsorBlock Auto Skip</string>
+    <string name="settings_bili_sponsor_block_desc">Query public segments for the current video and automatically skip intros, outros, sponsorships, filler, and non-music content</string>
+    <string name="toast_bili_sponsor_block_skipped">BilibiliSponsorBlock skipped a segment</string>
     <string name="settings_netease_quality">Netease Default Quality</string>
     <string name="settings_bili_quality">Bilibili Default Quality</string>
     <string name="netease_web_login">NetEase Login</string>
@@ -820,7 +837,7 @@
     <string name="settings_bypass_proxy">Bypass Proxy</string>
     <string name="settings_bypass_proxy_desc">Ignore system proxy</string>
     <string name="settings_restart_hint">May need to restart app for best effect</string>
-    <string name="settings_expand_network">Network options</string>
+    <string name="settings_expand_network">Network and proxy options</string>
     <string name="settings_about_desc">Version, project home, and developer mode</string>
     <string name="settings_always_record_logs">Always Record Logs</string>
     <string name="settings_always_record_logs_desc">Keep writing runtime logs even when debug mode is off</string>
@@ -828,19 +845,18 @@
     <string name="settings_playback_idle_shutdown_desc">After the selected pause duration, remove the playback notification and stop the foreground playback service to reduce battery use. The queue and progress are kept.</string>
     <string name="settings_playback_idle_shutdown_dialog_title">Exit after being paused for</string>
     <string name="settings_playback_idle_shutdown_off">Never</string>
-    <string name="settings_playback_idle_shutdown_minutes">%1$d minutes</string>
     <string name="settings_clear_config">Clear Configuration</string>
     <string name="settings_ui_scale">UI Scale</string>
     <string name="settings_ui_scale_dpi">UI Scale (DPI)</string>
     <string name="settings_ui_scale_current">Current: %sx (Default 1.00x)</string>
-    <string name="settings_expand_login">Select platform</string>
-    <string name="settings_expand_personalization">Adjust visuals</string>
-    <string name="settings_expand_download">Manage downloads</string>
-    <string name="settings_expand_backup">Manage backups</string>
+    <string name="settings_expand_login">Sign-in methods and account status</string>
+    <string name="settings_expand_personalization">Home, display, and personalization</string>
+    <string name="settings_expand_download">Downloads and local files</string>
+    <string name="settings_expand_backup">Playlist backup and restore</string>
     <string name="settings_bilibili">Bilibili</string>
     <string name="settings_netease">Netease Music</string>
     <string name="settings_qq_music">QQ Music</string>
-    <string name="settings_personalization_expand">Adjust visuals</string>
+    <string name="settings_personalization_expand">Home, display, and personalization</string>
     <string name="settings_default_start_screen">Default Start Screen</string>
     <string name="settings_default_start_screen_desc">Current: %1$s</string>
     <string name="settings_auto_show_keyboard">Auto-Open Keyboard</string>
@@ -858,7 +874,7 @@
     <string name="settings_display_desc">Control cover, lyrics, and background display.</string>
     <string name="settings_home_hidden_notice">All home cards are hidden, so Home will disappear from the bottom bar.</string>
     <string name="settings_playback">Playback Settings</string>
-    <string name="settings_playback_expand">Configure playback behavior</string>
+    <string name="settings_playback_expand">Fades, progress memory, and audio output</string>
     <string name="settings_playback_fade_in">Playback Fade</string>
     <string name="settings_playback_fade_in_desc">Fade audio in when playback starts</string>
     <string name="settings_playback_fade_in_duration">Fade-in Duration</string>
@@ -1021,10 +1037,10 @@
     <string name="settings_custom_background">Custom Background</string>
     <string name="settings_background_change">Change</string>
     <string name="settings_background_select">Select image</string>
-    <string name="settings_network_expand">Configure network</string>
+    <string name="settings_network_expand">Network and proxy options</string>
     <string name="settings_no_cache">No cache</string>
     <string name="settings_download_management">Download Management</string>
-    <string name="settings_download_expand">Manage downloads</string>
+    <string name="settings_download_expand">Location, file format, and download tasks</string>
     <string name="settings_download_progress">Download Progress</string>
     <string name="settings_download_songs_count" formatted="false">%d/%d songs</string>
     <string name="settings_downloading">Downloading: %s</string>
@@ -1071,7 +1087,7 @@
     <string name="settings_download_directory_migrating_current">Current: %1$s</string>
     <string name="settings_download_directory_change_blocked_active_download">Cannot change the download directory while downloads are in progress</string>
     <string name="settings_backup_restore">Backup &amp; Restore</string>
-    <string name="settings_backup_expand">Manage config and playlist backups</string>
+    <string name="settings_backup_expand">Config, playlist backup, and data sync</string>
     <string name="settings_configured">Configured</string>
     <string name="settings_not_configured">Not Configured</string>
     <string name="settings_configure">Configure</string>
@@ -1152,6 +1168,8 @@
     <string name="settings_nowplaying_title_desc">Controls whether the &quot;Now Playing&quot; title appears at the top of the player page</string>
     <string name="settings_nowplaying_keep_screen_on">Keep screen on in Now Playing</string>
     <string name="settings_nowplaying_keep_screen_on_desc">Prevent the screen from timing out while the Now Playing page is open</string>
+    <string name="settings_nowplaying_cover_lyrics">Show lyrics on the cover page</string>
+    <string name="settings_nowplaying_cover_lyrics_desc">Show line-by-line lyrics on the Now Playing cover page</string>
     <string name="settings_nowplaying_progress_quality_switch">Show current quality above progress bar</string>
     <string name="settings_nowplaying_progress_quality_switch_desc">Shown above the progress bar; quality switching is available in More Options</string>
     <string name="settings_nowplaying_toolbar_dock">Use dock-style bottom toolbar</string>
@@ -1165,8 +1183,8 @@
     <string name="settings_add_to_palette">Add to Palette</string>
     <string name="settings_delete_color">Delete Color</string>
     <string name="settings_custom_color">Custom Color</string>
-    <string name="settings_expand_visual">Visual effects</string>
-    <string name="settings_expand_more">More</string>
+    <string name="settings_expand_visual">Themes, backgrounds, and visual effects</string>
+    <string name="settings_expand_more">More options</string>
     <string name="settings_nowplaying_cover_blur_background">Now Playing Cover Blur</string>
     <string name="settings_nowplaying_cover_blur_background_desc">Use the current cover as the background of Now Playing</string>
     <string name="settings_nowplaying_cover_blur_amount">Cover Blur Intensity</string>
@@ -1192,7 +1210,7 @@
     <string name="settings_haptic">Haptic Feedback</string>
     <string name="settings_haptic_desc">Vibrate on button press</string>
     <string name="settings_audio_quality">Audio Quality</string>
-    <string name="settings_audio_quality_expand">Configure audio quality</string>
+    <string name="settings_audio_quality_expand">Platform quality and mobile-data settings</string>
     <string name="settings_show_lyric_translation">Show Translation</string>
     <string name="settings_show_lyric_translation_desc">Show translated lyrics</string>
     <string name="settings_advanced_lyrics">Advanced Lyrics</string>
@@ -1221,7 +1239,7 @@
     <string name="settings_audio_quality_low">Low</string>
     <string name="settings_haptic_feedback">Haptic Feedback</string>
     <string name="settings_motion">Motion Settings</string>
-    <string name="settings_motion_expand">Customize motion effects</string>
+    <string name="settings_motion_expand">Now Playing, lyrics, and background motion</string>
     <string name="settings_lyric_api_enabled">Third-party Lyrics API Integration</string>
     <string name="settings_lyric_api_enabled_desc">Provide Lyricon and SuperLyric with the current song, playback state, position, word-level lyrics, and translations</string>
     <string name="settings_amll_lyrics_enabled">Use AMLL Database</string>
@@ -1229,7 +1247,7 @@
     <string name="settings_external_bluetooth_lyrics_enabled">External Bluetooth Lyrics</string>
     <string name="settings_external_bluetooth_lyrics_enabled_desc">When a Bluetooth device is connected, sync the current lyric line to the device song info area</string>
     <string name="settings_lyrics_offset">Lyrics Settings</string>
-    <string name="settings_lyrics_offset_expand">Adjust external lyrics, Lyricon integration, and default lyric offsets</string>
+    <string name="settings_lyrics_offset_expand">External lyrics, Lyricon integration, and default offsets</string>
     <string name="settings_lyrics_offset_cloud_music">Cloud Music default offset</string>
     <string name="settings_lyrics_offset_cloud_music_desc">Default offset applied when loading Cloud Music lyrics</string>
     <string name="settings_lyrics_offset_qq_music">QQ Music default offset</string>
@@ -1301,7 +1319,6 @@
     <string name="storage_details_subtitle">Actual space used by directories:</string>
     <string name="storage_details_loading">Calculating directory usage, please wait…</string>
     <string name="storage_details_total">Total</string>
-    <string name="storage_details_file_count">%1$d files</string>
     <string name="storage_details_warning_title">⚠️ System Settings Inaccurate?</string>
     <string name="storage_details_warning_message">If system shows much more than here, it\'s an Android cache issue.\n\nSolutions:\n1. Restart device\n2. Wait for system update\n3. Open system settings</string>
     <string name="storage_open_system_settings">Open System Settings</string>
@@ -1347,7 +1364,7 @@
     <string name="cache_clear_complete">Cache cleared</string>
     <string name="settings_cache_manage">Manage cache</string>
     <string name="settings_storage_cache">Storage &amp; Cache</string>
-    <string name="settings_storage_expand">Manage cache</string>
+    <string name="settings_storage_expand">Cache size, cleanup, and storage use</string>
     <string name="settings_cache_notice">Set to 0 MB to disable cache. Restart required after changing limit.</string>
     <string name="settings_cache_size_gb">%.1f GB</string>
     <string name="settings_cache_size_mb">%1$d MB</string>
@@ -1405,7 +1422,7 @@
     <string name="sync_diff_failed">Diff Analysis Failed</string>
     <string name="sync_analysis_progress">Analysis Progress</string>
     <string name="backup_title">Backup &amp; Restore</string>
-    <string name="backup_expand_hint">Manage backups</string>
+    <string name="backup_expand_hint">Playlist backup and restore</string>
     <string name="backup_no_playlist_data">No playlist data in backup</string>
     <string name="backup_import_failed">Playlist import failed</string>
     <string name="backup_export_failed">Playlist export failed</string>
@@ -1415,8 +1432,6 @@
     <string name="sync_last_time">Last sync: %s</string>
     <string name="sync_frequency_desc">Sync frequency:</string>
     <string name="sync_after_play_desc">After each play</string>
-    <string name="sync_every_minutes">Every %1$d minutes</string>
-    <string name="sync_every_minutes_desc">Wait at least %1$d minutes between automatic play history syncs</string>
     <string name="sync_step1_token">Step 1: Enter GitHub Token</string>
     <string name="sync_create_token">Create Token on GitHub</string>
     <string name="sync_step2_repo">Step 2: Select Repository</string>
@@ -1473,7 +1488,6 @@
     <string name="settings_sync_now">Sync Now</string>
     <string name="settings_play_history_update_freq">Play History Update Frequency</string>
     <string name="settings_update_immediate">Immediate Update</string>
-    <string name="settings_update_every_minutes">Update every %1$d minutes</string>
     <string name="settings_data_saver">Data Saver</string>
     <string name="github_auto_sync">GitHub Auto Sync</string>
     <string name="github_sync_warning_title">GitHub Sync Configuration Warning</string>
@@ -1629,7 +1643,7 @@
     <string name="settings_listen_together_server_input_placeholder">Leave empty to use the built-in default server</string>
     <string name="settings_listen_together_server_input_invalid">Invalid server address. Enter a full http:// or https:// address.</string>
     <string name="listen_together_invite_server_invalid">The invite contains an invalid server address, so this room cannot be joined.</string>
-    <string name="listen_together_error_room_id_length">Room ID must be %1$d characters.</string>
+    <string name="listen_together_error_room_id_length">Room ID length must be %1$d.</string>
     <string name="listen_together_error_room_id_chars">Room ID only supports uppercase letters and digits.</string>
     <string name="listen_together_error_user_uuid_required">User UUID is required.</string>
     <string name="listen_together_error_user_uuid_invalid">User UUID format is invalid.</string>
@@ -1638,7 +1652,7 @@
     <string name="listen_together_error_current_track_missing">No track is playing, so a Listen Together room cannot be created.</string>
     <string name="listen_together_error_current_track_not_shareable">Local or unshareable tracks cannot create a Listen Together room. Switch to an online track.</string>
     <string name="listen_together_error_current_track_unavailable">The current track is not in the playback queue and cannot create a Listen Together room.</string>
-    <string name="listen_together_error_nickname_length">Nickname length must be %1$d-%2$d characters.</string>
+    <string name="listen_together_error_nickname_length">Nickname length must be from %1$d to %2$d.</string>
     <string name="listen_together_error_nickname_chars">Nickname only supports Chinese characters, letters, and digits.</string>
     <string name="settings_listen_together_server_test">Test Availability</string>
     <string name="settings_listen_together_server_saved">Listen Together server setting saved.</string>
@@ -1686,10 +1700,8 @@
     <string name="traffic_risk_network_roaming">roaming network</string>
     <string name="traffic_risk_download_title">Confirm download</string>
     <string name="traffic_risk_download_single_message">You are using %1$s. Downloading “%2$s” may use a lot of data.</string>
-    <string name="traffic_risk_download_batch_message">You are using %1$s. Downloading %2$d songs may use a lot of data.</string>
     <string name="traffic_risk_download_confirm">Continue download</string>
     <string name="mobile_data_download_interruption_title">Wi-Fi disconnected</string>
-    <string name="mobile_data_download_interruption_message">You switched to %1$s. %2$d active download tasks are paused. Choose what to do next.</string>
     <string name="mobile_data_download_wait_wifi">Wait for Wi-Fi</string>
     <string name="mobile_data_download_cancel_all">Cancel all tasks</string>
 
@@ -2030,7 +2042,7 @@
     <string name="disclaimer_section5_bullet6">NeriPlayer does not include third-party analytics, crash reporting, or advertising SDKs.</string>
     <string name="disclaimer_section5_bullet7">Access logs created by third-party platforms are handled by those platforms under their own privacy policies.</string>
     <string name="disclaimer_section5_bullet8">GitHub Sync (optional): users may back up playlist data to their own private GitHub repository. Tokens are encrypted with Android Keystore and stored locally, so the developer cannot access them.</string>
-    <string name="disclaimer_section5_bullet9">Last updated: 2025-01-07.</string>
+    <string name="disclaimer_section5_bullet9">Last updated: January 7, 2025.</string>
     <string name="disclaimer_section6_bullet1">NeriPlayer is provided &quot;as is&quot; without warranties, including warranties of stability or uninterrupted availability.</string>
     <string name="disclaimer_section6_bullet2">To the extent permitted by law, the developer is not liable for losses arising from use of the app, including download-related actions.</string>
     <string name="disclaimer_section6_bullet3">The above limitations apply even if the developer has been advised of the possibility of such losses.</string>

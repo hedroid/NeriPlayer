@@ -15,6 +15,9 @@ import moe.ouom.neriplayer.listentogether.session.retriedAt
 import moe.ouom.neriplayer.listentogether.session.shouldApplyListenTogetherRoomStateToPlayer
 import moe.ouom.neriplayer.listentogether.session.shouldDropListenTogetherControllerLocalEcho
 import moe.ouom.neriplayer.listentogether.session.shouldRepairListenTogetherListenerState
+import moe.ouom.neriplayer.listentogether.playback.LISTEN_TOGETHER_LISTENER_SAFETY_RESUME_CAUSE
+import moe.ouom.neriplayer.listentogether.playback.shouldHoldListenTogetherPlaybackForSafetyPause
+import moe.ouom.neriplayer.listentogether.playback.shouldUseListenTogetherListenerSafetyPause
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -186,6 +189,17 @@ class ListenTogetherSessionPoliciesTest {
     }
 
     @Test
+    fun `room notice keeps member departure broadcast`() {
+        assertEquals(
+            "member_left:Listener",
+            resolveListenTogetherRoomNotice(
+                state = roomState(roomStatus = ListenTogetherRoomStatuses.ACTIVE),
+                fallbackMessage = "member_left:Listener"
+            )
+        )
+    }
+
+    @Test
     fun `player apply requires current matching room and non stale version`() {
         val current = roomState(version = 5L)
 
@@ -296,6 +310,47 @@ class ListenTogetherSessionPoliciesTest {
         assertEquals("stable-event-id", retried.event.eventId)
         assertEquals(4_000L, retried.lastSentAtElapsedMs)
         assertEquals(2, retried.attempts)
+    }
+
+    @Test
+    fun `listener safety pause only applies when member control is disabled`() {
+        assertTrue(
+            shouldUseListenTogetherListenerSafetyPause(
+                listenTogetherActive = true,
+                isCurrentUserController = false,
+                allowMemberControl = false
+            )
+        )
+        assertFalse(
+            shouldUseListenTogetherListenerSafetyPause(
+                listenTogetherActive = true,
+                isCurrentUserController = true,
+                allowMemberControl = false
+            )
+        )
+        assertFalse(
+            shouldUseListenTogetherListenerSafetyPause(
+                listenTogetherActive = true,
+                isCurrentUserController = false,
+                allowMemberControl = true
+            )
+        )
+    }
+
+    @Test
+    fun `listener safety pause holds passive state until explicit resume sync`() {
+        assertTrue(
+            shouldHoldListenTogetherPlaybackForSafetyPause(
+                safetyPausePendingResume = true,
+                causeType = "HEARTBEAT"
+            )
+        )
+        assertFalse(
+            shouldHoldListenTogetherPlaybackForSafetyPause(
+                safetyPausePendingResume = true,
+                causeType = LISTEN_TOGETHER_LISTENER_SAFETY_RESUME_CAUSE
+            )
+        )
     }
 
     private fun roomState(

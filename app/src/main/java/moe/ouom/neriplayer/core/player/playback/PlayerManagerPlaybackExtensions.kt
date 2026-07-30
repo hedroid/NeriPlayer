@@ -164,6 +164,10 @@ internal fun PlayerManager.restorePlaybackAfterTransientAudioRouteLoss(reason: S
 }
 
 internal fun PlayerManager.pauseForAudioRouteLoss(reason: String) {
+    val useListenTogetherSafetyPause = shouldUseListenTogetherListenerSafetyPause()
+    if (useListenTogetherSafetyPause) {
+        markListenTogetherSafetyPausePendingResume()
+    }
     _playWhenReadyFlow.value = false
     _isPlayingFlow.value = false
     if (lyriconEnabled) {
@@ -172,7 +176,11 @@ internal fun PlayerManager.pauseForAudioRouteLoss(reason: String) {
     syncPlaybackControlPlayingState()
     pauseImpl(
         forcePersist = false,
-        commandSource = PlaybackCommandSource.LOCAL,
+        commandSource = if (useListenTogetherSafetyPause) {
+            PlaybackCommandSource.LOCAL_SAFETY
+        } else {
+            PlaybackCommandSource.LOCAL
+        },
         allowFadeOut = false,
         preserveMutedVolume = true,
         debugReason = "audio_route_loss:$reason"
@@ -553,8 +561,9 @@ internal fun PlayerManager.playPlaylistImpl(
     emitPlaybackCommand(
         type = "PLAY_PLAYLIST",
         source = commandSource,
-        queue = currentPlaylist,
-        currentIndex = currentIndex
+        queue = currentPlaylist.toList(),
+        currentIndex = currentIndex,
+        positionMs = _playbackPositionMs.value
     )
     scheduleStatePersist()
 }
@@ -649,6 +658,7 @@ internal fun PlayerManager.playAtIndex(
     cancelGenericUrlPrefetchUnlessReusableForSong(song, reason = "play_at_index")
     playbackRequestToken += 1
     val requestToken = playbackRequestToken
+    BiliSponsorBlockPlaybackController.onPlaybackRequestStarted(song, requestToken)
     PlaybackTransitionWakeLock.acquire(
         context = application,
         requestToken = requestToken,
@@ -960,6 +970,9 @@ internal fun PlayerManager.playImpl(
 ) {
     ensureInitialized()
     if (!initialized) return
+    if (commandSource == PlaybackCommandSource.LOCAL && requestListenTogetherSafetyPauseResume()) {
+        return
+    }
     if (commandSource == PlaybackCommandSource.LOCAL && shouldBlockLocalRoomControl(commandSource)) return
     if (requestUsbExclusiveLoudPlaybackConfirmation(
             commandSource = commandSource,
@@ -1490,7 +1503,9 @@ internal fun PlayerManager.nextImpl(
             emitPlaybackCommand(
                 type = "NEXT",
                 source = commandSource,
+                queue = currentPlaylist.toList(),
                 currentIndex = currentIndex,
+                positionMs = _playbackPositionMs.value,
                 force = force
             )
             return
@@ -1528,7 +1543,9 @@ internal fun PlayerManager.nextImpl(
         emitPlaybackCommand(
             type = "NEXT",
             source = commandSource,
+            queue = currentPlaylist.toList(),
             currentIndex = currentIndex,
+            positionMs = _playbackPositionMs.value,
             force = force
         )
     } else {
@@ -1551,7 +1568,9 @@ internal fun PlayerManager.nextImpl(
         emitPlaybackCommand(
             type = "NEXT",
             source = commandSource,
+            queue = currentPlaylist.toList(),
             currentIndex = currentIndex,
+            positionMs = _playbackPositionMs.value,
             force = force
         )
     }
@@ -1613,7 +1632,9 @@ internal fun PlayerManager.previousImpl(
             emitPlaybackCommand(
                 type = "PREVIOUS",
                 source = commandSource,
-                currentIndex = currentIndex
+                queue = currentPlaylist.toList(),
+                currentIndex = currentIndex,
+                positionMs = _playbackPositionMs.value
             )
         } else {
             NPLogger.d("NERI-Player", "No previous track in shuffle history.")
@@ -1629,7 +1650,9 @@ internal fun PlayerManager.previousImpl(
             emitPlaybackCommand(
                 type = "PREVIOUS",
                 source = commandSource,
-                currentIndex = currentIndex
+                queue = currentPlaylist.toList(),
+                currentIndex = currentIndex,
+                positionMs = _playbackPositionMs.value
             )
         } else {
             if (repeatModeSetting == Player.REPEAT_MODE_ALL && currentPlaylist.isNotEmpty()) {
@@ -1642,7 +1665,9 @@ internal fun PlayerManager.previousImpl(
                 emitPlaybackCommand(
                     type = "PREVIOUS",
                     source = commandSource,
-                    currentIndex = currentIndex
+                    queue = currentPlaylist.toList(),
+                    currentIndex = currentIndex,
+                    positionMs = _playbackPositionMs.value
                 )
             } else {
                 NPLogger.d("NERI-Player", "Already at the start of the playlist.")
@@ -1799,6 +1824,31 @@ internal fun PlayerManager.startProgressUpdates() {
                 .getOrDefault(_playbackDurationMs.value)
             if (durationMs > 0L) {
                 _playbackDurationMs.value = durationMs
+            }
+            val currentSong = _currentSongFlow.value
+            if (currentSong != null && !isListenTogetherActive()) {
+                val skipPositionMs = BiliSponsorBlockPlaybackController.nextSkipPosition(
+                    song = currentSong,
+                    currentPositionMs = positionMs,
+                    durationMs = durationMs
+                )
+                if (skipPositionMs != null) {
+                    NPLogger.d(
+                        "BiliSponsorBlock",
+                        "auto skipping segment: from=${positionMs}ms, to=${skipPositionMs}ms"
+                    )
+                    Toast.makeText(
+                        application,
+                        getLocalizedString(R.string.toast_bili_sponsor_block_skipped),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    seekTo(
+                        positionMs = skipPositionMs,
+                        commandSource = PlaybackCommandSource.LOCAL_SAFETY
+                    )
+                    delay(updateIntervalMs)
+                    continue
+                }
             }
             if (lyriconEnabled) {
                 LyriconManager.setPlaybackSpeed(playbackSoundConfig.speed)

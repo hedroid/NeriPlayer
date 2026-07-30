@@ -68,6 +68,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.toBitmap
+import androidx.core.graphics.get
+import androidx.core.graphics.scale
 import androidx.core.graphics.withClip
 import androidx.core.graphics.withTranslation
 import coil.Coil
@@ -129,8 +131,14 @@ fun LyricShareSheet(
     val lyricsListState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialScrollIndex
     )
+    val shareLineKeys = remember(shareableLyrics) {
+        shareableLyrics.mapIndexed { index, line -> shareLineKey(index, line) }
+    }
     var selectedKeys by remember(shareableLyrics, initialKey) {
         mutableStateOf(setOfNotNull(initialKey))
+    }
+    var selectionStartKey by remember(shareableLyrics, initialKey) {
+        mutableStateOf(initialKey)
     }
     val selectedLines = remember(shareableLyrics, selectedKeys) {
         shareableLyrics.filterIndexed { index, line ->
@@ -188,17 +196,29 @@ fun LyricShareSheet(
                     items = shareableLyrics,
                     key = { index, line -> shareLineKey(index, line) }
                 ) { index, line ->
-                    val key = shareLineKey(index, line)
+                    val key = shareLineKeys[index]
                     val selected = key in selectedKeys
                     LyricShareLine(
                         line = line,
                         selected = selected,
                         onToggle = {
+                            val previousKeys = selectedKeys
                             val nextKeys = toggleShareLine(
-                                currentKeys = selectedKeys,
+                                currentKeys = previousKeys,
                                 toggledKey = key
                             )
                             selectedKeys = nextKeys
+                            if (key !in previousKeys) {
+                                selectionStartKey = key
+                            }
+                        },
+                        onRangeSelect = {
+                            selectedKeys = selectShareLineRange(
+                                currentKeys = selectedKeys,
+                                lineKeys = shareLineKeys,
+                                selectionStartKey = selectionStartKey,
+                                targetKey = key
+                            )
                         }
                     )
                 }
@@ -312,7 +332,8 @@ private fun LyricShareHeader(
 private fun LyricShareLine(
     line: LyricEntry,
     selected: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onRangeSelect: () -> Unit
 ) {
     val shape = RoundedCornerShape(14.dp)
     val selectedBrush = Brush.horizontalGradient(
@@ -335,7 +356,7 @@ private fun LyricShareLine(
             .then(background)
             .combinedClickable(
                 onClick = onToggle,
-                onLongClick = onToggle
+                onLongClick = onRangeSelect
             )
             .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
@@ -402,6 +423,23 @@ internal fun toggleShareLine(
         return if (currentKeys.size > 1) currentKeys - toggledKey else currentKeys
     }
     return currentKeys + toggledKey
+}
+
+internal fun selectShareLineRange(
+    currentKeys: Set<String>,
+    lineKeys: List<String>,
+    selectionStartKey: String?,
+    targetKey: String
+): Set<String> {
+    val targetIndex = lineKeys.indexOf(targetKey)
+    if (targetIndex < 0) return currentKeys
+
+    val selectionStartIndex = lineKeys.indexOf(selectionStartKey)
+    if (selectionStartIndex < 0) return currentKeys + targetKey
+
+    val rangeStart = minOf(selectionStartIndex, targetIndex)
+    val rangeEnd = maxOf(selectionStartIndex, targetIndex)
+    return currentKeys + lineKeys.subList(rangeStart, rangeEnd + 1)
 }
 
 private fun resolveInitialShareLineKey(
@@ -796,11 +834,11 @@ private fun drawBlurredBottomBackdrop(
     try {
         val smallWidth = (source.width / 8).coerceAtLeast(1)
         val smallHeight = (source.height / 8).coerceAtLeast(1)
-        val smallBitmap = Bitmap.createScaledBitmap(source, smallWidth, smallHeight, true)
+        val smallBitmap = source.scale(smallWidth, smallHeight)
         small = smallBitmap
         val blurredBitmap = smallBitmap.boxBlur(radius = 6, iterations = 2)
         blurred = blurredBitmap
-        glass = Bitmap.createScaledBitmap(blurredBitmap, source.width, source.height, true)
+        glass = blurredBitmap.scale(source.width, source.height)
         val target = RectF(0f, top, sourceBitmap.width.toFloat(), top + height)
         canvas.drawBitmap(glass, null, target, Paint(Paint.ANTI_ALIAS_FLAG))
     } finally {
@@ -819,11 +857,11 @@ private fun buildBlurredCardBackground(
     var small: Bitmap? = null
     var blurred: Bitmap? = null
     try {
-        val smallBitmap = Bitmap.createScaledBitmap(coverBitmap, smallSize, smallSize, true)
+        val smallBitmap = coverBitmap.scale(smallSize, smallSize)
         small = smallBitmap
         val blurredBitmap = smallBitmap.boxBlur(radius = 7, iterations = 3)
         blurred = blurredBitmap
-        return Bitmap.createScaledBitmap(blurredBitmap, targetSize, targetSize, true)
+        return blurredBitmap.scale(targetSize, targetSize)
     } finally {
         recycleBitmap(blurred)
         recycleBitmap(small)
@@ -941,7 +979,7 @@ private fun Bitmap.averageColor(): Int {
     while (y < height) {
         var x = 0
         while (x < width) {
-            val color = getPixel(x, y)
+            val color = this[x, y]
             val alpha = AndroidColor.alpha(color)
             if (alpha > 24) {
                 red += AndroidColor.red(color)

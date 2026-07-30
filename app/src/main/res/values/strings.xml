@@ -25,10 +25,12 @@
     <string name="action_more">更多</string>
     <string name="action_clear">清空</string>
     <string name="action_paste">粘贴</string>
+    <string name="action_select">选择</string>
     <string name="action_select_all">全选</string>
     <string name="action_deselect_all">取消全选</string>
     <string name="action_inverse_select">反选</string>
     <string name="action_multi_select">多选</string>
+    <string name="action_enter_multi_select">进入多选</string>
     <string name="action_exit_multi_select">退出多选</string>
     <string name="action_copy_song_name">复制歌曲名</string>
     <string name="action_copy_artist">复制歌手信息</string>
@@ -89,6 +91,8 @@
     <string name="cd_export_playlist">导出到歌单</string>
     <string name="cd_download_selected">下载选中歌曲</string>
     <string name="cd_locate_playing">定位到正在播放</string>
+    <string name="cd_open_current_playback_source">定位当前歌单</string>
+    <string name="cd_queue_quick_actions">播放队列快捷操作</string>
     <string name="cd_close">关闭</string>
     <string name="cd_recent">最近播放</string>
     <string name="cd_app_background">应用背景</string>
@@ -122,8 +126,8 @@
     <string name="player_loud_volume_warning_message_ceiling">当前 %1$s 的媒体音量为 %2$d%%。暂无有效 PCM 峰值样本，按当前音量数字输出上限可达 %3$.1f dBFS，风险阈值为 %4$d dBFS（%5$s）。是否继续播放？</string>
     <string name="player_loud_volume_warning_calibration">该数值是数字输出估算，不是耳边实测 dB SPL；设备未提供模拟输出与耳机灵敏度校准数据。</string>
     <string name="player_loud_volume_device_unknown">未知 USB DAC</string>
-    <string name="player_loud_volume_device_uac1">UAC1 USB DAC（%1$s）</string>
-    <string name="player_loud_volume_device_uac2">UAC2 USB DAC（%1$s）</string>
+    <string name="player_loud_volume_device_uac1">USB Audio Class 1 DAC（%1$s）</string>
+    <string name="player_loud_volume_device_uac2">USB Audio Class 2 DAC（%1$s）</string>
     <string name="player_loud_volume_device_unknown_usb">USB DAC（%1$s）</string>
     <string name="player_loud_volume_risk_elevated">需注意</string>
     <string name="player_loud_volume_risk_high">高风险</string>
@@ -232,6 +236,7 @@
     <string name="nowplaying_font_size_hint">向左减小，向右增大</string>
     <string name="nowplaying_lyrics_sample">示例歌词：春风十里不如你</string>
     <string name="nowplaying_youtube_music">YouTube</string>
+    <string name="nowplaying_queue_current_position">第 %d 首</string>
 
     <!-- Lyrics -->
     <string name="lyrics_title">歌词</string>
@@ -356,6 +361,15 @@
     <string name="playlist_importing">正在导入歌单…</string>
     <string name="playlist_import_complete">导入完成！</string>
     <string name="playlist_export_to_local">导出到本地歌单</string>
+    <string name="playlist_play_in_order">顺序播放</string>
+    <string name="playlist_playback_mode">播放模式</string>
+    <string name="playlist_mode_order">顺序模式</string>
+    <string name="playlist_mode_shuffle">随机模式</string>
+    <string name="playlist_mode_repeat_off">循环关闭</string>
+    <string name="playlist_mode_repeat_all">列表循环</string>
+    <string name="playlist_mode_repeat_one">单曲循环</string>
+    <string name="playlist_all_songs">全部歌曲</string>
+    <string name="playlist_song_count_format" formatted="false">%1$d 首 · %2$s</string>
     <string name="playlist_export_to">导出到歌单</string>
     <string name="playlist_create_and_export">新建并导出</string>
     <string name="playlist_create_and_add">新建并添加</string>
@@ -517,7 +531,7 @@
     <string name="download_empty">暂无已下载歌曲</string>
     <string name="download_desc">管理下载任务和本地文件</string>
     <string name="download_manage_desc">管理音乐下载和本地文件</string>
-    <string name="download_expand_hint">展开以管理下载任务</string>
+    <string name="download_expand_hint">下载任务与本地文件管理</string>
     <string name="download_select_hint">选择歌曲后点击下载按钮开始下载</string>
     <string name="downloaded">已下载</string>
     <string name="downloaded_songs">已下载歌曲</string>
@@ -733,7 +747,7 @@
     <string name="login_enter_code">请输入验证码</string>
     <string name="login_code_error">验证码错误</string>
     <string name="login_phone_invalid">手机号无效</string>
-    <string name="login_expand_platforms">展开以选择登录平台</string>
+    <string name="login_expand_platforms">网易云、Bili 与 YouTube 登录方式</string>
     <string name="login_methods">浏览器/验证码/Cookie 导入</string>
     <string name="login_confirm_send_code">确认发送验证码？</string>
     <string name="login_send_code_to">将发送验证码到 &gt;%s&lt;</string>
@@ -759,7 +773,7 @@
     <string name="settings_youtube_status_saved_invalid">检测到已保存的 YouTube 鉴权信息，但当前可能无效，点击可刷新或退出登录</string>
     <string name="settings_youtube_status_missing">未检测到可用 YouTube 登录态，点击重新登录或导入</string>
     <string name="settings_login_platforms">第三方平台登录</string>
-    <string name="settings_login_platforms_expand">展开以选择登录平台</string>
+    <string name="settings_login_platforms_expand">管理网易云、Bili 与 YouTube 登录状态</string>
     <string name="settings_login_platforms_collapse">收起</string>
     <string name="auth_phone_invalid">请输入 11 位大陆手机号</string>
     <string name="auth_phone_format_error">手机号无效</string>
@@ -780,6 +794,9 @@
     <string name="settings_netease_auto_source_switch_desc">网易云歌曲无权限或仅返回试听片段时，自动在哔哩哔哩查找音源</string>
     <string name="settings_netease_local_source_fallback">本地音频兜底</string>
     <string name="settings_netease_local_source_fallback_desc">网易云歌曲无权限或仅返回试听片段时，优先播放已匹配相同歌曲信息的本地音频</string>
+    <string name="settings_bili_sponsor_block">BilibiliSponsorBlock 自动跳过</string>
+    <string name="settings_bili_sponsor_block_desc">启用后会查询当前视频的公开片段，并自动跳过片头、片尾、赞助、填充和非音乐内容</string>
+    <string name="toast_bili_sponsor_block_skipped">BilibiliSponsorBlock 已跳过片段</string>
     <string name="settings_netease_quality">网易云默认音质</string>
     <string name="settings_bili_quality">B 站默认音质</string>
     <string name="netease_web_login">网易云登录</string>
@@ -820,7 +837,7 @@
     <string name="settings_bypass_proxy">绕过系统代理</string>
     <string name="settings_bypass_proxy_desc">应用内网络请求不走系统代理</string>
     <string name="settings_restart_hint">修改后可能需要重启应用以获得最佳效果</string>
-    <string name="settings_expand_network">展开以配置网络选项</string>
+    <string name="settings_expand_network">网络连接与代理选项</string>
     <string name="settings_about_desc">版本信息、项目主页和开发者模式</string>
     <string name="settings_always_record_logs">始终记录日志</string>
     <string name="settings_always_record_logs_desc">无视调试模式开关，持续写入应用运行日志</string>
@@ -828,19 +845,18 @@
     <string name="settings_playback_idle_shutdown_desc">暂停达到设定时长后移除播放通知并停止前台播放服务，以降低后台耗电；播放队列和进度会保留</string>
     <string name="settings_playback_idle_shutdown_dialog_title">暂停多久后退出</string>
     <string name="settings_playback_idle_shutdown_off">不自动退出</string>
-    <string name="settings_playback_idle_shutdown_minutes">%1$d 分钟</string>
     <string name="settings_clear_config">清除配置</string>
     <string name="settings_ui_scale">UI 缩放</string>
     <string name="settings_ui_scale_dpi">UI 缩放 (DPI)</string>
     <string name="settings_ui_scale_current">当前: %sx (默认 1.00x)</string>
-    <string name="settings_expand_login">展开以选择登录平台</string>
-    <string name="settings_expand_personalization">展开以调整视觉效果</string>
-    <string name="settings_expand_download">展开以管理下载任务</string>
-    <string name="settings_expand_backup">展开以管理歌单备份</string>
+    <string name="settings_expand_login">登录方式与账号状态</string>
+    <string name="settings_expand_personalization">首页、显示与个性化偏好</string>
+    <string name="settings_expand_download">下载任务与本地文件管理</string>
+    <string name="settings_expand_backup">歌单备份与恢复</string>
     <string name="settings_bilibili">哔哩哔哩</string>
     <string name="settings_netease">网易云音乐</string>
     <string name="settings_qq_music">QQ 音乐</string>
-    <string name="settings_personalization_expand">展开以调整视觉效果</string>
+    <string name="settings_personalization_expand">首页、显示与个性化偏好</string>
     <string name="settings_default_start_screen">默认打开页面</string>
     <string name="settings_default_start_screen_desc">当前：%1$s</string>
     <string name="settings_auto_show_keyboard">自动弹出软键盘</string>
@@ -858,7 +874,7 @@
     <string name="settings_display_desc">控制封面、歌词与背景的显示方式</string>
     <string name="settings_home_hidden_notice">当前已关闭全部首页卡片，首页会从底部栏隐藏。</string>
     <string name="settings_playback">播放设置</string>
-    <string name="settings_playback_expand">展开以配置播放行为</string>
+    <string name="settings_playback_expand">淡入淡出、进度记忆与音频输出</string>
     <string name="settings_playback_fade_in">播放淡入淡出</string>
     <string name="settings_playback_fade_in_desc">开始播放时使用淡入淡出过渡</string>
     <string name="settings_playback_fade_in_duration">播放淡入时长</string>
@@ -1021,10 +1037,10 @@
     <string name="settings_custom_background">自定义背景图</string>
     <string name="settings_background_change">点击更换</string>
     <string name="settings_background_select">选择一张图片</string>
-    <string name="settings_network_expand">展开以配置网络选项</string>
+    <string name="settings_network_expand">网络连接与代理选项</string>
     <string name="settings_no_cache">不缓存 (0 MB)</string>
     <string name="settings_download_management">下载管理</string>
-    <string name="settings_download_expand">展开以管理下载任务</string>
+    <string name="settings_download_expand">下载目录、保存格式与任务管理</string>
     <string name="settings_download_progress">下载进度</string>
     <string name="settings_download_songs_count" formatted="false">%d/%d 首歌曲</string>
     <string name="settings_downloading">正在下载: %s</string>
@@ -1071,7 +1087,7 @@
     <string name="settings_download_directory_migrating_current">当前：%1$s</string>
     <string name="settings_download_directory_change_blocked_active_download">下载进行中，暂时不能修改下载目录</string>
     <string name="settings_backup_restore">备份与恢复</string>
-    <string name="settings_backup_expand">展开以管理配置与歌单备份</string>
+    <string name="settings_backup_expand">配置、歌单备份与数据同步</string>
     <string name="settings_configured">已配置</string>
     <string name="settings_not_configured">未配置</string>
     <string name="settings_configure">配置</string>
@@ -1152,6 +1168,8 @@
     <string name="settings_nowplaying_title_desc">控制播放页顶部是否显示“正在播放”四个字</string>
     <string name="settings_nowplaying_keep_screen_on">播放页常亮显示</string>
     <string name="settings_nowplaying_keep_screen_on_desc">打开播放页时保持屏幕唤醒，离开后恢复系统自动锁屏</string>
+    <string name="settings_nowplaying_cover_lyrics">封面页显示歌词</string>
+    <string name="settings_nowplaying_cover_lyrics_desc">在正在播放的封面页显示逐行歌词</string>
     <string name="settings_nowplaying_progress_quality_switch">进度条上方显示当前音质</string>
     <string name="settings_nowplaying_progress_quality_switch_desc">显示在进度条上方；音质切换入口位于更多选项</string>
     <string name="settings_nowplaying_toolbar_dock">底部工具栏使用 Dock 样式</string>
@@ -1165,8 +1183,8 @@
     <string name="settings_add_to_palette">添加到取色盘</string>
     <string name="settings_delete_color">删除该颜色</string>
     <string name="settings_custom_color">自定义颜色（滑动选择）</string>
-    <string name="settings_expand_visual">展开以调整视觉效果</string>
-    <string name="settings_expand_more">展开更多</string>
+    <string name="settings_expand_visual">主题、背景与视觉效果</string>
+    <string name="settings_expand_more">更多选项</string>
     <string name="settings_nowplaying_cover_blur_background">正在播放模糊封面背景</string>
     <string name="settings_nowplaying_cover_blur_background_desc">使用当前封面作为正在播放页面背景</string>
     <string name="settings_nowplaying_cover_blur_amount">封面模糊强度</string>
@@ -1192,7 +1210,7 @@
     <string name="settings_haptic">触感反馈</string>
     <string name="settings_haptic_desc">开启后点击按钮时会有震动反馈</string>
     <string name="settings_audio_quality">音质设置</string>
-    <string name="settings_audio_quality_expand">展开以配置音质选项</string>
+    <string name="settings_audio_quality_expand">各平台音质与移动数据策略</string>
     <string name="settings_show_lyric_translation">显示歌词翻译</string>
     <string name="settings_show_lyric_translation_desc">开启后将显示歌词的翻译内容</string>
     <string name="settings_advanced_lyrics">高级歌词</string>
@@ -1221,7 +1239,7 @@
     <string name="settings_audio_quality_low">低</string>
     <string name="settings_haptic_feedback">触感反馈</string>
     <string name="settings_motion">动效设置</string>
-    <string name="settings_motion_expand">展开以调整动效表现</string>
+    <string name="settings_motion_expand">播放页、歌词与背景动效</string>
     <string name="settings_lyric_api_enabled">第三方歌词API适配</string>
     <string name="settings_lyric_api_enabled_desc">向 Lyricon &amp; SuperLyric 提供当前歌曲、播放状态、进度、逐字歌词和翻译</string>
     <string name="settings_amll_lyrics_enabled">使用 AMLL 数据库</string>
@@ -1229,7 +1247,7 @@
     <string name="settings_external_bluetooth_lyrics_enabled">外接设备蓝牙歌词</string>
     <string name="settings_external_bluetooth_lyrics_enabled_desc">连接蓝牙设备时，将当前歌词行同步到外接设备的歌曲信息区域</string>
     <string name="settings_lyrics_offset">歌词设置</string>
-    <string name="settings_lyrics_offset_expand">展开以调整外接歌词、词幕适配与歌词默认偏移</string>
+    <string name="settings_lyrics_offset_expand">外接歌词、词幕适配与默认偏移</string>
     <string name="settings_lyrics_offset_cloud_music">网易云默认歌词偏移</string>
     <string name="settings_lyrics_offset_cloud_music_desc">设置加载网易云歌词时的基础偏移</string>
     <string name="settings_lyrics_offset_qq_music">QQ 音乐默认歌词偏移</string>
@@ -1301,7 +1319,6 @@
     <string name="storage_details_subtitle">各目录实际占用空间：</string>
     <string name="storage_details_loading">正在统计目录占用，请稍候…</string>
     <string name="storage_details_total">总计</string>
-    <string name="storage_details_file_count">%1$d 个文件</string>
     <string name="storage_details_warning_title">⚠️ 系统设置显示不准确？</string>
     <string name="storage_details_warning_message">如果系统显示的占用远大于此处统计，这是 Android 系统缓存问题。\n\n解决方法：\n1. 重启手机\n2. 等待系统自动更新\n3. 打开系统设置查看</string>
     <string name="storage_open_system_settings">打开系统设置</string>
@@ -1347,7 +1364,7 @@
     <string name="cache_clear_complete">清理完成</string>
     <string name="settings_cache_manage">管理缓存大小与清理</string>
     <string name="settings_storage_cache">存储与缓存</string>
-    <string name="settings_storage_expand">管理缓存大小与清理</string>
+    <string name="settings_storage_expand">缓存大小、清理与存储用量</string>
     <string name="settings_cache_notice">设置为 0 MB 即禁用缓存。修改上限后需重启应用生效。</string>
     <string name="settings_cache_size_gb">%.1f GB</string>
     <string name="settings_cache_size_mb">%1$d MB</string>
@@ -1405,7 +1422,7 @@
     <string name="sync_diff_failed">差异分析失败</string>
     <string name="sync_analysis_progress">分析进度</string>
     <string name="backup_title">备份与恢复</string>
-    <string name="backup_expand_hint">展开以管理歌单备份</string>
+    <string name="backup_expand_hint">歌单备份与恢复</string>
     <string name="backup_no_playlist_data">备份文件中没有歌单数据</string>
     <string name="backup_import_failed">歌单导入失败</string>
     <string name="backup_export_failed">歌单导出失败</string>
@@ -1415,8 +1432,6 @@
     <string name="sync_last_time">上次同步: %s</string>
     <string name="sync_frequency_desc">选择播放历史同步到云端的频率：</string>
     <string name="sync_after_play_desc">每次播放后立即同步</string>
-    <string name="sync_every_minutes">每%1$d分钟同步</string>
-    <string name="sync_every_minutes_desc">播放历史变更后，至少间隔%1$d分钟再同步到云端</string>
     <string name="sync_step1_token">步骤1: 输入 GitHub Token</string>
     <string name="sync_create_token">在 GitHub 创建 Token</string>
     <string name="sync_step2_repo">步骤2: 选择仓库</string>
@@ -1473,7 +1488,6 @@
     <string name="settings_sync_now">立即同步</string>
     <string name="settings_play_history_update_freq">播放历史更新频率</string>
     <string name="settings_update_immediate">立即更新</string>
-    <string name="settings_update_every_minutes">每%1$d分钟更新</string>
     <string name="settings_data_saver">省流通道</string>
     <string name="github_auto_sync">GitHub 自动同步</string>
     <string name="github_sync_warning_title">GitHub 同步配置警告</string>
@@ -1686,10 +1700,8 @@
     <string name="traffic_risk_network_roaming">漫游网络</string>
     <string name="traffic_risk_download_title">确认下载</string>
     <string name="traffic_risk_download_single_message">当前正在使用%1$s，下载「%2$s」可能消耗较多流量。</string>
-    <string name="traffic_risk_download_batch_message">当前正在使用%1$s，下载 %2$d 首歌曲可能消耗较多流量。</string>
     <string name="traffic_risk_download_confirm">继续下载</string>
     <string name="mobile_data_download_interruption_title">WIFI 已断开</string>
-    <string name="mobile_data_download_interruption_message">当前已切换到%1$s，正在下载的 %2$d 个任务已暂停。请选择如何处理。</string>
     <string name="mobile_data_download_wait_wifi">等待 WIFI</string>
     <string name="mobile_data_download_cancel_all">取消所有任务</string>
 

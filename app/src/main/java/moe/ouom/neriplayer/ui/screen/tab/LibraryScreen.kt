@@ -100,12 +100,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -140,6 +140,7 @@ import moe.ouom.neriplayer.ui.util.rememberPlaylistDisplayCoverUrl
 import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
 import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.ui.util.currentWindowWidthDp
 import moe.ouom.neriplayer.util.format.formatPlayCount
 import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
 import org.burnoutcrew.reorderable.ItemPosition
@@ -164,13 +165,36 @@ private const val FAVORITE_CATEGORY_PLAYLIST = 0
 private const val FAVORITE_CATEGORY_ARTIST = 1
 private const val LOCAL_CATEGORY_PLAYLIST = 0
 private const val LOCAL_CATEGORY_ARTIST = 1
+private const val LIBRARY_UI_PREFS = "library_ui_preferences"
+private const val KEY_LOCAL_ARTIST_SORT_MODE = "local_artist_sort_mode"
 private val LibraryPrimaryTabShape = RoundedCornerShape(20.dp)
 private val LibrarySearchFieldShape = RoundedCornerShape(16.dp)
 
-private enum class LocalArtistSortMode {
+internal enum class LocalArtistSortMode {
     SONG_COUNT,
     RECENT_ADDED,
     NAME
+}
+
+internal fun resolveLocalArtistSortMode(storageValue: String?): LocalArtistSortMode {
+    return LocalArtistSortMode.entries.firstOrNull { it.name == storageValue }
+        ?: LocalArtistSortMode.SONG_COUNT
+}
+
+internal fun localArtistSortModeStorageValue(sortMode: LocalArtistSortMode): String {
+    return sortMode.name
+}
+
+private fun readLocalArtistSortMode(context: Context): LocalArtistSortMode {
+    val prefs = context.getSharedPreferences(LIBRARY_UI_PREFS, Context.MODE_PRIVATE)
+    return resolveLocalArtistSortMode(prefs.getString(KEY_LOCAL_ARTIST_SORT_MODE, null))
+}
+
+private fun persistLocalArtistSortMode(context: Context, sortMode: LocalArtistSortMode) {
+    context.getSharedPreferences(LIBRARY_UI_PREFS, Context.MODE_PRIVATE)
+        .edit {
+            putString(KEY_LOCAL_ARTIST_SORT_MODE, localArtistSortModeStorageValue(sortMode))
+        }
 }
 
 internal fun libraryTabDisplayOrder(
@@ -256,8 +280,8 @@ fun LibraryScreen(
         pageCount = { orderedTabs.size }
     )
     val scope = rememberCoroutineScope()
-    val configuration = LocalConfiguration.current
-    val isTabletLayout = configuration.screenWidthDp >= 720
+    val windowWidthDp = currentWindowWidthDp()
+    val isTabletLayout = windowWidthDp >= 720.dp
     val pageHorizontalPadding = if (isTabletLayout) 28.dp else 0.dp
 
     LaunchedEffect(initialTab, orderedTabs) {
@@ -898,12 +922,13 @@ private fun LocalPlaylistList(
     onReorder: (List<Long>) -> Unit = {},
     offlineMode: Boolean
 ) {
+    val context = LocalContext.current
     var selectedLocalCategory by rememberSaveable {
         mutableIntStateOf(LOCAL_CATEGORY_PLAYLIST)
     }
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
     var localArtistSortMode by rememberSaveable {
-        mutableStateOf(LocalArtistSortMode.RECENT_ADDED)
+        mutableStateOf(readLocalArtistSortMode(context))
     }
     var showDialog by rememberSaveable { mutableStateOf(false) }
     var newName by rememberSaveable { mutableStateOf("") }
@@ -912,7 +937,6 @@ private fun LocalPlaylistList(
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var showDeleteSelectedConfirm by rememberSaveable { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
-    val context = LocalContext.current
     val defaultPlaylistName = context.getString(R.string.library_create_playlist_default)
     val maxNameLength = LocalPlaylistRepository.MAX_PLAYLIST_NAME_LENGTH
     val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsStateWithLifecycle(
@@ -1027,9 +1051,9 @@ private fun LocalPlaylistList(
         displayedFavoritesPlaylist != null ||
             displayedPlaylists.isNotEmpty() ||
             displayedLocalFilesPlaylist != null
-    val configuration = LocalConfiguration.current
-    val localArtistColumnCount = remember(configuration.screenWidthDp) {
-        ((configuration.screenWidthDp - 16 + 10) / 130).coerceAtLeast(1)
+    val windowWidthDp = currentWindowWidthDp()
+    val localArtistColumnCount = remember(windowWidthDp) {
+        ((windowWidthDp.value - 16f + 10f) / 130f).toInt().coerceAtLeast(1)
     }
     val localArtistRows = remember(displayedLocalArtists, localArtistColumnCount) {
         displayedLocalArtists.chunked(localArtistColumnCount)
@@ -1056,7 +1080,10 @@ private fun LocalPlaylistList(
                 searchQuery = localSearchQuery,
                 onSearchQueryChange = { localSearchQuery = it },
                 artistSortMode = localArtistSortMode,
-                onArtistSortModeChange = { localArtistSortMode = it },
+                onArtistSortModeChange = { sortMode ->
+                    localArtistSortMode = sortMode
+                    persistLocalArtistSortMode(context, sortMode)
+                },
                 onPlaylistSelected = {
                     if (selectedLocalCategory != LOCAL_CATEGORY_PLAYLIST) {
                         exitSelection()
@@ -1922,7 +1949,7 @@ private fun filterLocalArtists(
     return artists.filter { artist -> artist.matchesLocalArtistSearch(query) }
 }
 
-private fun sortLocalArtists(
+internal fun sortLocalArtists(
     artists: List<LocalArtistSummary>,
     sortMode: LocalArtistSortMode
 ): List<LocalArtistSummary> {
