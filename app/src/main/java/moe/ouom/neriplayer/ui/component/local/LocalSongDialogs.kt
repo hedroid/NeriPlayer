@@ -25,7 +25,6 @@ package moe.ouom.neriplayer.ui.component.local
 
 
 import android.content.ClipData
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -50,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -84,9 +84,11 @@ internal fun resolveLocalSongDetailsLoadState(
 @Composable
 fun LocalSongDetailsDialog(
     song: SongItem,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onShowMessage: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var details by remember(song) { mutableStateOf<LocalMediaDetails?>(null) }
@@ -99,7 +101,7 @@ fun LocalSongDetailsDialog(
             .onSuccess {
                 val loadState = resolveLocalSongDetailsLoadState(
                     details = it,
-                    unavailableMessage = context.getString(R.string.local_song_details_unavailable)
+                    unavailableMessage = composeResources.getString(R.string.local_song_details_unavailable)
                 )
                 details = loadState.details
                 error = loadState.error
@@ -115,7 +117,7 @@ fun LocalSongDetailsDialog(
                 scope.launch {
                     clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("text", path)))
                 }
-                Toast.makeText(context, context.getString(R.string.toast_copied), Toast.LENGTH_SHORT).show()
+                onShowMessage(composeResources.getString(R.string.toast_copied))
             }
 
             Column(

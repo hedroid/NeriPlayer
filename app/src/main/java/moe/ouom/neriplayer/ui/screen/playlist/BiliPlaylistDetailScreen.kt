@@ -64,6 +64,7 @@ import android.content.ClipData
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
@@ -88,6 +89,8 @@ import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
 import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
+import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliPlaylistDetailViewModel
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliVideoItem
@@ -114,6 +117,7 @@ fun BiliPlaylistDetailScreen(
     offlineMode: Boolean = false
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val snackbarHostState = remember { SnackbarHostState() }
     val vm: BiliPlaylistDetailViewModel = viewModel(
         factory = viewModelFactory {
@@ -601,7 +605,7 @@ fun BiliPlaylistDetailScreen(
                                                             showPartsSheet = true
                                                         }
                                                     } catch (e: Exception) {
-                                                        NPLogger.e("BiliPlaylistDetail", context.getString(R.string.bili_get_parts_failed), e)
+                                                        NPLogger.e("BiliPlaylistDetail", composeResources.getString(R.string.bili_get_parts_failed), e)
                                                     }
                                                 }
                                             },
@@ -634,6 +638,13 @@ fun BiliPlaylistDetailScreen(
                             )
                         }
                     }
+
+                    NeriSnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        bottomPadding = miniPlayerHeight,
+                        applyNavigationBarsPadding = false
+                    )
                 }
             }
 
@@ -910,6 +921,7 @@ private fun VideoRow(
     offlineMode: Boolean
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     Row(
@@ -1030,7 +1042,7 @@ private fun VideoRow(
                             val songInfo = "${video.title}-${video.uploader}"
                             scope.launch {
                                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("text", songInfo)))
-                                snackbarHostState.showSnackbar(context.getString(R.string.toast_copied))
+                                snackbarHostState.showNeriSnackbar(composeResources.getString(R.string.toast_copied))
                             }
                             showMoreMenu = false
                         }

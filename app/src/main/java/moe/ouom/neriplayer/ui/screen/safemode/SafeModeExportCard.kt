@@ -1,7 +1,6 @@
 package moe.ouom.neriplayer.ui.screen.safemode
 
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +13,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,6 +23,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,9 +33,11 @@ import moe.ouom.neriplayer.core.startup.safemode.SafeModeManager
 
 @Composable
 internal fun SafeModeExportCard(
-    busy: Boolean
+    busy: Boolean,
+    onShowMessage: (String, SnackbarDuration) -> Unit
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val scope = rememberCoroutineScope()
     var exportingKind by remember { mutableStateOf<SafeModeExportKind?>(null) }
     val isExporting = exportingKind != null
@@ -48,21 +51,19 @@ internal fun SafeModeExportCard(
             }
             result.fold(
                 onSuccess = { fileName ->
-                    Toast.makeText(
-                        context,
-                        context.getString(kind.successMessageRes, fileName),
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    onShowMessage(
+                        composeResources.getString(kind.successMessageRes, fileName),
+                        SnackbarDuration.Short
+                    )
                 },
                 onFailure = { error ->
-                    Toast.makeText(
-                        context,
-                        context.getString(
+                    onShowMessage(
+                        composeResources.getString(
                             R.string.safe_mode_export_failed,
                             error.message ?: error.javaClass.simpleName
                         ),
-                        Toast.LENGTH_LONG
-                    ).show()
+                        SnackbarDuration.Long
+                    )
                 }
             )
             exportingKind = null

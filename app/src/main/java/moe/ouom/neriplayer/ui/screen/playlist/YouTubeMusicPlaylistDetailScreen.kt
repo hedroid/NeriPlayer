@@ -69,7 +69,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -93,6 +92,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
@@ -117,6 +117,8 @@ import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.playlist.YouTubeMusicPlaylistDetailViewModel
@@ -150,6 +152,7 @@ fun YouTubeMusicPlaylistDetailScreen(
     offlineMode: Boolean = false
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val viewModel: YouTubeMusicPlaylistDetailViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
@@ -185,8 +188,8 @@ fun YouTubeMusicPlaylistDetailScreen(
     fun exitSelection() { selectionMode = false; clearSelection() }
     fun showWaitForFullLoadMessage() {
         scope.launch {
-            snackbarHostState.showSnackbar(
-                context.getString(R.string.youtube_music_playlist_wait_full_load)
+            snackbarHostState.showNeriSnackbar(
+                composeResources.getString(R.string.youtube_music_playlist_wait_full_load)
             )
         }
     }
@@ -325,7 +328,12 @@ fun YouTubeMusicPlaylistDetailScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            NeriSnackbarHost(
+                hostState = snackbarHostState,
+                bottomPadding = miniPlayerHeight
+            )
+        },
         topBar = {
             if (!selectionMode) {
                 TopAppBar(
@@ -681,8 +689,8 @@ fun YouTubeMusicPlaylistDetailScreen(
                                         onDownload = {
                                             GlobalDownloadManager.startDownload(context, song)
                                             scope.launch {
-                                                snackbarHostState.showSnackbar(
-                                                    context.getString(R.string.download_starting, song.displayName())
+                                                snackbarHostState.showNeriSnackbar(
+                                                    composeResources.getString(R.string.download_starting, song.displayName())
                                                 )
                                             }
                                         },
@@ -902,6 +910,7 @@ private fun YouTubeMusicSongRow(
     offlineMode: Boolean
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var showMenu by remember { mutableStateOf(false) }
@@ -1049,8 +1058,8 @@ private fun YouTubeMusicSongRow(
                                     )
                                 )
                             )
-                            snackbarHostState.showSnackbar(
-                                context.getString(R.string.toast_copied)
+                            snackbarHostState.showNeriSnackbar(
+                                composeResources.getString(R.string.toast_copied)
                             )
                         }
                         showMenu = false

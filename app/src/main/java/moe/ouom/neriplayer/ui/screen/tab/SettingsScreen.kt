@@ -27,7 +27,6 @@ import android.content.Intent
 import android.content.Context
 import android.net.Uri
 import android.text.format.Formatter
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -180,6 +179,7 @@ import moe.ouom.neriplayer.ui.screen.tab.settings.page.backTargetPage
 import moe.ouom.neriplayer.ui.screen.tab.settings.page.miuixSettingsSectionCardItem
 import moe.ouom.neriplayer.ui.screen.tab.settings.state.collectAsStateWithLifecycleCompat
 import moe.ouom.neriplayer.ui.screen.tab.settings.state.formatSyncTime
+import moe.ouom.neriplayer.ui.feedback.AppFeedback
 import moe.ouom.neriplayer.ui.util.currentWindowWidthDp
 import moe.ouom.neriplayer.ui.viewmodel.BackupRestoreViewModel
 import moe.ouom.neriplayer.ui.viewmodel.ConfigTransferViewModel
@@ -386,6 +386,7 @@ fun SettingsScreen(
     onBeforeLanguageRestart: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val autoSettingsRepository = remember(context) { AutoSettingsRepository(context) }
@@ -506,8 +507,16 @@ fun SettingsScreen(
     val configTransferUiState by configTransferVm.uiState.collectAsState()
     val localPlaylistRepo = remember(context) { LocalPlaylistRepository.getInstance(context) }
     val localPlaylistCount by localPlaylistRepo.playlistCount.collectAsState(initial = 0)
-    val defaultDownloadDirectorySummary = context.getString(R.string.settings_download_directory_default_label)
+    val defaultDownloadDirectorySummary = composeResources.getString(R.string.settings_download_directory_default_label)
     val downloadDirectoryChangeEnabled = !hasActiveDownloadOperations && !isMigratingDownloadDirectory
+
+    fun showSettingsMessage(message: String) {
+        AppFeedback.show(context = context, message = message)
+    }
+
+    fun showListenTogetherMessage(message: String) {
+        AppFeedback.showToast(context = context, message = message)
+    }
 
     fun guardDownloadDirectoryChange(
         targetUri: String? = null,
@@ -523,11 +532,11 @@ fun SettingsScreen(
         ) {
             ManagedDownloadStorage.releasePersistedDirectoryPermission(context, targetUri)
         }
-        val message = context.getString(
+        val message = composeResources.getString(
             R.string.settings_download_directory_change_blocked_active_download
         )
         inlineMsg = message
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        showSettingsMessage(message)
         return true
     }
 
@@ -564,8 +573,8 @@ fun SettingsScreen(
                 )
             }
 
-            targetUri.isNullOrBlank() -> context.getString(R.string.settings_download_directory_reset_done)
-            else -> context.getString(R.string.settings_download_directory_selected)
+            targetUri.isNullOrBlank() -> composeResources.getString(R.string.settings_download_directory_reset_done)
+            else -> composeResources.getString(R.string.settings_download_directory_selected)
         }
     }
 
@@ -585,9 +594,9 @@ fun SettingsScreen(
         val previousUri = downloadDirectoryUri?.takeIf { it.isNotBlank() }
         if (previousUri == targetUri) {
             inlineMsg = if (targetUri.isNullOrBlank()) {
-                context.getString(R.string.settings_download_directory_reset_done)
+                composeResources.getString(R.string.settings_download_directory_reset_done)
             } else {
-                context.getString(R.string.settings_download_directory_selected)
+                composeResources.getString(R.string.settings_download_directory_selected)
             }
             return
         }
@@ -604,7 +613,7 @@ fun SettingsScreen(
                 if (releaseTargetPermissionOnCancel) {
                     ManagedDownloadStorage.releasePersistedDirectoryPermission(context, targetUri)
                 }
-                inlineMsg = context.getString(
+                inlineMsg = composeResources.getString(
                     R.string.settings_download_directory_pick_failed,
                     it.message ?: ""
                 )
@@ -638,7 +647,7 @@ fun SettingsScreen(
             if (releaseTargetPermissionOnCancel) {
                 ManagedDownloadStorage.releasePersistedDirectoryPermission(context, targetUri)
             }
-            inlineMsg = context.getString(
+            inlineMsg = composeResources.getString(
                 R.string.settings_download_directory_pick_failed,
                 it.message ?: ""
             )
@@ -688,7 +697,7 @@ fun SettingsScreen(
                 )
             }
         } catch (e: SecurityException) {
-            inlineMsg = context.getString(
+            inlineMsg = composeResources.getString(
                 R.string.settings_download_directory_pick_failed,
                 e.message ?: ""
             )
@@ -860,10 +869,10 @@ fun SettingsScreen(
     }
     val defaultStartDestinationLabel = remember(effectiveDefaultStartDestination, context) {
         when (effectiveDefaultStartDestination) {
-            "explore" -> context.getString(R.string.nav_explore)
-            "library" -> context.getString(R.string.nav_library)
-            "settings" -> context.getString(R.string.nav_settings)
-            else -> context.getString(R.string.nav_home)
+            "explore" -> composeResources.getString(R.string.nav_explore)
+            "library" -> composeResources.getString(R.string.nav_library)
+            "settings" -> composeResources.getString(R.string.nav_settings)
+            else -> composeResources.getString(R.string.nav_home)
         }
     }
     LaunchedEffect(neteaseVm) {
@@ -880,7 +889,7 @@ fun SettingsScreen(
                     showNeteaseSavedCookieDialog = false
                     inlineMsg = null
                     showNeteaseSheet = false
-                    inlineMsg = context.getString(R.string.settings_netease_login_success)
+                    inlineMsg = composeResources.getString(R.string.settings_netease_login_success)
                     neteaseVm.refreshAuthHealth()
                 }
                 is NeteaseAuthEvent.ShowCookies -> {
@@ -902,7 +911,7 @@ fun SettingsScreen(
                 BiliAuthEvent.LoginSuccess -> {
                     showBiliSavedCookieDialog = false
                     showBiliSheet = false
-                    inlineMsg = context.getString(R.string.settings_bili_login_success)
+                    inlineMsg = composeResources.getString(R.string.settings_bili_login_success)
                     biliVm.refreshAuthHealth()
                 }
             }
@@ -922,7 +931,7 @@ fun SettingsScreen(
                 YouTubeAuthEvent.LoginSuccess -> {
                     showYouTubeSavedCookieDialog = false
                     showYouTubeSheet = false
-                    inlineMsg = context.getString(R.string.settings_youtube_login_success)
+                    inlineMsg = composeResources.getString(R.string.settings_youtube_login_success)
                     youtubeVm.refreshAuthHealth()
                 }
 
@@ -1680,11 +1689,11 @@ fun SettingsScreen(
                                     versionTapCount++
                                     if (versionTapCount >= 7) {
                                         onDevModeChange(true)
-                                        inlineMsg = context.getString(R.string.debug_mode_opened)
+                                        inlineMsg = composeResources.getString(R.string.debug_mode_opened)
                                         versionTapCount = 0
                                     }
                                 } else {
-                                    inlineMsg = context.getString(R.string.debug_mode_enabled)
+                                    inlineMsg = composeResources.getString(R.string.debug_mode_enabled)
                                 }
                             },
                             onOpenGitHubRepo = {
@@ -1807,11 +1816,11 @@ fun SettingsScreen(
                         scope.launch {
                             listenTogetherPreferences.resetUserUuid()
                             showListenTogetherResetUuidDialog = false
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.listen_together_reset_uuid_done),
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            showListenTogetherMessage(
+                                composeResources.getString(
+                                    R.string.listen_together_reset_uuid_done
+                                )
+                            )
                         }
                     }
                 ) {
@@ -1875,11 +1884,11 @@ fun SettingsScreen(
                             listenTogetherPreferences.setNickname(nickname)
                             showListenTogetherNicknameDialog = false
                             listenTogetherNicknameError = null
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.settings_listen_together_default_nickname_saved),
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            showListenTogetherMessage(
+                                composeResources.getString(
+                                    R.string.settings_listen_together_default_nickname_saved
+                                )
+                            )
                         }
                     }
                 ) {
@@ -1960,7 +1969,7 @@ fun SettingsScreen(
                                     val normalizedCustomServer =
                                         configuredListenTogetherBaseUrlOrNull(listenTogetherServerInput)
                                     if (listenTogetherServerInput.isNotBlank() && normalizedCustomServer == null) {
-                                        listenTogetherServerTestMessage = context.getString(
+                                        listenTogetherServerTestMessage = composeResources.getString(
                                             R.string.settings_listen_together_server_input_invalid
                                         )
                                         return@launch
@@ -1973,13 +1982,13 @@ fun SettingsScreen(
                                     listenTogetherServerTesting = false
                                     listenTogetherServerTestMessage = when {
                                         result.ok && usingDefaultServer ->
-                                            context.getString(R.string.settings_listen_together_server_test_success_default)
+                                            composeResources.getString(R.string.settings_listen_together_server_test_success_default)
                                         result.ok ->
-                                            context.getString(R.string.settings_listen_together_server_test_success_custom)
+                                            composeResources.getString(R.string.settings_listen_together_server_test_success_custom)
                                         result.message == "invalid_response" ->
-                                            context.getString(R.string.settings_listen_together_server_test_invalid)
+                                            composeResources.getString(R.string.settings_listen_together_server_test_invalid)
                                         else ->
-                                            context.getString(
+                                            composeResources.getString(
                                                 R.string.settings_listen_together_server_test_failed,
                                                 result.message
                                             )
@@ -1993,7 +2002,7 @@ fun SettingsScreen(
                         MiuixSettingsTextButton(
                             onClick = {
                                 listenTogetherServerInput = ""
-                                listenTogetherServerTestMessage = context.getString(
+                                listenTogetherServerTestMessage = composeResources.getString(
                                     R.string.settings_listen_together_server_reset_done
                                 )
                             },
@@ -2011,7 +2020,7 @@ fun SettingsScreen(
                             val normalizedInput =
                                 configuredListenTogetherBaseUrlOrNull(listenTogetherServerInput)
                             if (listenTogetherServerInput.isNotBlank() && normalizedInput == null) {
-                                listenTogetherServerTestMessage = context.getString(
+                                listenTogetherServerTestMessage = composeResources.getString(
                                     R.string.settings_listen_together_server_input_invalid
                                 )
                                 return@launch
@@ -2021,11 +2030,11 @@ fun SettingsScreen(
                             listenTogetherServerInput = normalizedInput.orEmpty()
                             showListenTogetherServerDialog = false
                             listenTogetherServerTestMessage = null
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.settings_listen_together_server_saved),
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            showListenTogetherMessage(
+                                composeResources.getString(
+                                    R.string.settings_listen_together_server_saved
+                                )
+                            )
                         }
                     },
                     enabled = !listenTogetherServerTesting
@@ -2167,7 +2176,7 @@ fun SettingsScreen(
                                             pendingChange.targetUri
                                         )
                                     }
-                                    inlineMsg = context.getString(
+                                    inlineMsg = composeResources.getString(
                                         R.string.settings_download_directory_pick_failed,
                                         it.message ?: ""
                                     )
@@ -2210,7 +2219,7 @@ fun SettingsScreen(
                                         pendingChange.targetUri
                                     )
                                 }
-                                inlineMsg = context.getString(
+                                inlineMsg = composeResources.getString(
                                     R.string.settings_download_directory_pick_failed,
                                     it.message ?: ""
                                 )
@@ -2251,7 +2260,7 @@ fun SettingsScreen(
         val copiedBytesSummary = activeMigrationProgress
             ?.takeIf { it.totalBytes > 0L }
             ?.let { progress ->
-                context.getString(
+                composeResources.getString(
                     R.string.settings_download_directory_migrating_progress_bytes,
                     Formatter.formatShortFileSize(context, progress.copiedBytes.coerceAtLeast(0L)),
                     Formatter.formatShortFileSize(context, progress.totalBytes)
@@ -2260,7 +2269,7 @@ fun SettingsScreen(
         val currentFileSummary = activeMigrationProgress?.currentFileName
             ?.takeIf(String::isNotBlank)
             ?.let { fileName ->
-                context.getString(R.string.settings_download_directory_migrating_current, fileName)
+                composeResources.getString(R.string.settings_download_directory_migrating_current, fileName)
             }
         MiuixSettingsDialog(
             onDismissRequest = {},

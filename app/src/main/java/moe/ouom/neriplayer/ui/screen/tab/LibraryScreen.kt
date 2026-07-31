@@ -26,7 +26,6 @@ package moe.ouom.neriplayer.ui.screen.tab
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -100,6 +99,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -128,6 +128,7 @@ import moe.ouom.neriplayer.data.local.playlist.system.SystemLocalPlaylists
 import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
+import moe.ouom.neriplayer.ui.feedback.AppFeedback
 import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
@@ -501,6 +502,7 @@ private fun YouTubeMusicPlaylistList(
 ) {
     val miniPlayerHeight = LocalMiniPlayerHeight.current
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboardManager = remember(context) {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
@@ -511,7 +513,10 @@ private fun YouTubeMusicPlaylistList(
 
     fun copyToClipboard(label: String, text: String) {
         clipboardManager.setPrimaryClip(ClipData.newPlainText(label, text))
-        Toast.makeText(context, context.getString(R.string.toast_copied), Toast.LENGTH_SHORT).show()
+        AppFeedback.show(
+            context = context,
+            message = composeResources.getString(R.string.toast_copied)
+        )
     }
 
     LazyColumn(
@@ -674,9 +679,9 @@ private fun YouTubeMusicPlaylistList(
                         onClick = {
                             menuPlaylist = null
                             val toastMessage = if (isFavorite) {
-                                context.getString(R.string.home_unfavorited)
+                                composeResources.getString(R.string.home_unfavorited)
                             } else {
-                                context.getString(R.string.favorite_success)
+                                composeResources.getString(R.string.favorite_success)
                             }
                             scope.launch {
                                 if (isFavorite) {
@@ -694,7 +699,10 @@ private fun YouTubeMusicPlaylistList(
                                         songs = emptyList()
                                     )
                                 }
-                                Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
+                                AppFeedback.show(
+                                    context = context,
+                                    message = toastMessage
+                                )
                             }
                         }
                     )
@@ -923,6 +931,7 @@ private fun LocalPlaylistList(
     offlineMode: Boolean
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     var selectedLocalCategory by rememberSaveable {
         mutableIntStateOf(LOCAL_CATEGORY_PLAYLIST)
     }
@@ -937,7 +946,7 @@ private fun LocalPlaylistList(
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var showDeleteSelectedConfirm by rememberSaveable { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
-    val defaultPlaylistName = context.getString(R.string.library_create_playlist_default)
+    val defaultPlaylistName = composeResources.getString(R.string.library_create_playlist_default)
     val maxNameLength = LocalPlaylistRepository.MAX_PLAYLIST_NAME_LENGTH
     val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsStateWithLifecycle(
         initialValue = false
@@ -994,18 +1003,18 @@ private fun LocalPlaylistList(
         val trimmedInput = newName.trim().take(maxNameLength)
         val finalName = trimmedInput.ifBlank { defaultPlaylistName }.take(maxNameLength)
 
-        val favoritesName = context.getString(R.string.favorite_my_music)
-        val localFilesName = context.getString(R.string.local_files)
+        val favoritesName = composeResources.getString(R.string.favorite_my_music)
+        val localFilesName = composeResources.getString(R.string.local_files)
         if (FavoritesPlaylist.matches(finalName, context)) {
-            nameError = context.getString(R.string.library_name_reserved, favoritesName)
+            nameError = composeResources.getString(R.string.library_name_reserved, favoritesName)
             return false
         }
         if (LocalFilesPlaylist.matches(finalName, context)) {
-            nameError = context.getString(R.string.library_name_reserved, localFilesName)
+            nameError = composeResources.getString(R.string.library_name_reserved, localFilesName)
             return false
         }
         if (playlists.any { it.name.equals(finalName, ignoreCase = true) }) {
-            nameError = context.getString(R.string.library_name_exists)
+            nameError = composeResources.getString(R.string.library_name_exists)
             return false
         }
 

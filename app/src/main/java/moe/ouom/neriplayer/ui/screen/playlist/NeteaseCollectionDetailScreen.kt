@@ -86,7 +86,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -112,6 +111,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
@@ -152,6 +152,8 @@ import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.ui.haptic.HapticFloatingActionButton
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.format.formatDuration
 import moe.ouom.neriplayer.util.format.formatPlayCount
@@ -683,7 +685,7 @@ fun DetailScreen(
                                                 horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
                                                 Text(
-                                                    text = stringResource(R.string.playlist_load_failed_format, ui.error ?: ""),
+                                                    text = stringResource(R.string.playlist_load_failed_format, ui.error),
                                                     color = MaterialTheme.colorScheme.error
                                                 )
                                                 Spacer(Modifier.height(8.dp))
@@ -813,13 +815,11 @@ fun DetailScreen(
                 // 允许返回键优先退出多选
                 BackHandler(enabled = selectionMode) { exitSelection() }
 
-                // Snackbar
-                SnackbarHost(
+                NeriSnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = LocalMiniPlayerHeight.current)
-                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .align(Alignment.BottomCenter),
+                    bottomPadding = LocalMiniPlayerHeight.current
                 )
             }
         }
@@ -886,6 +886,7 @@ private fun SongRow(
     val isPlaying by PlayerManager.isPlayingFlow.collectAsState()
     val isCurrentSong = current?.sameIdentityAs(song) == true
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
 
@@ -1021,7 +1022,7 @@ private fun SongRow(
                             val songInfo = "${song.displayName()}-${song.displayArtist()}"
                             scope.launch {
                                 clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("text", songInfo)))
-                                snackbarHostState.showSnackbar(context.getString(R.string.toast_copied))
+                                snackbarHostState.showNeriSnackbar(composeResources.getString(R.string.toast_copied))
                             }
                             showMoreMenu = false
                         }

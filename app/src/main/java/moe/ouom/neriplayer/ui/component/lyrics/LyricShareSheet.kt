@@ -15,7 +15,6 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
-import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -61,6 +60,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,9 +108,11 @@ fun LyricShareSheet(
     initialLine: LyricEntry,
     queue: List<SongItem>,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onShowMessage: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -239,7 +241,12 @@ fun LyricShareSheet(
                 },
                 onShareSong = {
                     scope.launch {
-                        shareSong(context, song, queue)
+                        shareSong(
+                            context = context,
+                            song = song,
+                            queue = queue,
+                            onShowMessage = onShowMessage
+                        )
                         onDismiss()
                     }
                 },
@@ -257,11 +264,9 @@ fun LyricShareSheet(
                                 )
                             }
                             result.onFailure {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.lyric_share_card_failed),
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                onShowMessage(
+                                    composeResources.getString(R.string.lyric_share_card_failed)
+                                )
                             }.onSuccess {
                                 onDismiss()
                             }
@@ -470,18 +475,15 @@ private fun shareLineKey(index: Int, line: LyricEntry): String {
 private suspend fun shareSong(
     context: Context,
     song: SongItem,
-    queue: List<SongItem>
+    queue: List<SongItem>,
+    onShowMessage: (String) -> Unit
 ) {
     if (song.isLocalSong()) {
         val shared = runCatching {
             LocalMediaSupport.shareSongFile(context, song)
         }.getOrElse { false }
         if (!shared) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.local_song_share_failed),
-                Toast.LENGTH_SHORT
-            ).show()
+            onShowMessage(context.getString(R.string.local_song_share_failed))
         }
         return
     }
