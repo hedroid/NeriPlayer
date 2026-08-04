@@ -250,6 +250,12 @@ Current positioning:
   screen-level top tabs, the bottom tab bar, and structural settings cards without
   changing foreground content, layout, or touch targets. Its blur radius is adjustable
   from `12-64 dp`.
+  Blur quality is configured separately as Ultra Low, Low, Default, or High. Ultra Low
+  and Low retain Default's blur coverage while using region-local rendering, dynamic
+  downsampling, and RenderNode hardware caching to reduce render work. A detected
+  Dimensity SoC defaults to Ultra Low until a preference is saved; local caches are
+  rebuilt after background/foreground transitions and quality changes to avoid an
+  invalid backdrop after resuming. High requires Enhanced Advanced Blur.
 - **ANR, crash logs, and safe mode form a diagnostics loop**:
   `AnrWatchdog` reads Android `ApplicationExitInfo.REASON_ANR` and stores the
   system ANR trace. `ExceptionHandler` and `NativeCrashHandler` record JVM and
@@ -464,10 +470,14 @@ For release build and signing details, see
   forms. Local artist pages support play-all, multi-select, playlist export,
   and batch downloads for online-source songs.
 - 🩷 **Local playlists and favorites**:
-  built-in "My Favorite Music" and "Local Files" system playlists, plus user
-  playlists with create/rename/delete/reorder/add-song support. Playlist or song
-  deletion shows undo feedback, and batch export into a local playlist confirms
-  the target and can undo newly added items. "My Favorite Music" can sync
+  built-in "My Favorite Music" and "Local Files" system playlists. "Local Files"
+  separates manually added and downloaded songs as independent sources, so a downloaded
+  song that was also manually added appears in both tabs. Removing a manually added song
+  only removes its playlist entry, while confirming deletion of a downloaded song also
+  removes its managed download files. User playlists support create, rename,
+  delete, reorder, and add-song actions. Playlist or song deletion shows undo
+  feedback, and batch export into a local playlist confirms the target and can
+  undo newly added items. "My Favorite Music" can sync
   recognizable songs to NetEase Liked Songs.
 - 🧑‍🎤 **NetEase artist pages**:
   NetEase songs can open artist pages with artist metadata, paged songs/albums,
@@ -517,7 +527,11 @@ For release build and signing details, see
   toggles. Android 13+ can optionally
   enable Enhanced Advanced Blur for top/bottom tabs and structural settings cards;
   its radius is adjustable from `12-64 dp`, and disabling the parent preserves the
-  child choice and radius while removing enhanced drawing.
+  child choice and radius while removing enhanced drawing. Blur quality is separately
+  selectable as Ultra Low, Low, Default, or High. Low and Ultra Low retain Default's
+  coverage while using local rendering, dynamic downsampling, and hardware caching to
+  reduce work; a Dimensity device defaults to Ultra Low when no preference is saved and
+  rebuilds its local cache after foreground recovery or a quality change.
 - ✨ **Now Playing visuals and lyrics**:
   `RuntimeShader` / GLSL fluid background, audio-reactive dynamic background,
   cover blur background, Apple Music-style lyrics, advanced lyrics, word-timed
@@ -1126,6 +1140,10 @@ We will keep improving the project over time.
 <tr>
   <td><a href="https://github.com/chenmozhijin/LDDC">LDDC</a></td>
   <td>Multi-platform precise lyrics downloader and manual matching UX reference</td>
+</tr>
+<tr>
+  <td><a href="https://github.com/MetrolistGroup/Metrolist">Metrolist</a></td>
+  <td>YouTube Music client for Android</td>
 </tr>
 <tr>
   <td><a href="https://github.com/ReChronoRain/HyperCeiler">HyperCeiler</a></td>

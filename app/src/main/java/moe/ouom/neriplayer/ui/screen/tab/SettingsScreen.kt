@@ -186,6 +186,7 @@ import moe.ouom.neriplayer.ui.screen.tab.settings.component.SettingsTrafficManag
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.ThemeModeActionButton
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.ThemeSeedListItem
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.UsbExclusiveSettingsSection
+import moe.ouom.neriplayer.ui.screen.tab.settings.component.YouTubePlaybackSourceSetting
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.settingsItemClickable
 import moe.ouom.neriplayer.ui.screen.tab.settings.dialog.SettingsGitHubDialogs
 import moe.ouom.neriplayer.ui.screen.tab.settings.dialog.SettingsPreferenceDialogs
@@ -411,7 +412,7 @@ private fun SettingsSearchResultRow(
 @Composable
 @Suppress("AssignedValueIsNeverRead")
 fun SettingsScreen(
-    listState: androidx.compose.foundation.lazy.LazyListState,
+    listState: LazyListState,
     dynamicColor: Boolean,
     onDynamicColorChange: (Boolean) -> Unit,
     isDarkTheme: Boolean,
@@ -1084,7 +1085,7 @@ fun SettingsScreen(
 
     val isSettingsSplitLayout = currentWindowWidthDp() >= 840.dp
     var activeSettingsPage by rememberSaveable {
-        mutableStateOf<SettingsPage?>(if (isSettingsSplitLayout) SettingsPage.General else null)
+        mutableStateOf(if (isSettingsSplitLayout) SettingsPage.General else null)
     }
     LaunchedEffect(activeSettingsPage, context) {
         if (activeSettingsPage == SettingsPage.Backup) {
@@ -1794,6 +1795,12 @@ fun SettingsScreen(
 
                 SettingsPage.PlaybackSource -> {
                     miuixSettingsSectionCardItem(key = "${selectedPage.name}:content") {
+                        YouTubePlaybackSourceSetting(
+                            repository = AppContainer.settingsRepo,
+                            highlightTargetId = settingsHighlightTargetId,
+                            highlightPulse = settingsHighlightPulse,
+                            onHighlightFinished = onSettingsHighlightFinished
+                        )
                         AutoSettingsListItem(
                             setting = AutoSettingsMetadata.requireSetting(
                                 AutoSettingsKeys.NETEASE_LOCAL_SOURCE_FALLBACK
@@ -3507,7 +3514,7 @@ private fun PlaybackControlLayoutSettings(
             Column {
                 when (setting) {
                     PlaybackControlLayoutSetting.NOW_PLAYING_PLACEMENT -> {
-                        NowPlayingControlPlacement.values().forEach { placement ->
+                        NowPlayingControlPlacement.entries.forEach { placement ->
                             MiuixSettingsChoiceRow(
                                 title = nowPlayingControlPlacementLabel(placement),
                                 subtitle = if (placement.placesControlsAtBottom) {
@@ -3530,7 +3537,7 @@ private fun PlaybackControlLayoutSettings(
 
                     PlaybackControlLayoutSetting.NOW_PLAYING_SIZE,
                     PlaybackControlLayoutSetting.LYRICS_SIZE -> {
-                        PlaybackControlSize.values().forEach { size ->
+                        PlaybackControlSize.entries.forEach { size ->
                             val selected = when (setting) {
                                 PlaybackControlLayoutSetting.NOW_PLAYING_SIZE ->
                                     size == preferences.nowPlayingSize
@@ -3732,7 +3739,7 @@ private fun LyricFontScaleSettingsItem(
 @Composable
 private fun SettingsHomeCardSwitch(
     title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     description: String? = null,

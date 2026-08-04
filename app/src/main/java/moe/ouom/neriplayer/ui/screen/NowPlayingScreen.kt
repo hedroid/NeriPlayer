@@ -211,9 +211,11 @@ import moe.ouom.neriplayer.core.api.lyrics.EditableLyricMatchRequest
 import moe.ouom.neriplayer.core.api.lyrics.EditableLyricMatchSource
 import moe.ouom.neriplayer.core.api.lyrics.RankedEditableLyricMatch
 import moe.ouom.neriplayer.core.api.lyrics.defaultEditableLyricMatchSources
+import moe.ouom.neriplayer.core.api.lyrics.hasCollapsedTimedLyricTimeline
 import moe.ouom.neriplayer.core.api.lyrics.normalizeLyricMatchText
 import moe.ouom.neriplayer.core.api.search.MusicPlatform
 import moe.ouom.neriplayer.core.api.search.SongSearchInfo
+import moe.ouom.neriplayer.core.api.youtube.YouTubeMusicCreatorSummary
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.download.ManagedDownloadStorage
@@ -350,7 +352,6 @@ internal enum class NowPlayingLyricsSharedTransitionElement(
 ) {
     BACK("btn_back"),
     COVER("cover_image"),
-    TITLE("song_title"),
     ARTIST("song_artist"),
     PROGRESS("progress_bar"),
     PREVIOUS("player_previous"),
@@ -1626,6 +1627,10 @@ private data class LoadedLyricsState(
     val embeddedPhoneticLyrics: List<LyricEntry>
 )
 
+internal fun shouldBypassCollapsedStoredLyric(rawLyric: String?): Boolean {
+    return rawLyric?.let(::hasCollapsedTimedLyricTimeline) == true
+}
+
 private data class PendingLocalCoverWriteBack(
     val song: SongItem,
     val coverUrl: String
@@ -1642,6 +1647,7 @@ fun NowPlayingScreen(
     onEnterAlbum: (AlbumSummary) -> Unit,
     onEnterArtist: (NeteaseArtistSummary) -> Unit = {},
     onEnterBiliUploader: (BiliUploaderSummary) -> Unit = {},
+    onEnterYouTubeCreator: (YouTubeMusicCreatorSummary) -> Unit = {},
     lyricBlurEnabled: Boolean,
     lyricBlurAmount: Float,
     lyricFontScales: LyricFontScales,
@@ -1924,8 +1930,12 @@ fun NowPlayingScreen(
     }
     val nowPlayingViewModel: NowPlayingViewModel = viewModel()
     var artistPickerCandidates by remember { mutableStateOf<List<NeteaseArtistSummary>>(emptyList()) }
+    var youtubeCreatorPickerCandidates by remember {
+        mutableStateOf<List<YouTubeMusicCreatorSummary>>(emptyList())
+    }
     var resolvingArtistNavigation by remember { mutableStateOf(false) }
     var resolvingBiliUploader by remember { mutableStateOf(false) }
+    var resolvingYouTubeCreator by remember { mutableStateOf(false) }
 
     fun openResolvedArtist(artist: NeteaseArtistSummary) {
         onEnterArtist(artist)
@@ -1937,6 +1947,11 @@ fun NowPlayingScreen(
         onNavigateUp()
     }
 
+    fun openResolvedYouTubeCreator(creator: YouTubeMusicCreatorSummary) {
+        onEnterYouTubeCreator(creator)
+        onNavigateUp()
+    }
+
     fun openArtistCandidates(artists: List<NeteaseArtistSummary>) {
         val distinctArtists = artists.distinctBy { it.id }
         when (distinctArtists.size) {
@@ -1945,6 +1960,21 @@ fun NowPlayingScreen(
             }
             1 -> openResolvedArtist(distinctArtists.first())
             else -> artistPickerCandidates = distinctArtists
+        }
+    }
+
+    fun openYouTubeCreatorCandidates(creators: List<YouTubeMusicCreatorSummary>) {
+        val distinctCreators = creators
+            .filter { it.browseId.isNotBlank() && it.title.isNotBlank() }
+            .distinctBy(YouTubeMusicCreatorSummary::browseId)
+        when (distinctCreators.size) {
+            0 -> screenScope.launch {
+                snackbarHostState.showNeriSnackbar(
+                    composeResources.getString(R.string.youtube_creator_not_available)
+                )
+            }
+            1 -> openResolvedYouTubeCreator(distinctCreators.first())
+            else -> youtubeCreatorPickerCandidates = distinctCreators
         }
     }
 
@@ -2003,11 +2033,44 @@ fun NowPlayingScreen(
         }
     }
 
+    val openCurrentYouTubeCreator: () -> Unit = {
+        val song = currentSong
+        if (song != null && isYouTubeMusicArtistNavigationSource(song) && !resolvingYouTubeCreator) {
+            resolvingYouTubeCreator = true
+            nowPlayingViewModel.resolveYouTubeMusicCreators(
+                song = song,
+                onResult = { creators ->
+                    resolvingYouTubeCreator = false
+                    if (currentSong?.sameIdentityAs(song) == true) {
+                        openYouTubeCreatorCandidates(creators)
+                    }
+                },
+                onError = { error ->
+                    resolvingYouTubeCreator = false
+                    screenScope.launch {
+                        snackbarHostState.showNeriSnackbar(
+                            composeResources.getString(
+                                R.string.youtube_creator_open_failed,
+                                error.message ?: error.javaClass.simpleName
+                            )
+                        )
+                    }
+                }
+            )
+        }
+    }
+
     val openCurrentArtist: () -> Unit = {
-        if (currentSong?.let(::isBiliUploaderNavigationSource) == true) {
-            openCurrentBiliUploader()
-        } else {
-            openCurrentNeteaseArtist()
+        when {
+            currentSong?.let(::isBiliUploaderNavigationSource) == true -> {
+                openCurrentBiliUploader()
+            }
+            currentSong?.let(::isYouTubeMusicArtistNavigationSource) == true -> {
+                openCurrentYouTubeCreator()
+            }
+            else -> {
+                openCurrentNeteaseArtist()
+            }
         }
     }
 
@@ -2052,11 +2115,21 @@ fun NowPlayingScreen(
                 preferredNeteaseLyric = preferredNeteaseLyric,
                 legacyLyric = song?.originalLyric
             )
+            val bypassStoredRawLyrics = shouldBypassCollapsedStoredLyric(effectiveRawLyrics)
+            val bypassStoredTranslatedLyrics = shouldBypassCollapsedStoredLyric(
+                storedRawTranslatedLyrics
+            )
             val shouldDelayOnlineLyrics =
                 song != null &&
                     extractYouTubeMusicVideoId(song.mediaUri) != null &&
                     currentMediaUrl.isNullOrBlank()
             val resolvedLyrics = when {
+                bypassStoredRawLyrics && song != null -> {
+                    PlayerManager.getLyrics(song)
+                }
+                bypassStoredRawLyrics -> {
+                    emptyList()
+                }
                 !effectiveRawLyrics.isNullOrBlank() -> {
                     val parsedRawLyrics = parseNeteaseLyricsAuto(effectiveRawLyrics)
                     if (parsedRawLyrics.hasWordTimedEntries() || song == null) {
@@ -2085,6 +2158,10 @@ fun NowPlayingScreen(
                     storedRawTranslatedLyrics != null -> {
                         if (storedRawTranslatedLyrics.isBlank()) {
                             emptyList()
+                        } else if (bypassStoredTranslatedLyrics && song != null) {
+                            PlayerManager.getTranslatedLyrics(song)
+                        } else if (bypassStoredTranslatedLyrics) {
+                            emptyList()
                         } else {
                             parseNeteaseLyricsAuto(storedRawTranslatedLyrics)
                         }
@@ -2111,8 +2188,10 @@ fun NowPlayingScreen(
                 emptyList()
             }
             LoadedLyricsState(
-                rawLyrics = effectiveRawLyrics,
-                rawTranslatedLyrics = storedRawTranslatedLyrics,
+                rawLyrics = effectiveRawLyrics.takeUnless { bypassStoredRawLyrics },
+                rawTranslatedLyrics = storedRawTranslatedLyrics.takeUnless {
+                    bypassStoredTranslatedLyrics
+                },
                 rawPhoneticLyrics = rawNeteasePhoneticLyric.takeIf { it.isNotBlank() },
                 lyrics = resolvedLyrics,
                 translatedLyrics = resolvedTranslatedLyrics,
@@ -2371,7 +2450,7 @@ fun NowPlayingScreen(
                             lyricBlurAmount = lyricBlurAmount,
                             lyricFontScales = lyricFontScales,
                             onEnterAlbum = onEnterAlbum,
-                            onOpenCurrentNeteaseArtist = openCurrentNeteaseArtist,
+                            onOpenCurrentArtist = openCurrentArtist,
                             onOpenCurrentPlaybackSource = onOpenCurrentPlaybackSource,
                             onLyricFontScaleChange = onLyricFontScaleChange,
                             onExitNowPlaying = onNavigateUp,
@@ -2821,12 +2900,6 @@ fun NowPlayingScreen(
                                     style = MaterialTheme.typography.headlineSmall,
                                     modifier = Modifier
                                         .widthIn(max = maxWidth)
-                                        .sharedElement(
-                                            rememberSharedContentState(
-                                                key = NowPlayingLyricsSharedTransitionElement.TITLE.key
-                                            ),
-                                            animatedVisibilityScope = this@AnimatedContent
-                                        )
                                         .clip(RoundedCornerShape(8.dp))
                                         .combinedClickable(
                                             onClick = {},
@@ -3299,6 +3372,17 @@ fun NowPlayingScreen(
                 )
             }
 
+            if (youtubeCreatorPickerCandidates.isNotEmpty()) {
+                YouTubeMusicCreatorPickerSheet(
+                    creators = youtubeCreatorPickerCandidates,
+                    onDismiss = { youtubeCreatorPickerCandidates = emptyList() },
+                    onSelect = { creator ->
+                        youtubeCreatorPickerCandidates = emptyList()
+                        openResolvedYouTubeCreator(creator)
+                    }
+                )
+            }
+
             // 播放队列弹窗
             if (showQueueSheet) {
                 NowPlayingQueueSheet(
@@ -3492,6 +3576,12 @@ internal fun isBiliUploaderNavigationSource(song: SongItem): Boolean {
     )
 }
 
+internal fun isYouTubeMusicArtistNavigationSource(song: SongItem): Boolean {
+    return song.artist.isNotBlank() && (
+        song.channelId.equals("youtubeMusic", ignoreCase = true) || isYouTubeMusicSong(song)
+        )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NeteaseArtistPickerSheet(
@@ -3521,6 +3611,44 @@ private fun NeteaseArtistPickerSheet(
                     headlineContent = { Text(artist.name) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.clickable { onSelect(artist) }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YouTubeMusicCreatorPickerSheet(
+    creators: List<YouTubeMusicCreatorSummary>,
+    onDismiss: () -> Unit,
+    onSelect: (YouTubeMusicCreatorSummary) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .bottomSheetScrollGuard()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = 16.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.youtube_creator_choose_title),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+            creators.forEach { creator ->
+                ListItem(
+                    headlineContent = { Text(creator.title) },
+                    supportingContent = creator.subtitle
+                        .takeIf(String::isNotBlank)
+                        ?.let { subtitle -> { Text(subtitle) } },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable { onSelect(creator) }
                 )
             }
         }
@@ -5190,7 +5318,11 @@ fun LyricsEditorSheet(
     var isLyricMatching by remember { mutableStateOf(false) }
     var lyricMatchError by remember { mutableStateOf<String?>(null) }
     var selectedLyricMatchSources by remember(originalSong.stableKey()) {
-        mutableStateOf(defaultEditableLyricMatchSources())
+        mutableStateOf(
+            defaultEditableLyricMatchSources(
+                isYouTubeMusicTrack = isYouTubeMusicSong(originalSong)
+            )
+        )
     }
     val visibleLyricMatchResults = remember(lyricMatchResultsBySource, selectedLyricMatchSources) {
         filterCachedLyricMatchResults(

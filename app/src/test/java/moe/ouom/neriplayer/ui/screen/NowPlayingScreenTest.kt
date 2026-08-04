@@ -21,6 +21,23 @@ import kotlin.math.pow
 class NowPlayingScreenTest {
 
     @Test
+    fun `collapsed stored lyrics bypass direct renderer parsing`() {
+        val collapsedLyrics = """
+            [00:00.00]First line
+            [00:00.00]Second line
+            [00:00.00]Third line
+        """.trimIndent()
+
+        assertTrue(shouldBypassCollapsedStoredLyric(collapsedLyrics))
+        assertFalse(
+            shouldBypassCollapsedStoredLyric(
+                "[00:00.00]First line\n[00:12.00]Second line\n[00:24.00]Third line"
+            )
+        )
+        assertFalse(shouldBypassCollapsedStoredLyric(null))
+    }
+
+    @Test
     fun `wide lyrics use synced renderer when advanced lyrics are disabled`() {
         assertEquals(
             NowPlayingWideLyricsMode.SYNCED,
@@ -158,12 +175,11 @@ class NowPlayingScreenTest {
     }
 
     @Test
-    fun `lyrics transition keeps position-sensitive playback elements shared`() {
+    fun `lyrics transition keeps only matching playback elements shared`() {
         assertEquals(
             setOf(
                 "btn_back",
                 "cover_image",
-                "song_title",
                 "song_artist",
                 "progress_bar",
                 "player_previous",
@@ -703,6 +719,20 @@ class NowPlayingScreenTest {
         assertTrue(isBiliUploaderNavigationSource(biliSong))
         assertFalse(isBiliUploaderNavigationSource(missingVideoId))
         assertFalse(isBiliUploaderNavigationSource(neteaseSong))
+    }
+
+    @Test
+    fun `youtube artist navigation accepts YouTube Music songs only`() {
+        val youtubeSong = testSong(id = 13L, name = "YouTube song").copy(
+            channelId = "youtubeMusic",
+            mediaUri = "ytmusic://video/demo"
+        )
+        val nonYoutubeSong = testSong(id = 14L, name = "Other song").copy(
+            channelId = "netease"
+        )
+
+        assertTrue(isYouTubeMusicArtistNavigationSource(youtubeSong))
+        assertFalse(isYouTubeMusicArtistNavigationSource(nonYoutubeSong))
     }
 
     @Test

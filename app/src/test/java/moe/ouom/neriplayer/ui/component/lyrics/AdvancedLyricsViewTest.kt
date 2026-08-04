@@ -40,6 +40,25 @@ class AdvancedLyricsViewTest {
     }
 
     @Test
+    fun `buildAdvancedSyncedLyrics renders enhanced lrc on the full screen lyrics page`() {
+        val rawLyrics = """
+            [00:00.000] <00:00.000>夜<00:00.356>曲<00:00.712>
+            """.trimIndent()
+        val result = buildAdvancedSyncedLyrics(
+            rawLyrics = rawLyrics,
+            rawTranslatedLyrics = null,
+            lyrics = parseNeteaseLyricsAuto(rawLyrics),
+            translatedLyrics = emptyList()
+        )
+
+        val line = result.lines.single() as KaraokeLine.MainKaraokeLine
+        assertEquals("夜曲", line.syllables.joinToString(separator = "") { it.content })
+        assertEquals(0, line.syllables.first().start)
+        assertEquals(356, line.syllables.first().end)
+        assertEquals(712, line.syllables.last().end)
+    }
+
+    @Test
     fun `parseTtmlLyrics keeps inline translation on word timed lines`() {
         val ttml = """
             <tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">
@@ -576,14 +595,14 @@ class AdvancedLyricsViewTest {
     }
 
     @Test
-    fun `resolvePlayedLyricViewportOffset supports roughly thirty percent played space`() {
+    fun `resolvePlayedLyricViewportOffset keeps normal lyrics above the lower viewport area`() {
         val offset = resolvePlayedLyricViewportOffset(
             viewportHeight = 1_000.dp,
             keepAliveZone = 108.dp,
             minimumOffset = 48.dp,
             playedLyricViewportFraction = 0.30f,
             focusedLineVisualCompensation = 18.dp,
-            topFadeLength = 112.dp
+            topFadeLength = 80.dp
         )
 
         assertEquals(210.dp, offset)
@@ -592,14 +611,14 @@ class AdvancedLyricsViewTest {
     @Test
     fun `resolvePlayedLyricViewportOffset keeps focused line below top fade on short viewports`() {
         val offset = resolvePlayedLyricViewportOffset(
-            viewportHeight = 500.dp,
+            viewportHeight = 400.dp,
             keepAliveZone = 108.dp,
             minimumOffset = 48.dp,
             playedLyricViewportFraction = 0.30f,
             focusedLineVisualCompensation = 18.dp,
-            topFadeLength = 112.dp
+            topFadeLength = 80.dp
         )
 
-        assertEquals(60.dp, offset)
+        assertEquals(122.dp, offset)
     }
 }

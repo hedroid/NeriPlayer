@@ -175,7 +175,7 @@ fun LyricsScreen(
     onLyricFontScaleChange: (LyricFontScaleTarget, Float) -> Unit,
     onEnterAlbum: (AlbumSummary) -> Unit,
     onExitNowPlaying: () -> Unit,
-    onOpenCurrentNeteaseArtist: () -> Unit = {},
+    onOpenCurrentArtist: () -> Unit = {},
     onOpenCurrentPlaybackSource: (() -> Unit)? = null,
     onNavigateBack: () -> Unit,
     onSeekTo: (Long) -> Unit,
@@ -444,18 +444,6 @@ fun LyricsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier
                             .widthIn(max = maxWidth)
-                            .then(
-                                if (sharedTransitionScope != null && animatedContentScope != null) {
-                                    with(sharedTransitionScope) {
-                                        Modifier.sharedElement(
-                                            rememberSharedContentState(
-                                                key = NowPlayingLyricsSharedTransitionElement.TITLE.key
-                                            ),
-                                            animatedVisibilityScope = animatedContentScope
-                                        )
-                                    }
-                                } else Modifier
-                            )
                             .clip(RoundedCornerShape(6.dp))
                             .combinedClickable(
                                 onClick = {},
@@ -501,7 +489,7 @@ fun LyricsScreen(
                             )
                             .clip(RoundedCornerShape(6.dp))
                             .combinedClickable(
-                                onClick = onOpenCurrentNeteaseArtist,
+                                onClick = onOpenCurrentArtist,
                                 onLongClick = { showArtistMenu = true }
                             )
                     )
@@ -1161,7 +1149,7 @@ private fun LyricsContentPane(
             offset = if (useTabletLayout) 72.dp else 48.dp,
             keepAliveZone = if (useTabletLayout) 128.dp else 108.dp,
             playedLyricViewportFraction = if (useTabletLayout) 0.36f else 0.30f,
-            topFadeLength = if (useTabletLayout) 132.dp else 112.dp,
+            topFadeLength = if (useTabletLayout) 132.dp else 80.dp,
             bottomFadeLength = if (useTabletLayout) 220.dp else 196.dp,
             bottomContentInset = if (useTabletLayout) 40.dp else 0.dp,
             onLyricLongClick = onLyricLongClick,

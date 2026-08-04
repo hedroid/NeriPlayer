@@ -622,6 +622,8 @@ internal suspend fun PlayerManager.getTranslatedLyricsImpl(song: SongItem): List
         application = application,
         neteaseClient = neteaseClient,
         neteaseLyricsCache = neteaseLyricsCache,
+        editableLyricsMatcher = AppContainer.editableLyricsMatcher,
+        ytMusicLyricsCache = ytMusicLyricsCache,
         biliSourceTag = BILI_SOURCE_TAG
     )
 }
@@ -643,6 +645,7 @@ internal suspend fun PlayerManager.getLyricsImpl(song: SongItem): List<LyricEntr
         neteaseLyricsCache = neteaseLyricsCache,
         youtubeMusicClient = youtubeMusicClient,
         lrcLibClient = lrcLibClient,
+        editableLyricsMatcher = AppContainer.editableLyricsMatcher,
         amllTtmlClient = amllTtmlClient,
         amllLyricsEnabled = amllLyricsEnabled,
         ytMusicLyricsCache = ytMusicLyricsCache,
@@ -802,6 +805,7 @@ internal fun resolveQueueCurrentIndexAfterRemoval(
 internal fun PlayerManager.moveQueueItemImpl(fromIndex: Int, toIndex: Int) {
     ensureInitialized()
     if (!initialized) return
+    if (shouldBlockLocalRoomControl(PlaybackCommandSource.LOCAL)) return
     val queueSize = currentPlaylist.size
     if (queueSize <= 1) return
     if (fromIndex !in 0 until queueSize || toIndex !in 0 until queueSize) return
@@ -824,6 +828,7 @@ internal fun PlayerManager.moveQueueItemImpl(fromIndex: Int, toIndex: Int) {
         "NERI-PlayerManager",
         "moveQueueItem(): from=$fromIndex, to=$toIndex, queueSize=$queueSize, oldIndex=$oldIndex, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
     )
+    emitQueueUpdateCommand()
 
     ioScope.launch {
         persistState()
@@ -833,6 +838,7 @@ internal fun PlayerManager.moveQueueItemImpl(fromIndex: Int, toIndex: Int) {
 internal fun PlayerManager.removeQueueItemImpl(index: Int) {
     ensureInitialized()
     if (!initialized) return
+    if (shouldBlockLocalRoomControl(PlaybackCommandSource.LOCAL)) return
     val queueSize = currentPlaylist.size
     if (index !in 0 until queueSize) return
 
@@ -860,26 +866,23 @@ internal fun PlayerManager.removeQueueItemImpl(index: Int) {
         shuffleRestorePlaylistReference = null
         shuffleRestoreCurrentIndex = -1
         stopPlaybackPreservingQueue(clearMediaUrl = true)
+        emitQueueUpdateCommand(shouldPlay = false)
         return
     }
 
     if (removingCurrent) {
         if (shouldContinuePlayback && currentIndex in currentPlaylist.indices) {
             playAtIndex(currentIndex, commandSource = PlaybackCommandSource.LOCAL)
-            emitPlaybackCommand(
-                type = "PLAY_FROM_QUEUE",
-                source = PlaybackCommandSource.LOCAL,
-                queue = currentPlaylist.toList(),
-                currentIndex = currentIndex,
-                positionMs = _playbackPositionMs.value
-            )
+            emitQueueUpdateCommand(shouldPlay = true)
         } else {
             stopPlaybackPreservingQueue(clearMediaUrl = true)
+            emitQueueUpdateCommand(shouldPlay = false)
         }
         return
     }
 
     setCurrentSongForPlayback(currentPlaylist.getOrNull(currentIndex))
+    emitQueueUpdateCommand()
     ioScope.launch {
         persistState()
     }
@@ -891,10 +894,12 @@ private fun queueStableKeyCounts(queue: List<SongItem>): Map<String, Int> {
 
 internal fun PlayerManager.reorderQueueImpl(
     queue: List<SongItem>,
-    currentIndexInQueue: Int
+    currentIndexInQueue: Int,
+    commandSource: PlaybackCommandSource = PlaybackCommandSource.LOCAL
 ) {
     ensureInitialized()
     if (!initialized) return
+    if (shouldBlockLocalRoomControl(commandSource)) return
     if (queue.size != currentPlaylist.size) return
     if (queue.isEmpty()) return
     if (queueStableKeyCounts(queue) != queueStableKeyCounts(currentPlaylist)) {
@@ -920,6 +925,14 @@ internal fun PlayerManager.reorderQueueImpl(
         "reorderQueue(): queueSize=${currentPlaylist.size}, oldIndex=$oldIndex, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
     )
 
+    emitPlaybackCommand(
+        type = "SET_QUEUE",
+        source = commandSource,
+        queue = currentPlaylist.toList(),
+        currentIndex = currentIndex,
+        positionMs = _playbackPositionMs.value
+    )
+
     ioScope.launch {
         persistState()
     }
@@ -928,6 +941,12 @@ internal fun PlayerManager.reorderQueueImpl(
 internal fun PlayerManager.addToQueueNextImpl(song: SongItem) {
     ensureInitialized()
     if (!initialized) return
+    if (
+        shouldBlockLocalRoomControl(PlaybackCommandSource.LOCAL) ||
+        shouldBlockLocalSongSwitch(song, PlaybackCommandSource.LOCAL)
+    ) {
+        return
+    }
 
     if (currentPlaylist.isEmpty()) {
         NPLogger.d(
@@ -966,6 +985,7 @@ internal fun PlayerManager.addToQueueNextImpl(song: SongItem) {
         "NERI-PlayerManager",
         "addToQueueNext(): song=${song.name}/${song.id}, existingIndex=$existingIndex, insertIndex=$insertIndex, queueSize=${currentPlaylist.size}, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
     )
+    emitQueueUpdateCommand()
 
     ioScope.launch {
         persistState()
@@ -975,6 +995,12 @@ internal fun PlayerManager.addToQueueNextImpl(song: SongItem) {
 internal fun PlayerManager.addToQueueEndImpl(song: SongItem) {
     ensureInitialized()
     if (!initialized) return
+    if (
+        shouldBlockLocalRoomControl(PlaybackCommandSource.LOCAL) ||
+        shouldBlockLocalSongSwitch(song, PlaybackCommandSource.LOCAL)
+    ) {
+        return
+    }
     if (currentPlaylist.isEmpty()) {
         NPLogger.d(
             "NERI-PlayerManager",
@@ -1008,6 +1034,45 @@ internal fun PlayerManager.addToQueueEndImpl(song: SongItem) {
         "NERI-PlayerManager",
         "addToQueueEnd(): song=${song.name}/${song.id}, existingIndex=$existingIndex, queueSize=${currentPlaylist.size}, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
     )
+    emitQueueUpdateCommand()
+
+    ioScope.launch {
+        persistState()
+    }
+}
+
+private fun PlayerManager.emitQueueUpdateCommand(shouldPlay: Boolean? = null) {
+    emitPlaybackCommand(
+        type = "SET_QUEUE",
+        source = PlaybackCommandSource.LOCAL,
+        queue = currentPlaylist.toList(),
+        currentIndex = currentIndex,
+        positionMs = _playbackPositionMs.value,
+        shouldPlay = shouldPlay
+    )
+}
+
+internal fun PlayerManager.applyRemoteQueueUpdateImpl(
+    queue: List<SongItem>,
+    currentIndexInQueue: Int
+) {
+    ensureInitialized()
+    if (!initialized) return
+
+    if (queue.isEmpty()) {
+        currentPlaylist = emptyList()
+        _currentQueueFlow.value = emptyList()
+        currentIndex = -1
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
+        bumpCurrentQueueDisplayRevision()
+        stopPlaybackPreservingQueue(clearMediaUrl = true)
+    } else {
+        currentPlaylist = queue.toList()
+        _currentQueueFlow.value = currentPlaylist
+        currentIndex = currentIndexInQueue.coerceIn(currentPlaylist.indices)
+        bumpCurrentQueueDisplayRevision()
+    }
 
     ioScope.launch {
         persistState()
