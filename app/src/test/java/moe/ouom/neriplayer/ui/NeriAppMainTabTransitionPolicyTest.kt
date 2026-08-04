@@ -5,11 +5,34 @@ import moe.ouom.neriplayer.navigation.Destinations
 import moe.ouom.neriplayer.ui.effect.glass.DRAWER_BACKGROUND_SINK_FRACTION
 import moe.ouom.neriplayer.ui.effect.glass.DRAWER_RECESSED_CONTENT_SCALE
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NeriAppMainTabTransitionPolicyTest {
+    @Test
+    fun `instant detail handoff starts visible without changing restored detail behavior`() {
+        assertFalse(
+            resolveMainTabDetailInitialVisibility(
+                restoredDetailVisibility = false,
+                initiallyVisible = false
+            )
+        )
+        assertTrue(
+            resolveMainTabDetailInitialVisibility(
+                restoredDetailVisibility = false,
+                initiallyVisible = true
+            )
+        )
+        assertTrue(
+            resolveMainTabDetailInitialVisibility(
+                restoredDetailVisibility = true,
+                initiallyVisible = false
+            )
+        )
+    }
+
     @Test
     fun `startup waits for the persisted default route before selecting a tab`() {
         assertNull(
@@ -57,6 +80,67 @@ class NeriAppMainTabTransitionPolicyTest {
             resolveMainTabTransitionDirection(
                 initialRoute = Destinations.Settings.route,
                 targetRoute = Destinations.Library.route
+            )
+        )
+    }
+
+    @Test
+    fun `tab scene offsets preserve directional continuity across animation frames`() {
+        assertEquals(
+            -0.4f,
+            resolveMainTabLayerSceneOffsetFraction(
+                phase = MainTabLayerScenePhase.Exiting,
+                direction = 1,
+                progress = 0.4f
+            ),
+            0f
+        )
+        assertEquals(
+            0.6f,
+            resolveMainTabLayerSceneOffsetFraction(
+                phase = MainTabLayerScenePhase.Entering,
+                direction = 1,
+                progress = 0.4f
+            ),
+            0f
+        )
+        assertEquals(
+            0f,
+            resolveMainTabLayerSceneOffsetFraction(
+                phase = MainTabLayerScenePhase.Settled,
+                direction = -1,
+                progress = 0.4f
+            ),
+            0f
+        )
+    }
+
+    @Test
+    fun `new tab intent is dispatched before stale navigation catches up`() {
+        assertTrue(
+            shouldDispatchMainTabNavigation(
+                currentRoute = Destinations.Home.route,
+                pendingRoute = Destinations.Explore.route,
+                targetRoute = Destinations.Home.route
+            )
+        )
+        assertFalse(
+            shouldDispatchMainTabNavigation(
+                currentRoute = Destinations.Home.route,
+                pendingRoute = Destinations.Explore.route,
+                targetRoute = Destinations.Explore.route
+            )
+        )
+        assertFalse(
+            shouldAcceptObservedMainTabRoute(
+                observedRoute = Destinations.Explore.route,
+                pendingRoute = Destinations.Home.route
+            )
+        )
+        assertTrue(
+            shouldAcceptObservedMainTabRoute(
+                observedRoute = Destinations.Home.route,
+                pendingRoute = Destinations.Home.route
             )
         )
     }
@@ -140,6 +224,28 @@ class NeriAppMainTabTransitionPolicyTest {
             resolveMainTabDetailHandoff(
                 initialRoute = Destinations.Library.route,
                 targetRoute = null
+            )
+        )
+    }
+
+    @Test
+    fun `Bili uploader and playlist navigation skips the overlapping detail transition`() {
+        assertTrue(
+            shouldUseInstantBiliUploaderPlaylistTransition(
+                initialRoute = Destinations.BiliUploaderDetail.route,
+                targetRoute = Destinations.BiliPlaylistDetail.route
+            )
+        )
+        assertTrue(
+            shouldUseInstantBiliUploaderPlaylistTransition(
+                initialRoute = Destinations.BiliPlaylistDetail.route,
+                targetRoute = Destinations.BiliUploaderDetail.route
+            )
+        )
+        assertFalse(
+            shouldUseInstantBiliUploaderPlaylistTransition(
+                initialRoute = Destinations.NeteaseArtistDetail.route,
+                targetRoute = Destinations.NeteaseAlbumDetail.route
             )
         )
     }

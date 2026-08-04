@@ -46,11 +46,12 @@ internal fun AdvancedGlassSurface(
     val navigationOwner = LocalAdvancedGlassNavigationOwner.current ?: lifecycleOwner
     val activeNavigationOwners = LocalAdvancedGlassActiveNavigationOwners.current
     val sceneActive = LocalAdvancedGlassSceneActive.current
+    val backdropRegistrationEnabled = LocalAdvancedGlassBackdropRegistrationEnabled.current
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val isDarkTheme = isSystemInDarkTheme()
-    val enhancedBlurRadiusDp = if (controller.isEnabled) {
-        controller.normalizedEnhancedBlurRadiusDp
+    val enhancedBlurRadiusDp = if (controller.isBaseBlurEnabled) {
+        controller.normalizedBlurAmountDp
     } else {
         null
     }
@@ -69,7 +70,7 @@ internal fun AdvancedGlassSurface(
     val canRenderGlass = enabled && sceneActive && backdropsReady &&
         canSampleAdvancedGlassBackdrop(controller, glassDepth, role)
     val glassEnabled = canRenderGlass && belongsToActiveNavigationScreen
-    val registersBackdrop = canRenderGlass
+    val registersBackdrop = canRenderGlass && backdropRegistrationEnabled
     val regionKey = remember { Any() }
 
     DisposableEffect(availableBackdrops, regionKey, registersBackdrop) {
@@ -81,35 +82,41 @@ internal fun AdvancedGlassSurface(
         }
     }
 
+    val regionRegistrationModifier = if (registersBackdrop) {
+        Modifier.onGloballyPositioned { coordinates ->
+            val registry = availableBackdrops.regionRegistry
+            if (!coordinates.isAttached) {
+                registry.remove(regionKey)
+                return@onGloballyPositioned
+            }
+            val bounds = coordinates.boundsInWindow()
+            if (bounds.width <= 0f || bounds.height <= 0f) {
+                registry.remove(regionKey)
+                return@onGloballyPositioned
+            }
+            registry.update(
+                regionKey,
+                AdvancedGlassRegion(
+                    role = role,
+                    boundsInWindow = bounds,
+                    cornerRadiiPx = resolveCornerRadiiPx(
+                        shape = shape,
+                        size = bounds.size,
+                        layoutDirection = layoutDirection,
+                        density = density
+                    ),
+                    navigationOwner = if (requiresContentBackdrop) null else navigationOwner
+                )
+            )
+        }
+    } else {
+        Modifier
+    }
+
     Box(
         modifier = modifier
             .clip(shape)
-            .onGloballyPositioned { coordinates ->
-                val registry = availableBackdrops?.regionRegistry ?: return@onGloballyPositioned
-                if (!registersBackdrop || !coordinates.isAttached) {
-                    registry.remove(regionKey)
-                    return@onGloballyPositioned
-                }
-                val bounds = coordinates.boundsInWindow()
-                if (bounds.width <= 0f || bounds.height <= 0f) {
-                    registry.remove(regionKey)
-                    return@onGloballyPositioned
-                }
-                registry.update(
-                    regionKey,
-                    AdvancedGlassRegion(
-                        role = role,
-                        boundsInWindow = bounds,
-                        cornerRadiiPx = resolveCornerRadiiPx(
-                            shape = shape,
-                            size = bounds.size,
-                            layoutDirection = layoutDirection,
-                            density = density
-                        ),
-                        navigationOwner = if (requiresContentBackdrop) null else navigationOwner
-                    )
-                )
-            }
+            .then(regionRegistrationModifier)
     ) {
         if (glassEnabled) {
             GlassColorLayer(
@@ -212,5 +219,7 @@ private fun advancedGlassRoleColor(role: AdvancedGlassRole): Color = when (role)
     AdvancedGlassRole.SettingsHeader -> MaterialTheme.colorScheme.primaryContainer
     AdvancedGlassRole.PlaylistSheet,
     AdvancedGlassRole.SemanticCard -> MaterialTheme.colorScheme.surfaceContainerHigh
+    AdvancedGlassRole.ExploreTag -> MaterialTheme.colorScheme.surface
+    AdvancedGlassRole.ThemeModeToggle -> MaterialTheme.colorScheme.surfaceVariant
     AdvancedGlassRole.InlineControl -> Color.Transparent
 }

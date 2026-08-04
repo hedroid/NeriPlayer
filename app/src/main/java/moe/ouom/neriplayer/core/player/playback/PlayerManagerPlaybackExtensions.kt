@@ -23,10 +23,13 @@ import moe.ouom.neriplayer.core.player.debug.playbackStateName
 import moe.ouom.neriplayer.core.player.lifecycle.clearUsbExclusiveInterruptedPlaybackIntent
 import moe.ouom.neriplayer.core.player.lifecycle.prepareUsbExclusiveRouteForManualPlayback
 import moe.ouom.neriplayer.core.player.lifecycle.updateAudioOffloadPreferences
+import moe.ouom.neriplayer.core.player.lyrics.isExternalBluetoothLyricCadenceActive
 import moe.ouom.neriplayer.core.player.lyrics.updateExternalBluetoothLyricLine
 import moe.ouom.neriplayer.core.player.metadata.shouldAutoMatchExternalLyrics
 import moe.ouom.neriplayer.core.player.model.PlayerEvent
 import moe.ouom.neriplayer.core.player.model.SongUrlResult
+import moe.ouom.neriplayer.core.player.model.resolvePlayerSequentialShuffleOrder
+import moe.ouom.neriplayer.core.player.model.resolvePlayerQueueRestoreOrder
 import moe.ouom.neriplayer.core.player.policy.failure.PlaybackFailureAdvanceAction
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommandSource
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackStartPlan
@@ -75,7 +78,6 @@ import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.core.api.search.SearchManager
 import moe.ouom.neriplayer.ui.feedback.AppFeedback
-import kotlin.random.Random
 
 internal fun PlayerManager.cancelVolumeFadeImpl(resetToFull: Boolean = false) {
     val hadActiveFade = volumeFadeJob?.isActive == true
@@ -373,13 +375,6 @@ private fun PlayerManager.resolveListenTogetherTrackFinishPlan(): ListenTogether
 
 private fun PlayerManager.resolveListenTogetherNextIndex(allowWrap: Boolean): Int? {
     if (currentPlaylist.isEmpty() || currentIndex !in currentPlaylist.indices) return null
-    if (player.shuffleModeEnabled) {
-        if (shuffleFuture.isNotEmpty()) return shuffleFuture.last()
-        if (shuffleBag.isNotEmpty()) return shuffleBag.random()
-        if (!allowWrap) return null
-        val candidates = currentPlaylist.indices.filter { it != currentIndex }
-        return if (candidates.isEmpty()) currentIndex else candidates.random()
-    }
     if (currentIndex < currentPlaylist.lastIndex) return currentIndex + 1
     return if (allowWrap) 0 else null
 }
@@ -397,11 +392,7 @@ internal fun PlayerManager.handleTrackEnded() {
         durationMs = finishedDurationMs
     )
     _playbackPositionMs.value = 0L
-    val isLastInPlaylist = if (player.shuffleModeEnabled) {
-        shuffleFuture.isEmpty() && shuffleBag.isEmpty()
-    } else {
-        currentIndex >= currentPlaylist.lastIndex
-    }
+    val isLastInPlaylist = currentIndex >= currentPlaylist.lastIndex
     NPLogger.d(
         "NERI-PlayerManager",
         "handleTrackEnded: currentIndex=$currentIndex, queueSize=${currentPlaylist.size}, repeatMode=$repeatModeSetting, shuffle=${player.shuffleModeEnabled}, isLastInPlaylist=$isLastInPlaylist"
@@ -435,28 +426,15 @@ internal fun PlayerManager.handleTrackEnded() {
             )
         }
         else -> {
-            if (player.shuffleModeEnabled) {
-                if (shuffleFuture.isNotEmpty() || shuffleBag.isNotEmpty()) {
-                    markAutoTrackAdvance()
-                    nextImpl(
-                        force = false,
-                        commandSource = activePlaybackCommandSource,
-                        bypassLoudVolumeWarning = true
-                    )
-                } else {
-                    stopPlaybackPreservingQueue()
-                }
+            if (currentIndex < currentPlaylist.lastIndex) {
+                markAutoTrackAdvance()
+                nextImpl(
+                    force = false,
+                    commandSource = activePlaybackCommandSource,
+                    bypassLoudVolumeWarning = true
+                )
             } else {
-                if (currentIndex < currentPlaylist.lastIndex) {
-                    markAutoTrackAdvance()
-                    nextImpl(
-                        force = false,
-                        commandSource = activePlaybackCommandSource,
-                        bypassLoudVolumeWarning = true
-                    )
-                } else {
-                    stopPlaybackPreservingQueue()
-                }
+                stopPlaybackPreservingQueue()
             }
         }
     }
@@ -473,10 +451,7 @@ internal fun PlayerManager.advanceAfterPlaybackFailure(
     val action = resolvePlaybackFailureAdvanceAction(
         currentIndex = currentIndex,
         playlistSize = currentPlaylist.size,
-        repeatMode = repeatModeSetting,
-        shuffleEnabled = player.shuffleModeEnabled,
-        shuffleFutureSize = shuffleFuture.size,
-        shuffleBagSize = shuffleBag.size
+        repeatMode = repeatModeSetting
     )
     NPLogger.d(
         "NERI-PlayerManager",
@@ -549,12 +524,11 @@ internal fun PlayerManager.playPlaylistImpl(
     _currentQueueFlow.value = currentPlaylist
     currentIndex = startIndex.coerceIn(0, songs.lastIndex)
 
-    shuffleHistory.clear()
-    shuffleFuture.clear()
-    if (player.shuffleModeEnabled) {
-        rebuildShuffleBag(excludeIndex = currentIndex)
+    if (player.shuffleModeEnabled && commandSource != PlaybackCommandSource.REMOTE_SYNC) {
+        rememberShuffleRestoreQueueSnapshot()
+        shuffleCurrentQueueForSequentialPlayback()
     } else {
-        shuffleBag.clear()
+        clearShuffleRestoreQueueSnapshot()
     }
 
     playAtIndex(currentIndex, commandSource = commandSource)
@@ -568,14 +542,68 @@ internal fun PlayerManager.playPlaylistImpl(
     scheduleStatePersist()
 }
 
-internal fun PlayerManager.rebuildShuffleBag(excludeIndex: Int? = null) {
-    shuffleBag = currentPlaylist.indices.toMutableList()
-    if (excludeIndex != null) shuffleBag.remove(excludeIndex)
-    shuffleBag.shuffle()
+private fun PlayerManager.rememberShuffleRestoreQueueSnapshot() {
+    if (currentPlaylist.isEmpty()) {
+        clearShuffleRestoreQueueSnapshot()
+        return
+    }
+    shuffleRestorePlaylistReference = currentPlaylist.toList()
+    shuffleRestoreCurrentIndex = currentIndex.coerceIn(currentPlaylist.indices)
+}
+
+private fun PlayerManager.clearShuffleRestoreQueueSnapshot() {
+    shuffleRestorePlaylistReference = null
+    shuffleRestoreCurrentIndex = -1
+}
+
+private fun PlayerManager.restoreShuffleRestoreQueueSnapshot(): Boolean {
+    val currentSong = _currentSongFlow.value
+    val restoreOrder = resolvePlayerQueueRestoreOrder(
+        restorePlaylist = shuffleRestorePlaylistReference,
+        currentSong = currentSong,
+        fallbackIndex = shuffleRestoreCurrentIndex
+    ) ?: run {
+        clearShuffleRestoreQueueSnapshot()
+        return false
+    }
+
+    val restoredPlaylist = restoreOrder.playlist.toMutableList()
+    if (currentSong != null && restoreOrder.currentIndex in restoredPlaylist.indices) {
+        restoredPlaylist[restoreOrder.currentIndex] = currentSong
+    }
+    currentPlaylist = restoredPlaylist
+    currentIndex = restoreOrder.currentIndex
+    _currentQueueFlow.value = currentPlaylist
+    setCurrentSongForPlayback(currentPlaylist.getOrNull(currentIndex))
+    bumpCurrentQueueDisplayRevision()
+    clearShuffleRestoreQueueSnapshot()
+    return true
+}
+
+internal fun PlayerManager.shuffleCurrentQueueForSequentialPlayback(): Boolean {
+    val order = resolvePlayerSequentialShuffleOrder(
+        queueSize = currentPlaylist.size,
+        currentIndex = currentIndex
+    )
+    if (order.queueIndices.isEmpty()) {
+        currentIndex = -1
+        return false
+    }
+
+    val shuffledPlaylist = order.queueIndices.map { index -> currentPlaylist[index] }
+    val changed = shuffledPlaylist != currentPlaylist || currentIndex != order.currentIndex
+    currentPlaylist = shuffledPlaylist
+    currentIndex = order.currentIndex
+    if (changed) {
+        _currentQueueFlow.value = currentPlaylist
+        setCurrentSongForPlayback(currentPlaylist.getOrNull(currentIndex))
+        bumpCurrentQueueDisplayRevision()
+    }
     NPLogger.d(
         "NERI-PlayerManager",
-        "rebuildShuffleBag: queueSize=${currentPlaylist.size}, excludeIndex=$excludeIndex, bagSize=${shuffleBag.size}, historySize=${shuffleHistory.size}, futureSize=${shuffleFuture.size}"
+        "shuffleCurrentQueueForSequentialPlayback: queueSize=${currentPlaylist.size}, currentIndex=$currentIndex, changed=$changed"
     )
+    return changed
 }
 
 internal fun PlayerManager.playAtIndex(
@@ -647,10 +675,7 @@ internal fun PlayerManager.playAtIndex(
         positionMs = resolvedResumePositionMs,
         shouldResumePlayback = true
     )
-
-    if (player.shuffleModeEnabled) {
-        shuffleBag.remove(index)
-    }
+    bumpCurrentQueueDisplayRevision()
 
     playJob?.cancel()
     cancelYouTubePrefetchForPlaybackDemand(song, reason = "play_at_index")
@@ -1454,22 +1479,11 @@ internal fun PlayerManager.nextImpl(
         "NERI-PlayerManager",
         "next requested: force=$force, source=$commandSource, isShuffle=$isShuffle, currentIndex=$currentIndex, queueSize=${currentPlaylist.size}, transitionFade=$useTransitionFade, stack=[${debugStackHint()}]"
     )
-    val hasNextTrack = if (isShuffle) {
-        shuffleFuture.isNotEmpty() ||
-            shuffleBag.isNotEmpty() ||
-            force ||
-            repeatModeSetting == Player.REPEAT_MODE_ALL
-    } else {
-        currentIndex < currentPlaylist.lastIndex ||
-            force ||
-            repeatModeSetting == Player.REPEAT_MODE_ALL
-    }
+    val hasNextTrack = currentIndex < currentPlaylist.lastIndex ||
+        force ||
+        repeatModeSetting == Player.REPEAT_MODE_ALL
     if (!hasNextTrack) {
-        if (isShuffle) {
-            stopPlaybackPreservingQueue()
-        } else {
-            NPLogger.d("NERI-Player", "Already at the end of the playlist.")
-        }
+        NPLogger.d("NERI-Player", "Already at the end of the playlist.")
         return
     }
     if (requestUsbExclusiveLoudPlaybackConfirmation(
@@ -1488,91 +1502,30 @@ internal fun PlayerManager.nextImpl(
         return
     }
 
-    if (isShuffle) {
-        if (shuffleFuture.isNotEmpty()) {
-            val nextIdx = shuffleFuture.removeAt(shuffleFuture.lastIndex)
-            if (currentIndex != -1) shuffleHistory.add(currentIndex)
-            currentIndex = nextIdx
-            playAtIndex(
-                currentIndex,
-                useTrackTransitionFade = useTransitionFade,
-                commandSource = commandSource,
-                allowRememberedLongFormPosition = allowRememberedLongFormPosition
-            )
-            emitPlaybackCommand(
-                type = "NEXT",
-                source = commandSource,
-                queue = currentPlaylist.toList(),
-                currentIndex = currentIndex,
-                positionMs = _playbackPositionMs.value,
-                force = force
-            )
-            return
-        }
-
-        if (shuffleBag.isEmpty()) {
-            if (force || repeatModeSetting == Player.REPEAT_MODE_ALL) {
-                rebuildShuffleBag(excludeIndex = currentIndex)
-            } else {
-                stopPlaybackPreservingQueue()
-                return
-            }
-        }
-
-        if (shuffleBag.isEmpty()) {
-            playAtIndex(
-                currentIndex,
-                useTrackTransitionFade = useTransitionFade,
-                commandSource = commandSource,
-                allowRememberedLongFormPosition = allowRememberedLongFormPosition
-            )
-            return
-        }
-
-        if (currentIndex != -1) shuffleHistory.add(currentIndex)
-
-        val pick = if (shuffleBag.size == 1) 0 else Random.nextInt(shuffleBag.size)
-        currentIndex = shuffleBag.removeAt(pick)
-        playAtIndex(
-            currentIndex,
-            useTrackTransitionFade = useTransitionFade,
-            commandSource = commandSource,
-            allowRememberedLongFormPosition = allowRememberedLongFormPosition
-        )
-        emitPlaybackCommand(
-            type = "NEXT",
-            source = commandSource,
-            queue = currentPlaylist.toList(),
-            currentIndex = currentIndex,
-            positionMs = _playbackPositionMs.value,
-            force = force
-        )
+    if (currentIndex < currentPlaylist.lastIndex) {
+        currentIndex++
     } else {
-        if (currentIndex < currentPlaylist.lastIndex) {
-            currentIndex++
+        if (force || repeatModeSetting == Player.REPEAT_MODE_ALL) {
+            currentIndex = 0
         } else {
-            if (force || repeatModeSetting == Player.REPEAT_MODE_ALL) {
-                currentIndex = 0
-            } else {
-                NPLogger.d("NERI-Player", "Already at the end of the playlist.")
-                return
-            }
+            NPLogger.d("NERI-Player", "Already at the end of the playlist.")
+            return
         }
-        playAtIndex(
-            currentIndex,
-            useTrackTransitionFade = useTransitionFade,
-            commandSource = commandSource,
-            allowRememberedLongFormPosition = allowRememberedLongFormPosition
-        )
-        emitPlaybackCommand(
-            type = "NEXT",
-            source = commandSource,
-            queue = currentPlaylist.toList(),
-            currentIndex = currentIndex,
-            positionMs = _playbackPositionMs.value,
-            force = force
-        )
     }
+    playAtIndex(
+        currentIndex,
+        useTrackTransitionFade = useTransitionFade,
+        commandSource = commandSource,
+        allowRememberedLongFormPosition = allowRememberedLongFormPosition
+    )
+    emitPlaybackCommand(
+        type = "NEXT",
+        source = commandSource,
+        queue = currentPlaylist.toList(),
+        currentIndex = currentIndex,
+        positionMs = _playbackPositionMs.value,
+        force = force
+    )
 }
 
 internal fun PlayerManager.previousImpl(
@@ -1590,18 +1543,9 @@ internal fun PlayerManager.previousImpl(
         "NERI-PlayerManager",
         "previous requested: source=$commandSource, isShuffle=$isShuffle, currentIndex=$currentIndex, queueSize=${currentPlaylist.size}, transitionFade=$useTransitionFade, stack=[${debugStackHint()}]"
     )
-    val hasPreviousTrack = if (isShuffle) {
-        shuffleHistory.isNotEmpty()
-    } else {
-        currentIndex > 0 || repeatModeSetting == Player.REPEAT_MODE_ALL
-    }
+    val hasPreviousTrack = currentIndex > 0 || repeatModeSetting == Player.REPEAT_MODE_ALL
     if (!hasPreviousTrack) {
-        val message = if (isShuffle) {
-            "No previous track in shuffle history."
-        } else {
-            "Already at the start of the playlist."
-        }
-        NPLogger.d("NERI-Player", message)
+        NPLogger.d("NERI-Player", "Already at the start of the playlist.")
         return
     }
     if (requestUsbExclusiveLoudPlaybackConfirmation(
@@ -1618,29 +1562,23 @@ internal fun PlayerManager.previousImpl(
         return
     }
 
-    if (isShuffle) {
-        if (shuffleHistory.isNotEmpty()) {
-            if (currentIndex != -1) shuffleFuture.add(currentIndex)
-            val prev = shuffleHistory.removeAt(shuffleHistory.lastIndex)
-            currentIndex = prev
-            playAtIndex(
-                currentIndex,
-                useTrackTransitionFade = useTransitionFade,
-                commandSource = commandSource
-            )
-            emitPlaybackCommand(
-                type = "PREVIOUS",
-                source = commandSource,
-                queue = currentPlaylist.toList(),
-                currentIndex = currentIndex,
-                positionMs = _playbackPositionMs.value
-            )
-        } else {
-            NPLogger.d("NERI-Player", "No previous track in shuffle history.")
-        }
+    if (currentIndex > 0) {
+        currentIndex--
+        playAtIndex(
+            currentIndex,
+            useTrackTransitionFade = useTransitionFade,
+            commandSource = commandSource
+        )
+        emitPlaybackCommand(
+            type = "PREVIOUS",
+            source = commandSource,
+            queue = currentPlaylist.toList(),
+            currentIndex = currentIndex,
+            positionMs = _playbackPositionMs.value
+        )
     } else {
-        if (currentIndex > 0) {
-            currentIndex--
+        if (repeatModeSetting == Player.REPEAT_MODE_ALL && currentPlaylist.isNotEmpty()) {
+            currentIndex = currentPlaylist.lastIndex
             playAtIndex(
                 currentIndex,
                 useTrackTransitionFade = useTransitionFade,
@@ -1654,23 +1592,7 @@ internal fun PlayerManager.previousImpl(
                 positionMs = _playbackPositionMs.value
             )
         } else {
-            if (repeatModeSetting == Player.REPEAT_MODE_ALL && currentPlaylist.isNotEmpty()) {
-                currentIndex = currentPlaylist.lastIndex
-                playAtIndex(
-                    currentIndex,
-                    useTrackTransitionFade = useTransitionFade,
-                    commandSource = commandSource
-                )
-                emitPlaybackCommand(
-                    type = "PREVIOUS",
-                    source = commandSource,
-                    queue = currentPlaylist.toList(),
-                    currentIndex = currentIndex,
-                    positionMs = _playbackPositionMs.value
-                )
-            } else {
-                NPLogger.d("NERI-Player", "Already at the start of the playlist.")
-            }
+            NPLogger.d("NERI-Player", "Already at the start of the playlist.")
         }
     }
 }
@@ -1711,24 +1633,45 @@ internal fun PlayerManager.setShuffleImpl(
     ensureInitialized()
     if (!initialized) return
     if (shouldBlockLocalRoomControl(commandSource)) return
-    if (player.shuffleModeEnabled == enabled) return
+    if (player.shuffleModeEnabled == enabled) {
+        if (!enabled) {
+            val hadRestoreSnapshot = shuffleRestorePlaylistReference != null
+            clearShuffleRestoreQueueSnapshot()
+            if (hadRestoreSnapshot) {
+                lastPersistedPlaylistReference = null
+                scheduleStatePersist()
+            }
+        }
+        return
+    }
     NPLogger.d(
         "NERI-PlayerManager",
-        "setShuffle: enabled=$enabled, currentIndex=$currentIndex, queueSize=${currentPlaylist.size}, historySize=${shuffleHistory.size}, futureSize=${shuffleFuture.size}"
+        "setShuffle: enabled=$enabled, currentIndex=$currentIndex, queueSize=${currentPlaylist.size}"
     )
-    player.shuffleModeEnabled = enabled
-    shuffleHistory.clear()
-    shuffleFuture.clear()
     if (enabled) {
-        rebuildShuffleBag(excludeIndex = currentIndex)
+        if (commandSource != PlaybackCommandSource.REMOTE_SYNC) {
+            rememberShuffleRestoreQueueSnapshot()
+            player.shuffleModeEnabled = true
+            shuffleCurrentQueueForSequentialPlayback()
+        } else {
+            clearShuffleRestoreQueueSnapshot()
+            player.shuffleModeEnabled = true
+        }
     } else {
-        shuffleBag.clear()
+        if (commandSource != PlaybackCommandSource.REMOTE_SYNC) {
+            restoreShuffleRestoreQueueSnapshot()
+        } else {
+            clearShuffleRestoreQueueSnapshot()
+        }
+        player.shuffleModeEnabled = false
     }
     scheduleStatePersist()
     _shuffleModeFlow.value = enabled
     emitPlaybackCommand(
         type = "PLAYBACK_MODE",
         source = commandSource,
+        queue = currentPlaylist.toList(),
+        currentIndex = currentIndex,
         repeatMode = repeatModeSetting,
         shuffleEnabled = enabled
     )
@@ -1750,7 +1693,7 @@ internal fun PlayerManager.applyListenTogetherPlaybackModeImpl(
     val shuffleChanged = shuffleEnabled != null && _shuffleModeFlow.value != shuffleEnabled
     if (!repeatChanged && !shuffleChanged) return
     if (repeatChanged) {
-        repeatModeSetting = normalizedRepeatMode ?: Player.REPEAT_MODE_OFF
+        repeatModeSetting = normalizedRepeatMode
         if (isPlayerInitialized()) {
             syncExoRepeatMode()
         }
@@ -1760,13 +1703,6 @@ internal fun PlayerManager.applyListenTogetherPlaybackModeImpl(
         val nextShuffleEnabled = shuffleEnabled == true
         if (isPlayerInitialized()) {
             player.shuffleModeEnabled = nextShuffleEnabled
-            shuffleHistory.clear()
-            shuffleFuture.clear()
-            if (nextShuffleEnabled) {
-                rebuildShuffleBag(excludeIndex = currentIndex)
-            } else {
-                shuffleBag.clear()
-            }
         }
         _shuffleModeFlow.value = nextShuffleEnabled
     }
@@ -1794,7 +1730,8 @@ internal fun PlayerManager.startProgressUpdates() {
         while (isActive) {
             val updateIntervalMs = resolvePlaybackProgressUpdateIntervalMs(
                 playbackProgressAdvanceReported = playbackProgressAdvanceReported,
-                interactiveNowPlayingVisible = interactiveNowPlayingVisible
+                interactiveNowPlayingVisible = interactiveNowPlayingVisible,
+                realtimeExternalLyricsActive = isExternalBluetoothLyricCadenceActive()
             )
             val positionMs = runCatching {
                 resolveDisplayedPlaybackPosition(player.currentPosition.coerceAtLeast(0L))

@@ -52,7 +52,7 @@ import moe.ouom.neriplayer.core.player.lyrics.FloatingLyricsOverlayManager
 import moe.ouom.neriplayer.core.player.usb.system.UsbExclusiveSystemSoundGuard
 import moe.ouom.neriplayer.core.player.lyrics.clearExternalBluetoothLyricLine
 import moe.ouom.neriplayer.core.player.lyrics.syncExternalBluetoothLyrics
-import moe.ouom.neriplayer.core.player.lyrics.syncFloatingTranslatedLyrics
+import moe.ouom.neriplayer.core.player.lyrics.syncExternalTranslatedLyrics
 import moe.ouom.neriplayer.core.player.lyrics.updateExternalBluetoothLyricLine
 import moe.ouom.neriplayer.core.player.audio.isBluetoothOutputType
 import moe.ouom.neriplayer.core.player.audio.isHeadsetLikeOutput
@@ -170,6 +170,8 @@ internal fun PlayerManager.initializeImpl(
         playbackStateFile = File(app.filesDir, "last_playback_state.json")
         lastPersistedPlaylistReference = null
         lastPersistedPlaybackState = null
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
         lastStatePersistAtMs = 0L
         lastLongFormPlaybackProgressPersistAtMs = 0L
         playbackStatsTracker = PlaybackStatsTracker()
@@ -221,6 +223,7 @@ internal fun PlayerManager.initializeImpl(
         qqMusicLyricDefaultOffsetMs =
             initialPlaybackPreferences.qqMusicLyricDefaultOffsetMs
         externalBluetoothLyricsEnabled = false
+        externalBluetoothTranslationEnabled = false
         amllLyricsEnabled = initialPlaybackPreferences.amllLyricsEnabled
         lyriconEnabled = initialPlaybackPreferences.lyriconEnabled
         LyriconManager.setEnabled(lyriconEnabled)
@@ -751,6 +754,12 @@ internal fun PlayerManager.initializeImpl(
             }
         }
         ioScope.launch {
+            settingsRepo.externalBluetoothTranslationEnabledFlow.collect { enabled ->
+                externalBluetoothTranslationEnabled = enabled
+                syncExternalTranslatedLyrics(_currentSongFlow.value)
+            }
+        }
+        ioScope.launch {
             settingsRepo.floatingLyricsPreferencesFlow.collect { preferences ->
                 val normalized = preferences.normalized()
                 val floatingLyricsEnabledChanged = floatingLyricsEnabled != normalized.enabled
@@ -760,7 +769,7 @@ internal fun PlayerManager.initializeImpl(
                 FloatingLyricsOverlayManager.updatePreferences(normalized)
                 when {
                     floatingLyricsEnabledChanged -> syncExternalBluetoothLyrics(_currentSongFlow.value)
-                    showTranslationChanged -> syncFloatingTranslatedLyrics(_currentSongFlow.value)
+                    showTranslationChanged -> syncExternalTranslatedLyrics(_currentSongFlow.value)
                 }
             }
         }
@@ -1300,8 +1309,9 @@ private fun PlayerManager.handleDeviceChange(
     val previousDevice = _currentAudioDevice.value
     val newDevice = getCurrentAudioDevice(audioManager)
     _currentAudioDevice.value = newDevice
-    val usbRouteChanged = previousDevice?.type != newDevice.type ||
-        previousDevice?.name != newDevice.name
+    val usbRouteChanged = previousDevice == null ||
+        previousDevice.type != newDevice.type ||
+        previousDevice.name != newDevice.name
     val nativeOpenGate = UsbExclusiveSessionController.playerPcmOpenGateReason()
     val nextRouteIsUsbOutput = isUsbOutputType(newDevice.type)
     if (
@@ -3464,7 +3474,7 @@ private fun PlayerManager.shouldTreatAsUsbExclusiveRouteJitter(
     val previousUsb = previousDevice?.type?.let(::isUsbOutputType) == true
     val newUsb = newDevice?.type?.let(::isUsbOutputType) == true
     if (previousUsb && newUsb) {
-        return previousDevice?.type != newDevice?.type || previousDevice?.name != newDevice?.name
+        return previousDevice.type != newDevice.type || previousDevice.name != newDevice.name
     }
     return previousUsb != newUsb
 }
@@ -3536,11 +3546,14 @@ internal fun PlayerManager.releaseImpl() {
         lyriconUpdateJob = null
         externalBluetoothLyricsLoadJob?.cancel()
         externalBluetoothLyricsLoadJob = null
+        externalBluetoothTranslationLoadJob?.cancel()
+        externalBluetoothTranslationLoadJob = null
         externalBluetoothLyrics = emptyList()
         floatingTranslatedLyrics = emptyList()
         floatingTranslationMatchesByIndex = emptyMap()
         externalBluetoothLyricsSongKey = null
         externalBluetoothLyricsEnabled = false
+        externalBluetoothTranslationEnabled = false
         floatingLyricsEnabled = false
         floatingLyricsShowTranslation = true
         statusBarLyricsEnable = false
@@ -3581,14 +3594,13 @@ internal fun PlayerManager.releaseImpl() {
         currentMediaUrlResolvedAtMs = 0L
         setCurrentSongForPlayback(null)
         _currentQueueFlow.value = emptyList()
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
         clearPendingSeekPosition()
         _playbackPositionMs.value = 0L
 
         currentPlaylist = emptyList()
         currentIndex = -1
-        shuffleBag.clear()
-        shuffleHistory.clear()
-        shuffleFuture.clear()
         consecutivePlayFailures = 0
 
         NPLogger.d("NERI-PlayerManager", "release(): completed")

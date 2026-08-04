@@ -26,7 +26,8 @@ package moe.ouom.neriplayer.ui.screen.playlist
 import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
@@ -59,11 +61,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import android.content.ClipData
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -80,21 +84,30 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.api.bili.BiliClient
+import moe.ouom.neriplayer.core.api.bili.buildBiliThumbnailUrl
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
+import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.launchLocalPlaylistMutation
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
+import moe.ouom.neriplayer.ui.rememberMainTabDetailVisibilityState
 import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
+import moe.ouom.neriplayer.ui.component.overlay.DensityScaledModalBottomSheet
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportAddedResult
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportCreatedResult
 import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
-import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.NeriOverlaySnackbarHost
 import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
+import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylistKind
+import moe.ouom.neriplayer.ui.viewmodel.tab.toFavoriteBrowseId
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliPlaylistDetailViewModel
 import moe.ouom.neriplayer.ui.viewmodel.playlist.BiliVideoItem
 import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
 import moe.ouom.neriplayer.ui.haptic.HapticFloatingActionButton
 import moe.ouom.neriplayer.core.logging.NPLogger
@@ -114,6 +127,7 @@ fun BiliPlaylistDetailScreen(
     onBack: () -> Unit = {},
     onPlayAudio: (List<BiliVideoItem>, Int) -> Unit = { _, _ -> },
     onPlayParts: (BiliClient.VideoBasicInfo, Int, String) -> Unit = { _, _, _ -> },
+    suppressVisibilityTransition: Boolean = false,
     offlineMode: Boolean = false
 ) {
     val context = LocalContext.current
@@ -137,10 +151,10 @@ fun BiliPlaylistDetailScreen(
 
     // 保存最新的header和videos数据，用于在Screen销毁时更新使用记录
     var latestHeader by remember { mutableStateOf<BiliPlaylist?>(null) }
-    var latestVideosSize by remember { mutableIntStateOf(0) }
+    var latestTrackCount by remember { mutableIntStateOf(0) }
     LaunchedEffect(ui.header, ui.videos.size) {
         ui.header?.let { latestHeader = it }
-        latestVideosSize = ui.videos.size
+        latestTrackCount = ui.header?.count?.coerceAtLeast(ui.videos.size) ?: ui.videos.size
     }
 
     // 在Screen销毁时更新使用记录，确保返回主页时卡片显示最新信息
@@ -151,11 +165,12 @@ fun BiliPlaylistDetailScreen(
                     id = header.mediaId,
                     name = header.title,
                     picUrl = header.coverUrl,
-                    trackCount = latestVideosSize,
+                    trackCount = latestTrackCount,
                     fid = header.fid,
                     mid = header.mid,
                     source = "bili",
-                    subtype = header.kind.name
+                    subtype = header.kind.name,
+                    subtitle = header.subtitle
                 )
             }
         }
@@ -169,6 +184,9 @@ fun BiliPlaylistDetailScreen(
 
     val repo = remember(context) { LocalPlaylistRepository.getInstance(context) }
     val allLocalPlaylists by repo.playlists.collectAsState(initial = emptyList())
+    val favoriteSongs = remember(allLocalPlaylists, context) {
+        FavoritesPlaylist.firstOrNull(allLocalPlaylists, context)?.songs.orEmpty()
+    }
     val playlistSource = "bili"
     val playlistId = ui.header?.mediaId ?: playlist.mediaId
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
@@ -185,6 +203,8 @@ fun BiliPlaylistDetailScreen(
             coverUrl = header.coverUrl,
             trackCount = header.count,
             source = playlistSource,
+            browseId = header.toFavoriteBrowseId(),
+            subtitle = header.subtitle,
             songs = ui.videos.map { it.toSongItem() }
         )
     }
@@ -193,6 +213,27 @@ fun BiliPlaylistDetailScreen(
     var showExportSheet by remember { mutableStateOf(false) }
     var showExportAllSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val favoriteAddedText = stringResource(R.string.favorite_added)
+    val favoriteRemovedText = stringResource(R.string.favorite_removed)
+    fun toggleSongFavorite(song: SongItem, isFavoriteSong: Boolean) {
+        val message = if (isFavoriteSong) favoriteRemovedText else favoriteAddedText
+        scope.launchLocalPlaylistMutation(
+            operation = "toggleBiliDetailSongFavorite",
+            onResult = { result ->
+                if (result.isSuccess) {
+                    scope.launch {
+                        snackbarHostState.showNeriSnackbar(message)
+                    }
+                }
+            }
+        ) {
+            if (isFavoriteSong) {
+                repo.removeFromFavorites(song)
+            } else {
+                repo.addToFavorites(song)
+            }
+        }
+    }
     val listState = rememberSaveable(
         playlist.kind.name,
         playlist.mediaId,
@@ -214,6 +255,12 @@ fun BiliPlaylistDetailScreen(
 
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var headerSearchFocused by remember { mutableStateOf(false) }
+    var dockedSearchFocused by remember { mutableStateOf(false) }
+    val searchInputState = rememberPlaylistSearchInputState(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it }
+    )
     val searchFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -226,37 +273,104 @@ fun BiliPlaylistDetailScreen(
         selectedParts = emptySet()
     }
 
-    val displayedVideos = remember(ui.videos, searchQuery) {
-        if (searchQuery.isBlank()) ui.videos
-        else ui.videos.filter {
-            it.title.contains(searchQuery, true) || it.uploader.contains(searchQuery, true)
+    val displayedVideos = rememberPlaylistSearchResults(
+        query = searchQuery,
+        items = ui.videos,
+        tokens = { video ->
+            listOf(video.title, video.uploader, video.bvid, video.id.toString())
         }
-    }
+    )
     val displayHeader = ui.header ?: playlist
+    val displayHeaderCoverUrl = remember(displayHeader.coverUrl) {
+        buildBiliPlaylistHeroCoverUrl(displayHeader.coverUrl)
+    }
     val playlistChromeColor = rememberPlaylistModernHeroBackgroundColor(
-        coverUrl = displayHeader.coverUrl,
+        coverUrl = displayHeaderCoverUrl,
         offlineMode = offlineMode
     )
-    val playlistChromeCollapsed by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    val density = LocalDensity.current
+    val searchVisible = shouldShowPlaylistSearch(
+        showSearch = showSearch,
+        selectionMode = selectionMode
+    )
+    val searchVisibilityProgress = playlistModernSearchVisibilityProgress(
+        searchVisible = searchVisible,
+        label = "bili-playlist-search-visibility"
+    )
+    val searchVisibilityEased = resolvePlaylistEasedProgress(searchVisibilityProgress)
+    val playlistHeroHeight = interpolatePlaylistDp(
+        start = PlaylistModernHeroHeight,
+        end = PlaylistModernHeroSearchHeight,
+        fraction = searchVisibilityEased
+    )
+    val playlistChromeCollapseProgress by remember(
+        listState,
+        density,
+        playlistHeroHeight
+    ) {
+        derivedStateOf {
+            resolvePlaylistChromeCollapseProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                expandedHeroHeightPx = with(density) {
+                    playlistHeroHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarColor()
-    } else {
-        playlistChromeColor
+    val playlistChromeVisualProgress = resolvePlaylistEasedProgress(
+        playlistChromeCollapseProgress
+    )
+    val dockedSearchRevealProgress by remember(listState, density) {
+        derivedStateOf {
+            resolvePlaylistDockedSearchRevealProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                revealDistancePx = with(density) {
+                    PlaylistModernDockedSearchSlotHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarContentColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarContentColor()
-    } else {
-        Color.White
-    }
-    val playlistHeroHeight by animateDpAsState(
-        targetValue = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
-            PlaylistModernHeroSearchHeight
-        } else {
-            PlaylistModernHeroHeight
-        },
-        label = "bili-playlist-hero-height"
+    val searchDockedVisualProgress = resolvePlaylistEasedProgress(
+        dockedSearchRevealProgress
+    )
+    val dockedSearchProgress = resolvePlaylistDockedSearchSlotProgress(
+        searchVisibilityProgress = searchVisibilityProgress,
+        dockedRevealProgress = dockedSearchRevealProgress
+    )
+    val searchSlotVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = dockedSearchProgress
+    )
+    val headerSearchAlpha = resolvePlaylistHeaderSearchAlpha(
+        searchVisibilityProgress = searchVisibilityProgress,
+        chromeCollapseProgress = playlistChromeCollapseProgress
+    )
+    val headerSearchVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = headerSearchAlpha
+    )
+    val searchFieldFocusInHeader =
+        headerSearchVisible && dockedSearchRevealProgress < 0.5f
+    val searchFieldComposed = headerSearchVisible || searchSlotVisible
+    val playlistTopBarColor = resolvePlaylistTranslucentTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeVisualProgress
+    )
+    val playlistTopBarContentColor = interpolatePlaylistColor(
+        start = resolvePlaylistSolidTopBarContentColor(playlistChromeColor),
+        end = playlistModernCollapsedTopBarContentColor(),
+        fraction = playlistChromeVisualProgress
+    )
+    val playlistSelectionTopBarColor = resolvePlaylistSelectionTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeCollapseProgress
+    )
+    val playlistSelectionTopBarContentColor = resolvePlaylistSelectionTopBarContentColor(
+        playlistColor = playlistChromeColor,
+        collapsedContentColor = playlistModernCollapsedTopBarContentColor(),
+        collapseProgress = playlistChromeCollapseProgress
     )
     val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsState(
         initial = false
@@ -265,12 +379,30 @@ fun BiliPlaylistDetailScreen(
         initial = null
     )
     val hasCustomBackground = backgroundImageUri != null
-    LaunchedEffect(showSearch, selectionMode, playlistChromeCollapsed, autoShowKeyboard) {
-        if (showSearch && !selectionMode && autoShowKeyboard) {
-            delay(120)
-            searchFocusRequester.requestFocus()
-            keyboardController?.show()
-        }
+    LaunchedEffect(
+        showSearch,
+        selectionMode,
+        searchFieldComposed,
+        autoShowKeyboard,
+        searchFieldFocusInHeader
+    ) {
+        if (!searchFieldComposed) return@LaunchedEffect
+        val shouldAutoFocus = shouldRequestPlaylistSearchFocus(
+            showSearch,
+            selectionMode,
+            autoShowKeyboard
+        )
+        val shouldTransferFocus = shouldTransferPlaylistSearchFocus(
+            showSearch = showSearch,
+            selectionMode = selectionMode,
+            searchFieldComposed = searchFieldComposed,
+            searchInputFocused = headerSearchFocused || dockedSearchFocused,
+            searchQuery = searchQuery
+        )
+        if (!shouldAutoFocus && !shouldTransferFocus) return@LaunchedEffect
+        if (shouldAutoFocus) delay(120)
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
     }
     fun playBiliPlaylist(shuffle: Boolean) {
         val startIndex = resolvePlaylistPlaybackStartIndex(
@@ -283,10 +415,22 @@ fun BiliPlaylistDetailScreen(
         onPlayAudio(ui.videos, startIndex)
     }
 
+    val detailVisibilityState = rememberMainTabDetailVisibilityState(
+        detailKey = playlist.mediaId,
+        initiallyVisible = suppressVisibilityTransition
+    )
     AnimatedVisibility(
-        visible = true,
-        enter = fadeIn() + slideInVertically { it / 6 },
-        exit = fadeOut() + slideOutVertically { it / 6 }
+        visibleState = detailVisibilityState,
+        enter = if (suppressVisibilityTransition) {
+            EnterTransition.None
+        } else {
+            fadeIn() + slideInVertically { it / 6 }
+        },
+        exit = if (suppressVisibilityTransition) {
+            ExitTransition.None
+        } else {
+            fadeOut() + slideOutVertically { it / 6 }
+        }
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -338,6 +482,8 @@ fun BiliPlaylistDetailScreen(
                                             coverUrl = header.coverUrl,
                                             trackCount = header.count,
                                             source = playlistSource,
+                                            browseId = header.toFavoriteBrowseId(),
+                                            subtitle = header.subtitle,
                                             songs = ui.videos.map { it.toSongItem() }
                                         )
                                     }
@@ -422,25 +568,31 @@ fun BiliPlaylistDetailScreen(
                         },
                         windowInsets = WindowInsets.statusBars,
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = Color.Transparent,
-                            scrolledContainerColor = MaterialTheme.colorScheme.surface
+                            containerColor = playlistSelectionTopBarColor,
+                            scrolledContainerColor = playlistSelectionTopBarColor,
+                            titleContentColor = playlistSelectionTopBarContentColor,
+                            navigationIconContentColor = playlistSelectionTopBarContentColor,
+                            actionIconContentColor = playlistSelectionTopBarContentColor
                         )
                     )
                 }
 
-                if (showSearch && !selectionMode && playlistChromeCollapsed) {
-                    PlaylistModernVisualColorsProvider(
-                        coverUrl = displayHeader.coverUrl,
-                        offlineMode = offlineMode
-                    ) {
-                        PlaylistModernDockedSearchField(
-                            query = searchQuery,
-                            onQueryChange = { searchQuery = it },
-                            placeholder = stringResource(R.string.search_playlist),
-                            focusRequester = searchFocusRequester
-                        )
-                    }
-                }
+                PlaylistModernDockedSearchSlot(
+                    revealProgress = dockedSearchProgress,
+                    coverUrl = displayHeaderCoverUrl,
+                    offlineMode = offlineMode,
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = stringResource(R.string.search_playlist),
+                    inputState = searchInputState,
+                    onFocusChanged = { dockedSearchFocused = it },
+                    focusRequester = if (searchFieldFocusInHeader) {
+                        null
+                    } else {
+                        searchFocusRequester
+                    },
+                    dockedProgress = searchDockedVisualProgress
+                )
 
                 Box(modifier = Modifier
                     .fillMaxSize()
@@ -453,7 +605,7 @@ fun BiliPlaylistDetailScreen(
                     }
 
                     PlaylistModernVisualColorsProvider(
-                        coverUrl = displayHeader.coverUrl,
+                        coverUrl = displayHeaderCoverUrl,
                         offlineMode = offlineMode
                     ) {
                         LazyColumn(
@@ -464,7 +616,7 @@ fun BiliPlaylistDetailScreen(
                             item {
                                 PlaylistModernHeroHeader(
                                     displayName = displayHeader.title,
-                                    coverUrl = displayHeader.coverUrl,
+                                    coverUrl = displayHeaderCoverUrl,
                                     subtitle = pluralStringResource(
                                         R.plurals.bili_content_count,
                                         displayHeader.count,
@@ -473,14 +625,26 @@ fun BiliPlaylistDetailScreen(
                                     offlineMode = offlineMode,
                                     height = playlistHeroHeight,
                                     coverContentDescription = displayHeader.title,
-                                    actions = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
+                                    actions = if (headerSearchVisible) {
                                         {
-                                            PlaylistModernHeroSearchField(
-                                                query = searchQuery,
-                                                onQueryChange = { searchQuery = it },
-                                                placeholder = stringResource(R.string.search_playlist),
-                                                focusRequester = searchFocusRequester
-                                            )
+                                            Box(
+                                                modifier = Modifier.graphicsLayer {
+                                                    alpha = headerSearchAlpha
+                                                }
+                                            ) {
+                                                PlaylistModernHeroSearchField(
+                                                    query = searchQuery,
+                                                    onQueryChange = { searchQuery = it },
+                                                    placeholder = stringResource(R.string.search_playlist),
+                                                    inputState = searchInputState,
+                                                    onFocusChanged = { headerSearchFocused = it },
+                                                    focusRequester = if (searchFieldFocusInHeader) {
+                                                        searchFocusRequester
+                                                    } else {
+                                                        null
+                                                    }
+                                                )
+                                            }
                                         }
                                     } else {
                                         null
@@ -493,7 +657,7 @@ fun BiliPlaylistDetailScreen(
                             contentType = "playlist_actions"
                         ) {
                             PlaylistModernActionSheet(
-                                coverUrl = displayHeader.coverUrl,
+                                coverUrl = displayHeaderCoverUrl,
                                 offlineMode = offlineMode,
                                 hasCustomBackground = hasCustomBackground
                             ) {
@@ -520,7 +684,7 @@ fun BiliPlaylistDetailScreen(
                             ui.loading && ui.videos.isEmpty() -> {
                                 item {
                                     PlaylistModernListItemSurface(
-                                        coverUrl = displayHeader.coverUrl,
+                                        coverUrl = displayHeaderCoverUrl,
                                         offlineMode = offlineMode
                                     ) {
                                         Row(
@@ -538,7 +702,7 @@ fun BiliPlaylistDetailScreen(
                             ui.error != null && ui.videos.isEmpty() -> {
                                 item {
                                     PlaylistModernListItemSurface(
-                                        coverUrl = displayHeader.coverUrl,
+                                        coverUrl = displayHeaderCoverUrl,
                                         offlineMode = offlineMode
                                     ) {
                                         Column(
@@ -570,13 +734,20 @@ fun BiliPlaylistDetailScreen(
                                     displayedVideos,
                                     key = { _, it -> it.bvid.ifBlank { it.id.toString() } }
                                 ) { index, item ->
+                                    val songItem = remember(item) { item.toSongItem() }
+                                    val isFavoriteSong = favoriteSongs.any {
+                                        it.sameIdentityAs(songItem)
+                                    }
                                     PlaylistModernListItemSurface(
-                                        coverUrl = displayHeader.coverUrl,
+                                        coverUrl = displayHeaderCoverUrl,
                                         offlineMode = offlineMode
                                     ) {
                                         VideoRow(
                                             index = index + 1,
                                             video = item,
+                                            songItem = songItem,
+                                            isFavorite = isFavoriteSong,
+                                            onFavoriteToggle = ::toggleSongFavorite,
                                             isCurrentSong = activeSong?.album?.startsWith(PlayerManager.BILI_SOURCE_TAG) == true &&
                                                 activeSong.id == item.id,
                                             animatePlayingIndicator = activeSong?.album?.startsWith(PlayerManager.BILI_SOURCE_TAG) == true &&
@@ -614,6 +785,36 @@ fun BiliPlaylistDetailScreen(
                                         )
                                     }
                                 }
+                                if (
+                                    (playlist.kind == BiliPlaylistKind.COLLECTION ||
+                                        playlist.kind == BiliPlaylistKind.SERIES) &&
+                                    ui.hasMore
+                                ) {
+                                    item(
+                                        key = "bili_archive_load_more",
+                                        contentType = "bili_archive_load_more"
+                                    ) {
+                                        PlaylistModernListItemSurface(
+                                            coverUrl = displayHeaderCoverUrl,
+                                            offlineMode = offlineMode
+                                        ) {
+                                            TextButton(
+                                                onClick = vm::loadMoreVideos,
+                                                enabled = !ui.loadingMore,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                if (ui.loadingMore) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(18.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                Text(stringResource(R.string.bili_uploader_load_more))
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -639,9 +840,8 @@ fun BiliPlaylistDetailScreen(
                         }
                     }
 
-                    NeriSnackbarHost(
+                    NeriOverlaySnackbarHost(
                         hostState = snackbarHostState,
-                        modifier = Modifier.align(Alignment.BottomCenter),
                         bottomPadding = miniPlayerHeight,
                         applyNavigationBarsPadding = false
                     )
@@ -669,7 +869,17 @@ fun BiliPlaylistDetailScreen(
                                 .filter { selectedIds.contains(it.bvid) }
                                 .map { it.toSongItem() }
                         }
-                        scope.launchLocalPlaylistMutation("createPlaylistFromBili") {
+                        scope.launchLocalPlaylistMutation(
+                            operation = "createPlaylistFromBili",
+                            onResult = { result ->
+                                scope.showPlaylistBatchExportCreatedResult(
+                                    context = context,
+                                    snackbarHostState = snackbarHostState,
+                                    repository = repo,
+                                    result = result
+                                )
+                            }
+                        ) {
                             repo.createPlaylistWithSongs(name, songs)
                         }
                         exitSelection()
@@ -688,8 +898,20 @@ fun BiliPlaylistDetailScreen(
                                 .filter { selectedIds.contains(it.bvid) }
                                 .map { it.toSongItem() }
                         }
-                        scope.launchLocalPlaylistMutation("exportSongsFromBili") {
-                            repo.addSongsToPlaylist(playlist.id, songs)
+                        scope.launchLocalPlaylistMutation(
+                            operation = "exportSongsFromBili",
+                            onResult = { result ->
+                                scope.showPlaylistBatchExportAddedResult(
+                                    context = context,
+                                    snackbarHostState = snackbarHostState,
+                                    repository = repo,
+                                    targetPlaylistId = playlist.id,
+                                    targetPlaylistName = playlist.name,
+                                    result = result
+                                )
+                            }
+                        ) {
+                            repo.addSongsToPlaylistWithResult(playlist.id, songs)
                         }
                         exitSelection()
                         exitPartsSelection()
@@ -704,21 +926,43 @@ fun BiliPlaylistDetailScreen(
                         LocalFilesPlaylist.isSystemPlaylist(it, context)
                     },
                     selectedCount = ui.videos.size,
-                    onDismissRequest = { showExportAllSheet = false },
-                    onCreateAndExport = { name ->
-                        val songs = ui.videos.map { it.toSongItem() }
-                        scope.launchLocalPlaylistMutation("createPlaylistFromBiliAll") {
-                            repo.createPlaylistWithSongs(name, songs)
+                        onDismissRequest = { showExportAllSheet = false },
+                        onCreateAndExport = { name ->
+                            val songs = ui.videos.map { it.toSongItem() }
+                            scope.launchLocalPlaylistMutation(
+                                operation = "createPlaylistFromBiliAll",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportCreatedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        result = result
+                                    )
+                                }
+                            ) {
+                                repo.createPlaylistWithSongs(name, songs)
+                            }
+                            showExportAllSheet = false
+                        },
+                        onExportToPlaylist = { playlist ->
+                            val songs = ui.videos.map { it.toSongItem() }
+                            scope.launchLocalPlaylistMutation(
+                                operation = "exportAllSongsFromBili",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportAddedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        targetPlaylistId = playlist.id,
+                                        targetPlaylistName = playlist.name,
+                                        result = result
+                                    )
+                                }
+                            ) {
+                                repo.addSongsToPlaylistWithResult(playlist.id, songs)
+                            }
+                            showExportAllSheet = false
                         }
-                        showExportAllSheet = false
-                    },
-                    onExportToPlaylist = { playlist ->
-                        val songs = ui.videos.map { it.toSongItem() }
-                        scope.launchLocalPlaylistMutation("exportAllSongsFromBili") {
-                            repo.addSongsToPlaylist(playlist.id, songs)
-                        }
-                        showExportAllSheet = false
-                    }
                 )
             }
 
@@ -750,7 +994,7 @@ fun BiliPlaylistDetailScreen(
             if (showPartsSheet && partsInfo != null) {
                 val currentPartsInfo = partsInfo!!
                 BackHandler(enabled = partsSelectionMode) { exitPartsSelection() }
-                ModalBottomSheet(
+                DensityScaledModalBottomSheet(
                     onDismissRequest = {
                         showPartsSheet = false
                         exitPartsSelection()
@@ -910,6 +1154,9 @@ private fun BiliVideoItem.toSongItem(): SongItem {
 private fun VideoRow(
     index: Int,
     video: BiliVideoItem,
+    songItem: SongItem,
+    isFavorite: Boolean,
+    onFavoriteToggle: (SongItem, Boolean) -> Unit,
     isCurrentSong: Boolean,
     animatePlayingIndicator: Boolean,
     selectionMode: Boolean,
@@ -924,6 +1171,22 @@ private fun VideoRow(
     val composeResources = LocalResources.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    val thumbnailUrl = remember(video.coverUrl) {
+        buildBiliThumbnailUrl(
+            imageUrl = video.coverUrl,
+            width = 192,
+            height = 108
+        )
+    }
+    val coverRequest = remember(context, thumbnailUrl, offlineMode) {
+        offlineCachedImageRequest(
+            context = context,
+            data = thumbnailUrl,
+            sizePx = 192,
+            allowHardware = false,
+            offlineMode = offlineMode
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -957,13 +1220,7 @@ private fun VideoRow(
         }
 
         AsyncImage(
-            model = offlineCachedImageRequest(
-                context = context,
-                data = video.coverUrl,
-                sizePx = 192,
-                allowHardware = false,
-                offlineMode = offlineMode
-            ),
+            model = coverRequest,
             contentDescription = video.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier
@@ -1022,22 +1279,65 @@ private fun VideoRow(
                 ) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.local_playlist_play_next)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
-                            val songItem = video.toSongItem()
                             PlayerManager.addToQueueNext(songItem)
                             showMoreMenu = false
                         }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.playlist_add_to_end)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
-                            val songItem = video.toSongItem()
                             PlayerManager.addToQueueEnd(songItem)
                             showMoreMenu = false
                         }
                     )
                     DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (isFavorite) {
+                                        R.string.favorite_remove
+                                    } else {
+                                        R.string.favorite_add
+                                    }
+                                )
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (isFavorite) {
+                                    Icons.Filled.Favorite
+                                } else {
+                                    Icons.Outlined.FavoriteBorder
+                                },
+                                contentDescription = null
+                            )
+                        },
+                        onClick = {
+                            onFavoriteToggle(songItem, isFavorite)
+                            showMoreMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_copy_song_info)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.ContentCopy,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
                             val songInfo = "${video.title}-${video.uploader}"
                             scope.launch {

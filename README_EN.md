@@ -71,7 +71,7 @@ NeriPlayer
 ├── Multi-source playback: NetEase / Bilibili / YouTube Music
 ├── Local-first data: cache, downloads, playlists, history, stats, settings
 ├── User-owned sync: GitHub / WebDAV metadata sync
-├── Rich playback: Media3, lyrics, effects, fluid background, floating/status-bar lyrics
+├── Rich playback: Media3, lyrics, effects, fluid background, home widgets, launcher shortcuts, floating/status-bar lyrics
 └── Recovery built in: safe mode, crash logs, ANR traces, debug probes
 ```
 
@@ -155,7 +155,9 @@ Current positioning:
   a 1080px lyric card. The Now Playing cover lyric view and bottom Dock can be
   disabled independently; narrow or heavily scaled portrait layouts switch to a
   compact control arrangement with stable touch slots. Long-press selection can
-  select a range from the first line to the target line. Floating lyrics, status-bar lyrics,
+  select a range from the first line to the target line. Lyrics-page Japanese
+  lines that contain kana get extra translation spacing so dense glyphs and
+  translations do not crowd each other. Floating lyrics, status-bar lyrics,
   SuperLyric, Lyricon, Bluetooth lyrics, and lyric editing reuse the same
   playback data path.
 - **Complete local music management**:
@@ -174,8 +176,14 @@ Current positioning:
 - **Large screens and daily controls are getting real polish**:
   tablet/landscape Now Playing, Lyrics, Settings, and artist pages use steadier
   width constraints and bottom control layouts. The `Mini Player` supports
-  horizontal swipe for previous/next without expanding the full player. Main
-  bottom tabs use interruptible directional page transitions that retain both
+  horizontal swipe for previous/next without expanding the full player. Home
+  widgets add a 4x2 playback card and a 2x2 mini player. Card backgrounds and
+  the primary play button derive their colors from the current artwork. The
+  4x2 card shows the song, artwork, progress, four playback controls, and a
+  floating-lyrics entry; the 2x2 layout makes artwork the main visual while
+  keeping the three core playback controls. Launcher shortcuts can continue
+  playback, open Explore, open Library, or shuffle My Favorite Music.
+  Main bottom tabs use interruptible directional page transitions that retain both
   outgoing and incoming scenes, avoiding glass, scroll-state, and page-state
   discontinuities during rapid switching. Long-pressing the Now Playing artwork
   opens an immersive preview with pinch-to-zoom, panning, and a download action.
@@ -232,6 +240,9 @@ Current positioning:
   lyric blur, two-level advanced blur, Coherent Feedback, the fluid Now Playing background,
   Home card toggles, default start
   destination, haptic feedback, and custom song title/artist/cover metadata.
+  OnePlus devices with high-density displays (`densityDpi >= 500`) automatically apply
+  an additional `0.95x` UI correction; normal-density devices skip it, while the
+  user's manual scale remains an additional multiplier.
   Enhanced Advanced Blur and Coherent Feedback are off by default. With Coherent
   Feedback off, playlist and related detail pages use a drawer-style transition.
   Enhanced Advanced Blur is available only on Android 13+ while its parent blur
@@ -338,12 +349,30 @@ For release build and signing details, see
   favorites, and collections.
 - 🔍 **Layered search**:
   `Explore` searches NetEase / Bilibili / YouTube Music separately.
+  NetEase supports song, playlist, and artist categories, while NetEase and
+  Bilibili results load the next page near the end of the list. The Link
+  Recognition tab accepts either a direct URL or full share text containing a
+  title and short link. It classifies NetEase songs/playlists/artists, Bilibili
+  videos/favorites/collections/creators, and YouTube videos/playlists/channels;
+  types with an existing detail screen open directly, while unsupported detail
+  types are reported explicitly.
+  Bilibili links preserve selected `p` / `cid` parts and `season_id` collection
+  context where possible, so collection shares can open the matching collection list.
+  The search field shows local search history and records debounced search
+  keywords by default. You can disable Explore search history under Settings >
+  General; disabling it hides the history and stops new records without deleting
+  existing entries, which reappear when the setting is enabled again.
   Playback metadata completion uses NetEase / QQ Music and integrates LRCLIB
-  as an external lyrics source.
+  as an external lyrics source. The lyrics editor lets users choose Kugou,
+  NetEase, QQ Music, AMLL TTML, LRCLIB, and YouTube Music before manually
+  matching lyrics, preferring word-level lyrics without hiding regular lyrics
+  while automatically removing title and credit lines from matched lyrics.
 - 🧠 **Media3 playback core**:
   `PlayerManager` handles stream resolution, queue state, shuffle/repeat,
   persistence, failure retry, playback URL refresh, YouTube prefetching, and
   platform-specific request policies.
+  Shuffle generates a real shuffled queue first, then plays, persists, and displays
+  that queue sequentially.
 - YouTube playback preserves valid login cookies, supports cookie rotation and
   anonymous resolution, reuses bootstrap/`player.js`/PoToken caches with priority
   prefetching, and falls back to EJS/HLS after direct-link rejection.
@@ -386,8 +415,10 @@ For release build and signing details, see
   conversion from PCM float into the selected device format. When following the
   track sample rate, native exclusive output tries the exact source rate against
   USB descriptors first, then tries a reported compatible rate when the exact
-  format is unavailable and compatibility fallback is enabled. Compatible UAC2
-  asynchronous topologies resolve a clock chain and explicit feedback endpoint,
+  format is unavailable and compatibility fallback is enabled. Handling of Android's
+  `USB_DEVICE_ATTACHED` event can be disabled separately when users do not want
+  NeriPlayer to react to DAC insertion.
+  Compatible UAC2 asynchronous topologies resolve a clock chain and explicit feedback endpoint,
   schedule packets from device feedback, and reacquire the feedback clock after
   long scheduling gaps. If playback startup, native transfer backpressure, or
   foreground/background transitions become unhealthy, the app tries in-place
@@ -434,8 +465,10 @@ For release build and signing details, see
   and batch downloads for online-source songs.
 - 🩷 **Local playlists and favorites**:
   built-in "My Favorite Music" and "Local Files" system playlists, plus user
-  playlists with create/rename/delete/reorder/add-song support. "My Favorite
-  Music" can sync recognizable songs to NetEase Liked Songs.
+  playlists with create/rename/delete/reorder/add-song support. Playlist or song
+  deletion shows undo feedback, and batch export into a local playlist confirms
+  the target and can undo newly added items. "My Favorite Music" can sync
+  recognizable songs to NetEase Liked Songs.
 - 🧑‍🎤 **NetEase artist pages**:
   NetEase songs can open artist pages with artist metadata, paged songs/albums,
   and follow/unfollow support. Followed artists appear in the Library Favorites
@@ -450,8 +483,10 @@ For release build and signing details, see
   remote.
 - 📊 **Playback stats**:
   records play count, accumulated listen time, first/last played time, and daily
-  stat buckets by stable track identity. Day/week/month/year/all-time views are
-  available, and stats can be synced through GitHub/WebDAV when configured. Writes are
+  stat buckets by stable track identity. Day/week/month/year/all-time views use trailing 1/7/30/365-day windows and are
+  available, and stats can be synced through GitHub/WebDAV when configured.
+  Sync merging preserves aggregate totals and daily buckets, and can lift older
+  bucket-only data into visible totals. Writes are
   debounced and flushed at important lifecycle points, with a retention bound on daily buckets.
 - 📶 **Traffic stats and download risk prompts**:
   tracks playback/download bytes, Wi-Fi/mobile/roaming distribution, and cache
@@ -477,8 +512,9 @@ For release build and signing details, see
   are filtered, and `REQUEST_SET_TRACK` can only choose a song already in the current queue.
 - 🌈 **Personalization and themes**:
   auto/light/dark mode, dynamic color, seed colors, theme styles, UI scaling,
-  custom background image, haptic feedback, lyric font size, lyric blur,
-  default start destination, and Home card toggles. Android 13+ can optionally
+  custom background image, haptic feedback, lyric font size (separate cover and
+  lyrics-page controls), lyric blur, default start destination, and Home card
+  toggles. Android 13+ can optionally
   enable Enhanced Advanced Blur for top/bottom tabs and structural settings cards;
   its radius is adjustable from `12-64 dp`, and disabling the parent preserves the
   child choice and radius while removing enhanced drawing.
@@ -486,12 +522,23 @@ For release build and signing details, see
   `RuntimeShader` / GLSL fluid background, audio-reactive dynamic background,
   cover blur background, Apple Music-style lyrics, advanced lyrics, word-timed
   lyrics, translated lyrics, lyric offset, phonetic display, long-press lyric
-  sharing, lyric card generation, lyric editing, font scaling, lyric-aware
-  haptics, and a full Lyrics page. RuntimeShader animation is enabled on Android
+  sharing, lyric card generation, lyric editing, font scaling, independent cover
+  and lyrics-page lyric / translation font scales, lyric-aware haptics, and a
+  full Lyrics page. RuntimeShader animation is enabled on Android
   13+; cover blur requires Android 12+, while advanced blur requires Android 13+.
 - 👆 **Mini Player gestures**:
   the bottom Mini Player supports horizontal swipe for previous/next while
   keeping tap-to-expand and play/pause controls.
+- 🧩 **Home screen widgets**:
+  includes a 4x2 playback card and a 2x2 mini player. Card backgrounds and the primary
+  play button derive their colors from the current artwork; the 4x2 card adds progress,
+  four direct controls, and floating-lyrics access, while 2x2 keeps artwork as the main
+  visual and retains the three core playback controls. Progress is updated locally once
+  per second during playback and immediately on pause or track changes.
+- 🚀 **Launcher shortcuts**:
+  long-pressing the app icon can continue the previous queue, open Explore, open
+  Library, or shuffle My Favorite Music. Empty queues or empty favorites report
+  feedback instead of failing silently.
 - 🪟 **Floating and status-bar lyrics**:
   system overlay lyrics with customizable color, outline, font size, position,
   alignment, and translation display, plus Meizu status-bar lyrics for select
@@ -500,7 +547,9 @@ For release build and signing details, see
   Lyricon integration, SuperLyric, external Bluetooth lyrics, pause on Bluetooth
   disconnect, and USB exclusive playback toggles. The external lyrics path
   receives the current song, playback state, position, word-level lyrics,
-  and translations.
+  and translations. Original and translated Bluetooth lyrics have independent
+  switches; when both are enabled, they use separate title and artist fields while
+  track identity remains available through album/description metadata.
 - 🛠️ **Developer mode and debug tools**:
   tap the version number **7 times** to reveal the `Debug` tab, including
   YouTube / Bili / NetEase / Search / Listen Together probes, log viewer, and
@@ -526,6 +575,8 @@ For release build and signing details, see
   web login, QR login, video search, created favorites, subscribed favorites,
   collections, favorite/collection list search, multi-part video-to-audio
   playback, and downloads.
+  Link recognition keeps the selected part and can recover collection context
+  from `season_id` or video details.
   It is not a full video discovery or comments client.
 - **YouTube Music**:
   login, home/library playlist browsing, playlist details, search, playback,
@@ -570,7 +621,8 @@ For release build and signing details, see
 ### Entry point and navigation
 
 - `MainActivity` is the only external entry point. It handles startup, notification
-  permission, external audio imports, and `neriplayer://listen-together/join` links.
+  permission, external audio imports, USB attach events, and
+  `neriplayer://listen-together/join` links.
 - If the previous launch ended with a JVM/native crash or system ANR, the app
   enters `Safe Mode` first and exposes only recovery and export actions.
 - The main UI is **Compose NavHost + dynamic bottom bar**:
@@ -586,6 +638,9 @@ For release build and signing details, see
   handoff.
 - `Now Playing` is a full-screen layer above main navigation, with a persistent
   bottom `Mini Player`. The Mini Player supports horizontal swipe for previous/next.
+- `LauncherShortcuts` maps app-icon shortcuts to continue playback, Explore,
+  Library, and shuffle-favorites requests without bypassing normal navigation
+  or playback-service state recovery.
 - `Library` uses paged navigation for Local, Favorites, NetEase, YouTube Music,
   Bilibili, and the QQ Music placeholder. It also exposes Recent Plays and
   Playback Stats.
@@ -638,19 +693,34 @@ For release build and signing details, see
   backpressure recovery, and system-output fallback. A deferred native runtime
   refresh is retried only within a bounded budget. Wake behavior follows the
   network or local source, foreground recovery can restore USB-exclusive playback,
-  and bit-perfect volume keeps software gain at 0 dB.
+  and bit-perfect volume keeps software gain at 0 dB. USB attach handling is
+  controlled by a setting; when disabled, both the Activity alias and playback
+  service ignore the `USB_DEVICE_ATTACHED` wake path.
 
 ### Search and data sources
 
 - **UI search**:
   `Explore` integrates NetEase, Bilibili, and YouTube Music as separate sources.
+  NetEase can switch among songs, playlists, and artists; NetEase and Bilibili
+  support lazy pagination; Link Recognition accepts direct links and share text
+  containing short links. Bilibili video links preserve `p` / `cid` part targets,
+  while collection shares prefer the UGC season from video details and fall back
+  to the linked `season_id` when needed. Search history is local and can be independently
+  hidden and disabled under Settings > General.
 - **Metadata completion**:
   the playback screen uses `SearchManager` with NetEase and QQ Music for cover,
   lyrics, and track metadata.
 - **Lyrics**:
   besides platform lyrics, LRCLIB is available as an external lyrics client.
-  The player supports original lyrics, translated lyrics, phonetic lyrics,
-  word timing, lyric sharing, and manual editing.
+  The lyrics editor has a dedicated Match entry where the search keyword can be
+  edited, sources are selected before searching, and results are cached
+  temporarily by source. Changing the source filter updates cached candidates
+  locally without repeated requests. Matched lyrics automatically drop title,
+  credit, and production-info lines before candidates are ranked by title,
+  artist, album, duration, and lyric type, preferring word-level lyrics while
+  keeping regular lyric candidates. The player supports original lyrics,
+  translated lyrics, phonetic lyrics, word timing, lyric sharing, and manual
+  editing.
 - **Lyricon integration**:
   `LyriconManager` outputs the current song, playback state, position,
   word-level lyrics, and translated lyrics to Lyricon and SuperLyric. Position is
@@ -682,6 +752,9 @@ For release build and signing details, see
   while cover mapping lives under `data/sync/`. GitHub/WebDAV managers and
   transports remain in their provider packages; compatibility serialization and
   most merge policies currently remain under `sync/github/`.
+  Deletion records and undo operations participate in the same merge policy so
+  locally restored songs are not removed again by stale deletion records on the
+  next sync.
 - GitHub/WebDAV sync uses a locally generated UUID as the device identifier,
   not `ANDROID_ID`.
 - GitHub sync creates a raw binary blob through the Git Data API, writes it through
@@ -856,13 +929,19 @@ and community feedback. They are not fixed-date commitments.
 
 - [ ] Video playback
 - [ ] Comment section
-- [ ] More third-party platforms such as KuGou
+- [ ] More third-party playback, library, and account capabilities
 - [ ] Fuller QQ Music account support, library data, and a more stable auth path
 
 ### Shipped recently
 
 - [x] Dual-scene main-tab transitions, interruptible reverse switching,
   advanced-glass owner handoff, and drawer-style detail feedback by default
+- [x] Standardized Snackbar feedback overlays, playlist deletion undo, and batch export undo
+- [x] Home screen widgets and launcher shortcuts
+- [x] Bilibili selected-part, collection-share, and `season_id` link recognition
+- [x] Translation spacing for Japanese kana lyric lines
+- [x] Lyrics-editor source selection, temporary result caching, and
+  word-level-first lyric matching
 - [x] Listen Together repeat/shuffle sync, stable-track-key target validation,
   server clock-offset estimation, and authoritative stream recovery
 - [x] Listen Together duration-based position projection, single-track repeat wrapping,
@@ -897,6 +976,7 @@ and community feedback. They are not fixed-date commitments.
 - [x] Local artist grouping and local artist detail pages
 - [x] NetEase artist details, paged songs/albums, and artist follow support
 - [x] Day/week/month/year/all-time playback statistics views
+- [x] Rolling playback-stat windows, synced totals, and legacy bucket-only data merging
 - [x] NetEase and Bilibili QR login
 - [x] Configurable download concurrency, recovery, and finalization reliability
 - [x] Standardized lyric embedding setting
@@ -1042,6 +1122,10 @@ We will keep improving the project over time.
 <tr>
   <td><a href="https://github.com/6xingyv/accompanist-lyrics-ui">accompanist-lyrics-ui</a></td>
   <td>The state-of-the-art karaoke lyrics composable</td>
+</tr>
+<tr>
+  <td><a href="https://github.com/chenmozhijin/LDDC">LDDC</a></td>
+  <td>Multi-platform precise lyrics downloader and manual matching UX reference</td>
 </tr>
 <tr>
   <td><a href="https://github.com/ReChronoRain/HyperCeiler">HyperCeiler</a></td>

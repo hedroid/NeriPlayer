@@ -79,14 +79,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toColorInt
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassRole
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassSurface
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
-
-internal fun maskCookieValue(value: String): String {
-    return when {
-        value.length <= 4 -> "***"
-        else -> "${value.take(2)}***${value.takeLast(2)}"
-    }
-}
+import moe.ouom.neriplayer.ui.screen.tab.settings.page.settingsHighlightTarget
 
 private val SettingsItemShape = RoundedCornerShape(18.dp)
 
@@ -167,9 +163,22 @@ internal fun LazyAnimatedVisibility(
 
 /** 主题色预览行（当关闭系统动态取色时显示） */
 @Composable
-internal fun ThemeSeedListItem(seedColorHex: String, onClick: () -> Unit) {
+internal fun ThemeSeedListItem(
+    seedColorHex: String,
+    onClick: () -> Unit,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null
+) {
     ListItem(
-        modifier = Modifier.settingsItemClickable(onClick = onClick),
+        modifier = Modifier
+            .settingsHighlightTarget(
+                targetId = "manual:theme_seed_color",
+                highlightTargetId = highlightTargetId,
+                highlightPulse = highlightPulse,
+                onHighlightFinished = onHighlightFinished
+            )
+            .settingsItemClickable(onClick = onClick),
         leadingContent = {
             Icon(
                 imageVector = Icons.Outlined.ColorLens,
@@ -239,14 +248,24 @@ internal fun ThemeModeActionButton(
         label = "theme_toggle_container_color"
     )
 
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(containerColor)
+    AdvancedGlassSurface(
+        role = AdvancedGlassRole.ThemeModeToggle,
+        modifier = Modifier.size(36.dp),
+        shape = CircleShape,
+        fallbackColor = containerColor,
+        tintColor = if (isDarkTheme) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        }
     ) {
         HapticIconButton(
-            onClick = { centerInWindow?.let { onToggleRequest(it, revealStartRadiusPx) } },
+            onClick = {
+                onToggleRequest(
+                    centerInWindow ?: Offset.Zero,
+                    revealStartRadiusPx
+                )
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .onGloballyPositioned { coordinates ->

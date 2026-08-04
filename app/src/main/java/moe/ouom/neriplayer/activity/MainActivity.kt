@@ -35,6 +35,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,7 +63,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import moe.ouom.neriplayer.ui.component.overlay.DensityScaledAlertDialog as AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
@@ -73,6 +74,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -85,9 +87,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.graphics.toColorInt
@@ -128,6 +132,7 @@ import moe.ouom.neriplayer.core.startup.safemode.SafeModeRecoveryCoordinator
 import moe.ouom.neriplayer.data.local.audioimport.LocalAudioImportManager
 import moe.ouom.neriplayer.data.local.media.LocalMediaSupport
 import moe.ouom.neriplayer.data.settings.SettingsRepository
+import moe.ouom.neriplayer.data.settings.readBootstrapSettingsSnapshotSync
 import moe.ouom.neriplayer.core.startup.sync.StartupSyncScheduler
 import moe.ouom.neriplayer.core.startup.sync.StartupSyncWarningCoordinator
 import moe.ouom.neriplayer.core.startup.sync.StartupSyncWarningRepository
@@ -139,8 +144,11 @@ import moe.ouom.neriplayer.listentogether.invite.ListenTogetherInvite
 import moe.ouom.neriplayer.listentogether.validation.normalizeListenTogetherRoomId
 import moe.ouom.neriplayer.listentogether.invite.parseListenTogetherInvite
 import moe.ouom.neriplayer.listentogether.invite.resolveListenTogetherInviteJoinBaseUrl
+import moe.ouom.neriplayer.navigation.LauncherShortcutRequest
+import moe.ouom.neriplayer.navigation.launcherShortcutActionFromIntentAction
 import moe.ouom.neriplayer.ui.MobileDataDownloadInterruptionDialog
 import moe.ouom.neriplayer.ui.NeriApp
+import moe.ouom.neriplayer.ui.component.overlay.LocalOverlaySurfaceScale
 import moe.ouom.neriplayer.ui.feedback.AppFeedback
 import moe.ouom.neriplayer.ui.onboarding.StartupOnboardingScreen
 import moe.ouom.neriplayer.ui.screen.safemode.SafeModeScreen
@@ -154,6 +162,9 @@ import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.platform.NightModeHelper
 import moe.ouom.neriplayer.core.startup.safemode.SafeModeManager
 import moe.ouom.neriplayer.util.platform.lockPortraitIfPhone
+import moe.ouom.neriplayer.util.platform.applyOnePlusHighDensityDisplayCorrection
+import moe.ouom.neriplayer.util.platform.applyPreferredHighRefreshRate
+import moe.ouom.neriplayer.util.platform.resolveOnePlusHighDensityUiScale
 
 private data class PendingAudioServiceStart(
     val requestToken: Long,
@@ -205,6 +216,48 @@ private fun GitHubSyncWarningDialog(
     )
 }
 
+@Composable
+private fun AppUiDensityRoot(
+    userScale: Float,
+    content: @Composable () -> Unit
+) {
+    val baseContext = LocalContext.current
+    val baseDensity = LocalDensity.current
+    val scaledDensity = remember(baseDensity, userScale) {
+        Density(
+            density = baseDensity.density * userScale,
+            fontScale = baseDensity.fontScale
+        )
+    }
+    val uncorrectedDensityDpi = baseContext.applicationContext.resources
+        .displayMetrics.densityDpi
+    val surfaceScale = remember(userScale, uncorrectedDensityDpi) {
+        resolveOnePlusHighDensityUiScale(
+            userScale = userScale,
+            manufacturer = Build.MANUFACTURER,
+            brand = Build.BRAND,
+            densityDpi = uncorrectedDensityDpi
+        )
+    }
+
+    CompositionLocalProvider(
+        LocalDensity provides scaledDensity,
+        LocalOverlaySurfaceScale provides surfaceScale,
+        content = content
+    )
+}
+
+private fun MainActivity.setNeriContent(
+    content: @Composable () -> Unit
+) {
+    setContent {
+        CompositionLocalProvider(
+            LocalActivityResultRegistryOwner provides this@setNeriContent,
+            content = content
+        )
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private val settingsRepository by lazy { SettingsRepository(applicationContext) }
     private val startupCrashReportManager by lazy { StartupCrashReportManager(applicationContext) }
@@ -212,6 +265,10 @@ class MainActivity : ComponentActivity() {
     private var externalAudioMetadataHydrationJob: Job? = null
     private var externalAudioRequestToken = 0L
     private var pendingExternalAudioServiceStart: PendingAudioServiceStart? = null
+    private var launcherShortcutRequestToken = 0L
+    private val pendingLauncherShortcutRequest =
+        MutableStateFlow<LauncherShortcutRequest?>(null)
+    private val launcherShortcutRequestFlow = pendingLauncherShortcutRequest.asStateFlow()
     private val pendingListenTogetherInvite = MutableStateFlow<ListenTogetherInvite?>(null)
     private val listenTogetherInviteFlow = pendingListenTogetherInvite.asStateFlow()
     private val listenTogetherStatusMessage = MutableStateFlow<String?>(null)
@@ -224,11 +281,13 @@ class MainActivity : ComponentActivity() {
     private var safeModeActive = false
 
     override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(LanguageManager.applyLanguage(newBase))
+        val localizedContext = LanguageManager.applyLanguage(newBase)
+        super.attachBaseContext(applyOnePlusHighDensityDisplayCorrection(localizedContext))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         safeModeActive = SafeModeManager.shouldEnterSafeMode(this)
+        val startupSettingsSnapshot = readBootstrapSettingsSnapshotSync(this)
         val startupThemeSnapshot = StartupThemeSnapshotProvider.read(
             context = this,
             safeModeActive = safeModeActive
@@ -239,6 +298,8 @@ class MainActivity : ComponentActivity() {
         )
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        applyPreferredHighRefreshRate(startupSettingsSnapshot.preferHighRefreshRate)
+        observePreferredHighRefreshRate()
         lockPortraitIfPhone()
         enableEdgeToEdge()
         applyWindowBackground(
@@ -249,40 +310,47 @@ class MainActivity : ComponentActivity() {
         )
 
         if (safeModeActive) {
-            setContent {
-                val systemDark = rememberActualSystemDarkTheme()
-                val useDark = remember(systemDark) {
-                    StartupThemeResolver.resolveSnapshotUseDark(
-                        snapshot = startupThemeSnapshot,
-                        systemDark = systemDark
-                    )
-                }
-                NeriTheme(useDark = useDark, useDynamic = false) {
-                    SideEffect {
-                        val controller = WindowInsetsControllerCompat(window, window.decorView)
-                        controller.isAppearanceLightStatusBars = !useDark
-                        controller.isAppearanceLightNavigationBars = !useDark
+            setNeriContent {
+                val uiDensityScale by settingsRepository.uiDensityScaleFlow
+                    .collectAsStateWithLifecycle(initialValue = 1.0f)
+                AppUiDensityRoot(uiDensityScale) {
+                    val systemDark = rememberActualSystemDarkTheme()
+                    val useDark = remember(systemDark) {
+                        StartupThemeResolver.resolveSnapshotUseDark(
+                            snapshot = startupThemeSnapshot,
+                            systemDark = systemDark
+                        )
                     }
-                    SafeModeScreen(
-                        onRestoreNormal = ::restoreFromSafeMode
-                    )
+                    NeriTheme(useDark = useDark, useDynamic = false) {
+                        SideEffect {
+                            val controller = WindowInsetsControllerCompat(window, window.decorView)
+                            controller.isAppearanceLightStatusBars = !useDark
+                            controller.isAppearanceLightNavigationBars = !useDark
+                        }
+                        SafeModeScreen(
+                            onRestoreNormal = ::restoreFromSafeMode
+                        )
+                    }
                 }
             }
             return
         }
 
-        setContent {
-            val devModeEnabled by settingsRepository.devModeEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
-            val alwaysRecordLogsEnabled by settingsRepository.alwaysRecordLogsEnabledFlow.collectAsStateWithLifecycle(
-                initialValue = false
-            )
-            LaunchedEffect(devModeEnabled, alwaysRecordLogsEnabled) {
-                StartupLogInitializer.sync(
-                    context = this@MainActivity,
-                    devModeEnabled = devModeEnabled,
-                    alwaysRecordLogsEnabled = alwaysRecordLogsEnabled
+        setNeriContent {
+            val uiDensityScale by settingsRepository.uiDensityScaleFlow
+                .collectAsStateWithLifecycle(initialValue = 1.0f)
+            AppUiDensityRoot(uiDensityScale) {
+                val devModeEnabled by settingsRepository.devModeEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+                val alwaysRecordLogsEnabled by settingsRepository.alwaysRecordLogsEnabledFlow.collectAsStateWithLifecycle(
+                    initialValue = false
                 )
-            }
+                LaunchedEffect(devModeEnabled, alwaysRecordLogsEnabled) {
+                    StartupLogInitializer.sync(
+                        context = this@MainActivity,
+                        devModeEnabled = devModeEnabled,
+                        alwaysRecordLogsEnabled = alwaysRecordLogsEnabled
+                    )
+                }
 
             val dynamicColor by settingsRepository.dynamicColorFlow.collectAsStateWithLifecycle(
                 initialValue = startupThemeSnapshot.dynamicColor
@@ -795,6 +863,9 @@ class MainActivity : ComponentActivity() {
 
                             NeriApp(
                                 initialThemeSnapshot = startupThemeSnapshot,
+                                launcherShortcutRequestFlow = launcherShortcutRequestFlow,
+                                onLauncherShortcutRequestConsumed =
+                                    ::clearLauncherShortcutRequest,
                                 onIsDarkChanged = { isDark ->
                                     // 主题切换时保留窗口底色与内容主题一致
                                     applyWindowBackground(isDark)
@@ -869,6 +940,7 @@ class MainActivity : ComponentActivity() {
                             pendingStartupCrashReport = null
                         }
                     )
+                }
                 }
             }
         }
@@ -953,8 +1025,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
+        if (handleLauncherShortcutIntent(intent)) return
         if (handleListenTogetherInviteIntent(intent)) return
         handleExternalAudioIntent(intent)
+    }
+
+    private fun handleLauncherShortcutIntent(intent: Intent?): Boolean {
+        val action = launcherShortcutActionFromIntentAction(intent?.action) ?: return false
+        pendingLauncherShortcutRequest.value = LauncherShortcutRequest(
+            token = ++launcherShortcutRequestToken,
+            action = action
+        )
+        setIntent(Intent(this, MainActivity::class.java))
+        return true
+    }
+
+    private fun clearLauncherShortcutRequest(request: LauncherShortcutRequest) {
+        if (pendingLauncherShortcutRequest.value?.token == request.token) {
+            pendingLauncherShortcutRequest.value = null
+        }
     }
 
     private fun handleListenTogetherInviteIntent(intent: Intent?): Boolean {
@@ -1194,6 +1283,16 @@ class MainActivity : ComponentActivity() {
         externalAudioMetadataHydrationJob?.cancel()
         super.onDestroy()
         ExceptionHandler.cleanup()
+    }
+
+    private fun observePreferredHighRefreshRate() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                settingsRepository.preferHighRefreshRateFlow.collect { enabled ->
+                    applyPreferredHighRefreshRate(enabled)
+                }
+            }
+        }
     }
 
     @Suppress("DEPRECATION")

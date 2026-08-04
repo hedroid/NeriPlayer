@@ -93,12 +93,15 @@ import moe.ouom.neriplayer.core.player.model.PlaybackAudioSource
 import moe.ouom.neriplayer.core.player.model.PlaybackEqualizerPresetId
 import moe.ouom.neriplayer.core.player.model.PlaybackSoundConfig
 import moe.ouom.neriplayer.core.player.model.PlaybackSoundState
+import moe.ouom.neriplayer.core.player.model.PlayerQueueDisplayState
 import moe.ouom.neriplayer.core.player.model.PlaybackUrlCandidate
 import moe.ouom.neriplayer.core.player.model.PlayerEvent
 import moe.ouom.neriplayer.core.player.model.SongUrlResult
+import moe.ouom.neriplayer.core.player.model.buildPlayerQueueDisplayState
 import moe.ouom.neriplayer.core.player.policy.progress.LONG_FORM_PLAYBACK_MIN_DURATION_MS
 import moe.ouom.neriplayer.core.player.policy.progress.resolveLongFormPlaybackPositionForPersistence
 import moe.ouom.neriplayer.core.player.policy.progress.resolveLongFormPlaybackResumePosition
+import moe.ouom.neriplayer.core.player.metadata.ExternalBluetoothLyricPayload
 import moe.ouom.neriplayer.core.player.metadata.NeteaseLyricsCacheEntry
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackLoudnessGainMb
 import moe.ouom.neriplayer.core.player.model.normalizePlaybackPitch
@@ -176,6 +179,7 @@ import moe.ouom.neriplayer.core.player.persistence.playBiliVideoAsAudioImpl
 import moe.ouom.neriplayer.core.player.persistence.playFromQueueImpl
 import moe.ouom.neriplayer.core.player.persistence.rebaseUserLyricOffsetsForSourceImpl
 import moe.ouom.neriplayer.core.player.persistence.removeCurrentFromFavoritesImpl
+import moe.ouom.neriplayer.core.player.persistence.removeQueueItemImpl
 import moe.ouom.neriplayer.core.player.persistence.replaceCurrentInQueueAndPlayImpl
 import moe.ouom.neriplayer.core.player.persistence.replaceMetadataFromSearchImpl
 import moe.ouom.neriplayer.core.player.persistence.resumeRestoredPlaybackIfNeededImpl
@@ -297,6 +301,7 @@ object PlayerManager {
     internal var progressJob: Job? = null
     internal var lyriconUpdateJob: Job? = null
     internal var externalBluetoothLyricsLoadJob: Job? = null
+    internal var externalBluetoothTranslationLoadJob: Job? = null
     internal var volumeFadeJob: Job? = null
     internal var pendingPauseJob: Job? = null
         set(value) {
@@ -404,6 +409,7 @@ object PlayerManager {
     internal var amllLyricsEnabled = false
     internal var statusBarLyricsEnable = false
     internal var externalBluetoothLyricsEnabled = false
+    internal var externalBluetoothTranslationEnabled = false
     internal var floatingLyricsEnabled = false
     internal var floatingLyricsShowTranslation = true
     internal var cloudMusicLyricDefaultOffsetMs = DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS
@@ -436,11 +442,10 @@ object PlayerManager {
     internal var currentPlaylist: List<SongItem> = emptyList()
     @Volatile
     internal var currentIndex = -1
-
-    /** 记录随机播放历史, 支持上一首和跨轮次回退 */
-    internal val shuffleHistory = mutableListOf<Int>()   // 已播放过的随机索引历史
-    internal val shuffleFuture  = mutableListOf<Int>()   // queued next items for shuffle history
-    internal var shuffleBag     = mutableListOf<Int>()   // remaining shuffle candidates for current cycle
+    @Volatile
+    internal var shuffleRestorePlaylistReference: List<SongItem>? = null
+    @Volatile
+    internal var shuffleRestoreCurrentIndex = -1
 
     @Volatile
     internal var consecutivePlayFailures = 0
@@ -509,6 +514,8 @@ object PlayerManager {
 
     internal val _currentQueueFlow = MutableStateFlow<List<SongItem>>(emptyList())
     val currentQueueFlow: StateFlow<List<SongItem>> = _currentQueueFlow
+    internal val _currentQueueDisplayRevisionFlow = MutableStateFlow(0L)
+    val currentQueueDisplayRevisionFlow: StateFlow<Long> = _currentQueueDisplayRevisionFlow
 
     internal val _isPlayingFlow = MutableStateFlow(false)
     val isPlayingFlow: StateFlow<Boolean> = _isPlayingFlow
@@ -559,6 +566,10 @@ object PlayerManager {
     val externalBluetoothLyricLineFlow: StateFlow<String?> = _externalBluetoothLyricLineFlow
     internal val _floatingTranslatedLyricLineFlow = MutableStateFlow<String?>(null)
     val floatingTranslatedLyricLineFlow: StateFlow<String?> = _floatingTranslatedLyricLineFlow
+    internal val _externalBluetoothLyricPayloadFlow =
+        MutableStateFlow(ExternalBluetoothLyricPayload())
+    internal val externalBluetoothLyricPayloadFlow: StateFlow<ExternalBluetoothLyricPayload> =
+        _externalBluetoothLyricPayloadFlow
 
     internal val _playerEventFlow = MutableSharedFlow<PlayerEvent>()
     val playerEventFlow: SharedFlow<PlayerEvent> = _playerEventFlow.asSharedFlow()
@@ -1116,6 +1127,8 @@ object PlayerManager {
         currentMediaUrlResolvedAtMs = 0L
         setCurrentSongForPlayback(null)
         _currentQueueFlow.value = emptyList()
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
         currentPlaylist = emptyList()
         currentIndex = -1
         consecutivePlayFailures = 0
@@ -1389,6 +1402,17 @@ object PlayerManager {
 
     internal fun queueIndexOf(song: SongItem, playlist: List<SongItem> = currentPlaylist): Int {
         return playlist.indexOfFirst { it.sameIdentityAs(song) }
+    }
+
+    fun currentQueueDisplaySnapshot(): PlayerQueueDisplayState {
+        return buildPlayerQueueDisplayState(
+            playlist = currentPlaylist,
+            currentIndex = currentIndex
+        )
+    }
+
+    internal fun bumpCurrentQueueDisplayRevision() {
+        _currentQueueDisplayRevisionFlow.value = _currentQueueDisplayRevisionFlow.value + 1
     }
 
     internal fun localMediaSource(song: SongItem): String? {
@@ -2495,6 +2519,8 @@ object PlayerManager {
 
     fun moveQueueItem(fromIndex: Int, toIndex: Int) = moveQueueItemImpl(fromIndex, toIndex)
 
+    fun removeQueueItem(index: Int) = removeQueueItemImpl(index)
+
     fun reorderQueue(queue: List<SongItem>, currentIndexInQueue: Int) =
         reorderQueueImpl(queue, currentIndexInQueue)
 
@@ -2518,7 +2544,8 @@ object PlayerManager {
         restoreBaseCover: Boolean = false,
         restoreBaseName: Boolean = false,
         restoreBaseArtist: Boolean = false,
-        clearMatchedMetadata: Boolean = false
+        clearMatchedMetadata: Boolean = false,
+        writeLocalMetadata: Boolean = false
     ) = updateSongCustomInfoImpl(
         originalSong,
         customCoverUrl,
@@ -2527,7 +2554,8 @@ object PlayerManager {
         restoreBaseCover,
         restoreBaseName,
         restoreBaseArtist,
-        clearMatchedMetadata
+        clearMatchedMetadata,
+        writeLocalMetadata
     )
 
     fun hydrateSongMetadata(originalSong: SongItem, updatedSong: SongItem) =
@@ -2559,6 +2587,12 @@ object PlayerManager {
     suspend fun updateSongLyricsAndTranslation(
         songToUpdate: SongItem,
         newLyrics: String?,
-        newTranslatedLyrics: String?
-    ) = updateSongLyricsAndTranslationImpl(songToUpdate, newLyrics, newTranslatedLyrics)
+        newTranslatedLyrics: String?,
+        writeLocalMetadata: Boolean = false
+    ) = updateSongLyricsAndTranslationImpl(
+        songToUpdate = songToUpdate,
+        newLyrics = newLyrics,
+        newTranslatedLyrics = newTranslatedLyrics,
+        writeLocalMetadata = writeLocalMetadata
+    )
 }

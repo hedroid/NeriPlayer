@@ -28,6 +28,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
@@ -52,11 +53,18 @@ import java.util.Locale
 
 private val USB_EXCLUSIVE_BACKGROUND_PERMISSION_PROMPT_SUPPRESSED =
     booleanPreferencesKey("usb_exclusive_background_permission_prompt_suppressed")
+private val NOW_PLAYING_CONTROL_PLACEMENT =
+    intPreferencesKey("nowplaying_control_placement")
+private val NOW_PLAYING_CONTROL_SIZE =
+    intPreferencesKey("nowplaying_control_size")
+private val LYRICS_CONTROL_SIZE =
+    intPreferencesKey("lyrics_control_size")
 
 class SettingsRepository(private val context: Context) {
     private val autoSettingsRepository = AutoSettingsRepository(context)
     private val autoSettingSpecRepository = AutoSettingSpecRepository(context)
     private val usbExclusiveSettingsStore = UsbExclusiveSettingsStore(context)
+    private val isDimensityBuild = isCurrentBuildDimensity()
 
     private fun <T> dataStoreSettingFlow(transform: (Preferences) -> T): Flow<T> {
         return context.dataStore.data
@@ -90,11 +98,23 @@ class SettingsRepository(private val context: Context) {
     val nowPlayingToolbarDockEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingToolbarDockEnabledFlow
 
+    val playbackControlLayoutPreferencesFlow: Flow<PlaybackControlLayoutPreferences> =
+        dataStoreSettingFlow { preferences ->
+            resolvePlaybackControlLayoutPreferences(
+                nowPlayingPlacementValue = preferences[NOW_PLAYING_CONTROL_PLACEMENT],
+                nowPlayingSizeValue = preferences[NOW_PLAYING_CONTROL_SIZE],
+                lyricsSizeValue = preferences[LYRICS_CONTROL_SIZE]
+            )
+        }
+
     val nowPlayingKeepScreenOnFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingKeepScreenOnFlow
 
     val nowPlayingShowTitleFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingShowTitleFlow
+
+    val nowPlayingSongTitleMarqueeEnabledFlow: Flow<Boolean> =
+        autoSettingsRepository.nowPlayingSongTitleMarqueeEnabledFlow
 
     val nowPlayingProgressShowQualitySwitchFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingProgressShowQualitySwitchFlow
@@ -165,8 +185,17 @@ class SettingsRepository(private val context: Context) {
     val alwaysRecordLogsEnabledFlow: Flow<Boolean> =
         settingFlow(AutoSettingsSchema.general.alwaysRecordLogsEnabled)
 
+    val exploreSearchHistoryEnabledFlow: Flow<Boolean> =
+        settingFlow(AutoSettingsSchema.general.exploreSearchHistoryEnabled)
+
+    val usbDeviceAttachHandlingEnabledFlow: Flow<Boolean> =
+        settingFlow(AutoSettingsSchema.general.usbDeviceAttachHandlingEnabled)
+
     val playbackServiceIdleShutdownMinutesFlow: Flow<Int> =
         autoSettingsRepository.playbackServiceIdleShutdownMinutesFlow
+
+    val preferHighRefreshRateFlow: Flow<Boolean> =
+        settingFlow(AutoSettingsSchema.general.preferHighRefreshRate)
 
     val themeSeedColorFlow: Flow<String> =
         dataStoreSettingFlow { it[SettingsKeys.THEME_SEED_COLOR] ?: ThemeDefaults.DEFAULT_SEED_COLOR_HEX }
@@ -226,6 +255,9 @@ class SettingsRepository(private val context: Context) {
     val externalBluetoothLyricsEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.externalBluetoothLyricsEnabledFlow
 
+    val externalBluetoothTranslationEnabledFlow: Flow<Boolean> =
+        autoSettingsRepository.externalBluetoothTranslationEnabledFlow
+
     val floatingLyricsPreferencesFlow: Flow<FloatingLyricsPreferences> =
         dataStoreSettingFlow { prefs ->
             val outlineWidthDp = prefs[SettingsKeys.FLOATING_LYRICS_OUTLINE_WIDTH_DP] ?: 1.6f
@@ -233,6 +265,8 @@ class SettingsRepository(private val context: Context) {
                 enabled = prefs[SettingsKeys.FLOATING_LYRICS_ENABLED] ?: false,
                 hideInApp = prefs[SettingsKeys.FLOATING_LYRICS_HIDE_IN_APP] ?: false,
                 textColorHex = prefs[SettingsKeys.FLOATING_LYRICS_TEXT_COLOR] ?: "FFFFFF",
+                renderStyle = prefs[SettingsKeys.FLOATING_LYRICS_RENDER_STYLE]
+                    ?: FLOATING_LYRICS_RENDER_STYLE_SHADOW,
                 outlineColorHex = prefs[SettingsKeys.FLOATING_LYRICS_OUTLINE_COLOR] ?: "121212",
                 fontSizeSp = prefs[SettingsKeys.FLOATING_LYRICS_FONT_SIZE_SP] ?: 22f,
                 outlineWidthDp = outlineWidthDp,
@@ -266,6 +300,14 @@ class SettingsRepository(private val context: Context) {
     val enhancedAdvancedBlurRadiusDpFlow: Flow<Float> =
         autoSettingsRepository.enhancedAdvancedBlurRadiusDpFlow
 
+    val advancedBlurQualityFlow: Flow<AdvancedBlurQuality> =
+        dataStoreSettingFlow { preferences ->
+            AdvancedBlurQualityPreference.resolve(
+                value = preferences[SettingsKeys.ADVANCED_BLUR_QUALITY],
+                isDimensityDevice = isDimensityBuild
+            )
+        }
+
     val nowPlayingAudioReactiveEnabledFlow: Flow<Boolean> =
         autoSettingsRepository.nowPlayingAudioReactiveEnabledFlow
 
@@ -284,6 +326,17 @@ class SettingsRepository(private val context: Context) {
     val lyricFontScaleFlow: Flow<Float> =
         dataStoreSettingFlow {
             normalizeLyricFontScale(it[SettingsKeys.LYRIC_FONT_SCALE] ?: 1.0f)
+        }
+
+    val lyricFontScalesFlow: Flow<LyricFontScales> =
+        dataStoreSettingFlow { prefs ->
+            resolveLyricFontScales(
+                legacyScale = prefs[SettingsKeys.LYRIC_FONT_SCALE] ?: 1.0f,
+                coverLyric = prefs[SettingsKeys.NOWPLAYING_COVER_LYRIC_FONT_SCALE],
+                coverTranslation = prefs[SettingsKeys.NOWPLAYING_COVER_TRANSLATION_FONT_SCALE],
+                lyricsPageLyric = prefs[SettingsKeys.LYRICS_PAGE_LYRIC_FONT_SCALE],
+                lyricsPageTranslation = prefs[SettingsKeys.LYRICS_PAGE_TRANSLATION_FONT_SCALE]
+            )
         }
 
     val uiDensityScaleFlow: Flow<Float> =
@@ -757,12 +810,17 @@ class SettingsRepository(private val context: Context) {
         autoSettingsRepository.setExternalBluetoothLyricsEnabled(enabled)
     }
 
+    suspend fun setExternalBluetoothTranslationEnabled(enabled: Boolean) {
+        autoSettingsRepository.setExternalBluetoothTranslationEnabled(enabled)
+    }
+
     suspend fun setFloatingLyricsPreferences(preferences: FloatingLyricsPreferences) {
         val normalized = preferences.normalized()
         context.dataStore.edit { prefs ->
             prefs[SettingsKeys.FLOATING_LYRICS_ENABLED] = normalized.enabled
             prefs[SettingsKeys.FLOATING_LYRICS_HIDE_IN_APP] = normalized.hideInApp
             prefs[SettingsKeys.FLOATING_LYRICS_TEXT_COLOR] = normalized.textColorHex
+            prefs[SettingsKeys.FLOATING_LYRICS_RENDER_STYLE] = normalized.renderStyle
             prefs[SettingsKeys.FLOATING_LYRICS_OUTLINE_COLOR] = normalized.outlineColorHex
             prefs[SettingsKeys.FLOATING_LYRICS_FONT_SIZE_SP] = normalized.fontSizeSp
             prefs[SettingsKeys.FLOATING_LYRICS_OUTLINE_WIDTH_DP] = normalized.outlineWidthDp
@@ -799,6 +857,10 @@ class SettingsRepository(private val context: Context) {
         autoSettingsRepository.setEnhancedAdvancedBlurRadiusDp(radiusDp)
     }
 
+    suspend fun setAdvancedBlurQuality(quality: AdvancedBlurQuality) {
+        autoSettingsRepository.setAdvancedBlurQuality(quality.storageValue)
+    }
+
     suspend fun setNowPlayingAudioReactiveEnabled(enabled: Boolean) {
         autoSettingsRepository.setNowPlayingAudioReactiveEnabled(enabled)
     }
@@ -821,6 +883,28 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLyricFontScale(scale: Float) {
         context.dataStore.edit { it[SettingsKeys.LYRIC_FONT_SCALE] = normalizeLyricFontScale(scale) }
+    }
+
+    suspend fun setLyricFontScale(target: LyricFontScaleTarget, scale: Float) {
+        val key = when (target) {
+            LyricFontScaleTarget.COVER_LYRIC -> SettingsKeys.NOWPLAYING_COVER_LYRIC_FONT_SCALE
+            LyricFontScaleTarget.COVER_TRANSLATION ->
+                SettingsKeys.NOWPLAYING_COVER_TRANSLATION_FONT_SCALE
+            LyricFontScaleTarget.LYRICS_PAGE_LYRIC -> SettingsKeys.LYRICS_PAGE_LYRIC_FONT_SCALE
+            LyricFontScaleTarget.LYRICS_PAGE_TRANSLATION ->
+                SettingsKeys.LYRICS_PAGE_TRANSLATION_FONT_SCALE
+        }
+        context.dataStore.edit { it[key] = normalizeLyricFontScale(scale) }
+    }
+
+    suspend fun setPlaybackControlLayoutPreferences(
+        preferences: PlaybackControlLayoutPreferences
+    ) {
+        context.dataStore.edit {
+            it[NOW_PLAYING_CONTROL_PLACEMENT] = preferences.nowPlayingPlacement.ordinal
+            it[NOW_PLAYING_CONTROL_SIZE] = preferences.nowPlayingSize.ordinal
+            it[LYRICS_CONTROL_SIZE] = preferences.lyricsSize.ordinal
+        }
     }
 
     suspend fun setUiDensityScale(scale: Float) {

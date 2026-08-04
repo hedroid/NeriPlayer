@@ -27,7 +27,6 @@ import android.app.Application
 import android.content.ClipData
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.RepeatMode
@@ -74,6 +73,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.Card
@@ -107,10 +107,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -134,6 +136,7 @@ import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.launchLocalPlaylistMutation
+import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
 import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
@@ -141,8 +144,11 @@ import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
+import moe.ouom.neriplayer.ui.rememberMainTabDetailVisibilityState
 import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportAddedResult
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportCreatedResult
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionDetailUiState
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionDetailViewModel
 import moe.ouom.neriplayer.ui.viewmodel.playlist.NeteaseCollectionHeader
@@ -152,14 +158,24 @@ import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.ui.haptic.HapticFloatingActionButton
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
-import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.NeriOverlaySnackbarHost
 import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.format.formatDuration
 import moe.ouom.neriplayer.util.format.formatPlayCount
 import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
 import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
+import moe.ouom.neriplayer.util.search.playlistSearchValues
 import kotlin.random.Random
+
+internal fun isNeteaseCollectionHeaderForRoute(
+    header: NeteaseCollectionHeader?,
+    playlistId: Long,
+    playlistSource: String
+): Boolean {
+    return header?.id == playlistId &&
+        header.isAlbum == (playlistSource == "neteaseAlbum")
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -208,6 +224,7 @@ fun NeteasePlaylistDetailScreen(
         ui = ui,
         playlistId = playlist.id,
         playlistSource = "netease",
+        initialCoverUrl = playlist.picUrl,
         onRetry = vm::retry,
         onBack = onBack,
         onSongClick = onSongClick,
@@ -262,6 +279,7 @@ fun NeteaseAlbumDetailScreen(
         ui = ui,
         playlistId = album.id,
         playlistSource = "neteaseAlbum",
+        initialCoverUrl = album.picUrl,
         onRetry = vm::retry,
         onBack = onBack,
         onSongClick = onSongClick,
@@ -276,6 +294,7 @@ fun DetailScreen(
     ui: NeteaseCollectionDetailUiState,
     playlistId: Long,
     playlistSource: String,
+    initialCoverUrl: String? = null,
     onRetry: () -> Unit,
     onBack: () -> Unit = {},
     onSongClick: (List<SongItem>, Int) -> Unit = { _, _ -> },
@@ -296,9 +315,16 @@ fun DetailScreen(
     val listState = rememberSaveable(playlistId, saver = LazyListState.Saver) {
         LazyListState(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 0)
     }
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var headerSearchFocused by remember { mutableStateOf(false) }
+    var dockedSearchFocused by remember { mutableStateOf(false) }
+    val searchInputState = rememberPlaylistSearchInputState(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it }
+    )
     val searchFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -306,6 +332,9 @@ fun DetailScreen(
     // 多选与导出到本地歌单
     val repo = remember(context) { LocalPlaylistRepository.getInstance(context) }
     val allPlaylists by repo.playlists.collectAsState()
+    val favoriteSongs = remember(allPlaylists, context) {
+        FavoritesPlaylist.firstOrNull(allPlaylists, context)?.songs.orEmpty()
+    }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     fun toggleSelect(id: Long) {
@@ -339,30 +368,124 @@ fun DetailScreen(
     var showExportAllSheet by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val favoriteAddedText = stringResource(R.string.favorite_added)
+    val favoriteRemovedText = stringResource(R.string.favorite_removed)
+    fun toggleSongFavorite(song: SongItem, isFavoriteSong: Boolean) {
+        val message = if (isFavoriteSong) favoriteRemovedText else favoriteAddedText
+        scope.launchLocalPlaylistMutation(
+            operation = "toggleNeteaseDetailSongFavorite",
+            onResult = { result ->
+                if (result.isSuccess) {
+                    scope.launch {
+                        snackbarHostState.showNeriSnackbar(message)
+                    }
+                }
+            }
+        ) {
+            if (isFavoriteSong) {
+                repo.removeFromFavorites(song)
+            } else {
+                repo.addToFavorites(song)
+            }
+        }
+    }
+    val routeHeader = ui.header?.takeIf { header ->
+        isNeteaseCollectionHeaderForRoute(
+            header = header,
+            playlistId = playlistId,
+            playlistSource = playlistSource
+        )
+    }
+    val displayCoverUrl = resolvePlaylistDetailCoverUrl(
+        headerCoverUrl = routeHeader?.coverUrl,
+        fallbackCoverUrl = initialCoverUrl
+    )
     val playlistChromeColor = rememberPlaylistModernHeroBackgroundColor(
-        coverUrl = ui.header?.coverUrl,
+        coverUrl = displayCoverUrl,
         offlineMode = offlineMode
     )
-    val playlistChromeCollapsed by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    val searchVisible = shouldShowPlaylistSearch(
+        showSearch = showSearch,
+        selectionMode = selectionMode
+    )
+    val searchVisibilityProgress = playlistModernSearchVisibilityProgress(
+        searchVisible = searchVisible,
+        label = "netease-playlist-search-visibility"
+    )
+    val searchVisibilityEased = resolvePlaylistEasedProgress(searchVisibilityProgress)
+    val playlistHeroHeight = interpolatePlaylistDp(
+        start = PlaylistModernHeroHeight,
+        end = PlaylistModernHeroSearchHeight,
+        fraction = searchVisibilityEased
+    )
+    val playlistChromeCollapseProgress by remember(
+        listState,
+        density,
+        playlistHeroHeight
+    ) {
+        derivedStateOf {
+            resolvePlaylistChromeCollapseProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                expandedHeroHeightPx = with(density) {
+                    playlistHeroHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarColor()
-    } else {
-        playlistChromeColor
+    val playlistChromeVisualProgress = resolvePlaylistEasedProgress(
+        playlistChromeCollapseProgress
+    )
+    val dockedSearchRevealProgress by remember(listState, density) {
+        derivedStateOf {
+            resolvePlaylistDockedSearchRevealProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                revealDistancePx = with(density) {
+                    PlaylistModernDockedSearchSlotHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarContentColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarContentColor()
-    } else {
-        Color.White
-    }
-    val playlistHeroHeight by animateDpAsState(
-        targetValue = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
-            PlaylistModernHeroSearchHeight
-        } else {
-            PlaylistModernHeroHeight
-        },
-        label = "netease-playlist-hero-height"
+    val searchDockedVisualProgress = resolvePlaylistEasedProgress(
+        dockedSearchRevealProgress
+    )
+    val dockedSearchProgress = resolvePlaylistDockedSearchSlotProgress(
+        searchVisibilityProgress = searchVisibilityProgress,
+        dockedRevealProgress = dockedSearchRevealProgress
+    )
+    val searchSlotVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = dockedSearchProgress
+    )
+    val headerSearchAlpha = resolvePlaylistHeaderSearchAlpha(
+        searchVisibilityProgress = searchVisibilityProgress,
+        chromeCollapseProgress = playlistChromeCollapseProgress
+    )
+    val headerSearchVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = headerSearchAlpha
+    )
+    val searchFieldFocusInHeader =
+        headerSearchVisible && dockedSearchRevealProgress < 0.5f
+    val searchFieldComposed = headerSearchVisible || searchSlotVisible
+    val playlistTopBarColor = resolvePlaylistTranslucentTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeVisualProgress
+    )
+    val playlistTopBarContentColor = interpolatePlaylistColor(
+        start = resolvePlaylistSolidTopBarContentColor(playlistChromeColor),
+        end = playlistModernCollapsedTopBarContentColor(),
+        fraction = playlistChromeVisualProgress
+    )
+    val playlistSelectionTopBarColor = resolvePlaylistSelectionTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeCollapseProgress
+    )
+    val playlistSelectionTopBarContentColor = resolvePlaylistSelectionTopBarContentColor(
+        playlistColor = playlistChromeColor,
+        collapsedContentColor = playlistModernCollapsedTopBarContentColor(),
+        collapseProgress = playlistChromeCollapseProgress
     )
     val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsState(
         initial = false
@@ -371,16 +494,35 @@ fun DetailScreen(
         initial = null
     )
     val hasCustomBackground = backgroundImageUri != null
-    LaunchedEffect(showSearch, selectionMode, playlistChromeCollapsed, autoShowKeyboard) {
-        if (showSearch && !selectionMode && autoShowKeyboard) {
-            delay(120)
-            searchFocusRequester.requestFocus()
-            keyboardController?.show()
-        }
+    LaunchedEffect(
+        showSearch,
+        selectionMode,
+        searchFieldComposed,
+        autoShowKeyboard,
+        searchFieldFocusInHeader
+    ) {
+        if (!searchFieldComposed) return@LaunchedEffect
+        val shouldAutoFocus = shouldRequestPlaylistSearchFocus(
+            showSearch,
+            selectionMode,
+            autoShowKeyboard
+        )
+        val shouldTransferFocus = shouldTransferPlaylistSearchFocus(
+            showSearch = showSearch,
+            selectionMode = selectionMode,
+            searchFieldComposed = searchFieldComposed,
+            searchInputFocused = headerSearchFocused || dockedSearchFocused,
+            searchQuery = searchQuery
+        )
+        if (!shouldAutoFocus && !shouldTransferFocus) return@LaunchedEffect
+        if (shouldAutoFocus) delay(120)
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
     }
 
+    val detailVisibilityState = rememberMainTabDetailVisibilityState(playlistId)
     AnimatedVisibility(
-        visible = true,
+        visibleState = detailVisibilityState,
         enter = fadeIn() + slideInVertically { it / 6 },
         exit = fadeOut() + slideOutVertically { it / 6 }
     ) {
@@ -527,35 +669,36 @@ fun DetailScreen(
                             },
                             windowInsets = WindowInsets.statusBars,
                             colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = Color.Transparent,
-                                scrolledContainerColor = MaterialTheme.colorScheme.surface
+                                containerColor = playlistSelectionTopBarColor,
+                                scrolledContainerColor = playlistSelectionTopBarColor,
+                                titleContentColor = playlistSelectionTopBarContentColor,
+                                navigationIconContentColor = playlistSelectionTopBarContentColor,
+                                actionIconContentColor = playlistSelectionTopBarContentColor
                             )
                         )
                     }
 
-                    if (showSearch && !selectionMode && playlistChromeCollapsed) {
-                        PlaylistModernVisualColorsProvider(
-                            coverUrl = ui.header?.coverUrl,
-                            offlineMode = offlineMode
-                        ) {
-                            PlaylistModernDockedSearchField(
-                                query = searchQuery,
-                                onQueryChange = { searchQuery = it },
-                                placeholder = stringResource(R.string.playlist_search_hint),
-                                focusRequester = searchFocusRequester
-                            )
-                        }
-                    }
-
-                    val displayedTracks = remember(ui.tracks, searchQuery) {
-                        if (searchQuery.isBlank()) ui.tracks
-                        else ui.tracks.filter {
-                            it.name.contains(
-                                searchQuery,
-                                true
-                            ) || it.artist.contains(searchQuery, true)
-                        }
-                    }
+                    PlaylistModernDockedSearchSlot(
+                        revealProgress = dockedSearchProgress,
+                        coverUrl = displayCoverUrl,
+                        offlineMode = offlineMode,
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = stringResource(R.string.playlist_search_hint),
+                        inputState = searchInputState,
+                        onFocusChanged = { dockedSearchFocused = it },
+                        focusRequester = if (searchFieldFocusInHeader) {
+                            null
+                        } else {
+                            searchFocusRequester
+                        },
+                        dockedProgress = searchDockedVisualProgress
+                    )
+                    val displayedTracks = rememberPlaylistSearchResults(
+                        query = searchQuery,
+                        items = ui.tracks,
+                        tokens = { song -> song.playlistSearchValues(context) }
+                    )
                     val trackCount = ui.header?.trackCount ?: ui.tracks.size
                     val heroTitle = ui.header?.name ?: stringResource(R.string.playlist_title)
                     val heroSubtitle = if (ui.header?.isAlbum == true) {
@@ -588,7 +731,7 @@ fun DetailScreen(
                             .windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
                         PlaylistModernVisualColorsProvider(
-                            coverUrl = ui.header?.coverUrl,
+                            coverUrl = displayCoverUrl,
                             offlineMode = offlineMode
                         ) {
                             LazyColumn(
@@ -601,19 +744,31 @@ fun DetailScreen(
                                 item {
                                     PlaylistModernHeroHeader(
                                         displayName = heroTitle,
-                                        coverUrl = ui.header?.coverUrl,
+                                        coverUrl = displayCoverUrl,
                                         subtitle = heroSubtitle,
                                         offlineMode = offlineMode,
                                         height = playlistHeroHeight,
                                         coverContentDescription = heroTitle,
-                                        actions = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
+                                        actions = if (headerSearchVisible) {
                                             {
-                                                PlaylistModernHeroSearchField(
-                                                    query = searchQuery,
-                                                    onQueryChange = { searchQuery = it },
-                                                    placeholder = stringResource(R.string.playlist_search_hint),
-                                                    focusRequester = searchFocusRequester
-                                                )
+                                                Box(
+                                                    modifier = Modifier.graphicsLayer {
+                                                        alpha = headerSearchAlpha
+                                                    }
+                                                ) {
+                                                    PlaylistModernHeroSearchField(
+                                                        query = searchQuery,
+                                                        onQueryChange = { searchQuery = it },
+                                                        placeholder = stringResource(R.string.playlist_search_hint),
+                                                        inputState = searchInputState,
+                                                        onFocusChanged = { headerSearchFocused = it },
+                                                        focusRequester = if (searchFieldFocusInHeader) {
+                                                            searchFocusRequester
+                                                        } else {
+                                                            null
+                                                        }
+                                                    )
+                                                }
                                             }
                                         } else {
                                             null
@@ -626,7 +781,7 @@ fun DetailScreen(
                                 contentType = "playlist_actions"
                             ) {
                                 PlaylistModernActionSheet(
-                                    coverUrl = ui.header?.coverUrl,
+                                    coverUrl = displayCoverUrl,
                                     offlineMode = offlineMode,
                                     hasCustomBackground = hasCustomBackground
                                 ) {
@@ -654,7 +809,7 @@ fun DetailScreen(
                                 ui.loading && ui.tracks.isEmpty() -> {
                                     item {
                                         PlaylistModernListItemSurface(
-                                            coverUrl = ui.header?.coverUrl,
+                                            coverUrl = displayCoverUrl,
                                             offlineMode = offlineMode
                                         ) {
                                             Row(
@@ -675,7 +830,7 @@ fun DetailScreen(
                                 ui.error != null && ui.tracks.isEmpty() -> {
                                     item {
                                         PlaylistModernListItemSurface(
-                                            coverUrl = ui.header?.coverUrl,
+                                            coverUrl = displayCoverUrl,
                                             offlineMode = offlineMode
                                         ) {
                                             Column(
@@ -700,12 +855,17 @@ fun DetailScreen(
                                         displayedTracks,
                                         key = { _, it -> it.stableKey() }) { index, item ->
                                         PlaylistModernListItemSurface(
-                                            coverUrl = ui.header?.coverUrl,
+                                            coverUrl = displayCoverUrl,
                                             offlineMode = offlineMode
                                         ) {
+                                            val isFavoriteSong = favoriteSongs.any {
+                                                it.sameIdentityAs(item)
+                                            }
                                             SongRow(
                                                 index = index + 1,
                                                 song = item,
+                                                isFavorite = isFavoriteSong,
+                                                onFavoriteToggle = ::toggleSongFavorite,
                                                 showCover = ui.header?.isAlbum == false,
                                                 selectionMode = selectionMode,
                                                 selected = selectedIds.contains(item.id),
@@ -775,15 +935,37 @@ fun DetailScreen(
                         onCreateAndExport = { name ->
                             val songs = ui.tracks
                                 .filter { selectedIds.contains(it.id) }
-                            scope.launchLocalPlaylistMutation("createPlaylistFromNetease") {
+                            scope.launchLocalPlaylistMutation(
+                                operation = "createPlaylistFromNetease",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportCreatedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        result = result
+                                    )
+                                }
+                            ) {
                                 repo.createPlaylistWithSongs(name, songs)
                             }
                         },
                         onExportToPlaylist = { playlist ->
                             val songs = ui.tracks
                                 .filter { selectedIds.contains(it.id) }
-                            scope.launchLocalPlaylistMutation("exportSongsFromNetease") {
-                                repo.addSongsToPlaylist(playlist.id, songs)
+                            scope.launchLocalPlaylistMutation(
+                                operation = "exportSongsFromNetease",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportAddedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        targetPlaylistId = playlist.id,
+                                        targetPlaylistName = playlist.name,
+                                        result = result
+                                    )
+                                }
+                            ) {
+                                repo.addSongsToPlaylistWithResult(playlist.id, songs)
                             }
                         }
                     )
@@ -798,15 +980,37 @@ fun DetailScreen(
                         onDismissRequest = { showExportAllSheet = false },
                         onCreateAndExport = { name ->
                             val songs = ui.tracks
-                            scope.launchLocalPlaylistMutation("createPlaylistFromNeteaseAll") {
+                            scope.launchLocalPlaylistMutation(
+                                operation = "createPlaylistFromNeteaseAll",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportCreatedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        result = result
+                                    )
+                                }
+                            ) {
                                 repo.createPlaylistWithSongs(name, songs)
                             }
                             showExportAllSheet = false
                         },
                         onExportToPlaylist = { playlist ->
                             val songs = ui.tracks
-                            scope.launchLocalPlaylistMutation("exportAllSongsFromNetease") {
-                                repo.addSongsToPlaylist(playlist.id, songs)
+                            scope.launchLocalPlaylistMutation(
+                                operation = "exportAllSongsFromNetease",
+                                onResult = { result ->
+                                    scope.showPlaylistBatchExportAddedResult(
+                                        context = context,
+                                        snackbarHostState = snackbarHostState,
+                                        repository = repo,
+                                        targetPlaylistId = playlist.id,
+                                        targetPlaylistName = playlist.name,
+                                        result = result
+                                    )
+                                }
+                            ) {
+                                repo.addSongsToPlaylistWithResult(playlist.id, songs)
                             }
                             showExportAllSheet = false
                         }
@@ -815,10 +1019,8 @@ fun DetailScreen(
                 // 允许返回键优先退出多选
                 BackHandler(enabled = selectionMode) { exitSelection() }
 
-                NeriSnackbarHost(
+                NeriOverlaySnackbarHost(
                     hostState = snackbarHostState,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter),
                     bottomPadding = LocalMiniPlayerHeight.current
                 )
             }
@@ -872,6 +1074,8 @@ private fun RetryChip(onClick: () -> Unit) {
 private fun SongRow(
     index: Int,
     song: SongItem,
+    isFavorite: Boolean,
+    onFavoriteToggle: (SongItem, Boolean) -> Unit,
     showCover: Boolean,
     selectionMode: Boolean,
     selected: Boolean,
@@ -1004,6 +1208,12 @@ private fun SongRow(
                 ) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.local_playlist_play_next)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
                             PlayerManager.addToQueueNext(song)
                             showMoreMenu = false
@@ -1011,13 +1221,52 @@ private fun SongRow(
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.playlist_add_to_end)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
                             PlayerManager.addToQueueEnd(song)
                             showMoreMenu = false
                         }
                     )
                     DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (isFavorite) {
+                                        R.string.favorite_remove
+                                    } else {
+                                        R.string.favorite_add
+                                    }
+                                )
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (isFavorite) {
+                                    Icons.Filled.Favorite
+                                } else {
+                                    Icons.Outlined.FavoriteBorder
+                                },
+                                contentDescription = null
+                            )
+                        },
+                        onClick = {
+                            onFavoriteToggle(song, isFavorite)
+                            showMoreMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_copy_song_info)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.ContentCopy,
+                                contentDescription = null
+                            )
+                        },
                         onClick = {
                             val songInfo = "${song.displayName()}-${song.displayArtist()}"
                             scope.launch {

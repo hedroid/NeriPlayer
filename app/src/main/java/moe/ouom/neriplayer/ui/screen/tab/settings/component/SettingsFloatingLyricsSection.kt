@@ -51,6 +51,8 @@ import moe.ouom.neriplayer.data.settings.FLOATING_LYRICS_ALIGNMENT_CENTER
 import moe.ouom.neriplayer.data.settings.FLOATING_LYRICS_ALIGNMENT_LEFT
 import moe.ouom.neriplayer.data.settings.FLOATING_LYRICS_ALIGNMENT_RIGHT
 import moe.ouom.neriplayer.data.settings.FloatingLyricsPreferences
+import moe.ouom.neriplayer.data.settings.FLOATING_LYRICS_RENDER_STYLE_OUTLINE
+import moe.ouom.neriplayer.data.settings.FLOATING_LYRICS_RENDER_STYLE_SHADOW
 import moe.ouom.neriplayer.data.settings.MAX_FLOATING_LYRICS_ALPHA
 import moe.ouom.neriplayer.data.settings.MAX_FLOATING_LYRICS_FONT_SIZE_SP
 import moe.ouom.neriplayer.data.settings.MAX_FLOATING_LYRICS_MAX_WIDTH_DP
@@ -67,12 +69,16 @@ import moe.ouom.neriplayer.data.settings.normalizeFloatingLyricsPosition
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsSegmentedTabs
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsSlider
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsSwitch
+import moe.ouom.neriplayer.ui.screen.tab.settings.page.settingsHighlightTarget
 import kotlin.math.roundToInt
 
 @Composable
 internal fun SettingsFloatingLyricsSection(
     preferences: FloatingLyricsPreferences,
-    onPreferencesChange: (FloatingLyricsPreferences) -> Unit
+    onPreferencesChange: (FloatingLyricsPreferences) -> Unit,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null
 ) {
     val normalizedPreferences = remember(preferences) { preferences.normalized() }
     var pendingFontSizeSp by remember { mutableFloatStateOf(normalizedPreferences.fontSizeSp) }
@@ -179,6 +185,10 @@ internal fun SettingsFloatingLyricsSection(
             },
             icon = Icons.Outlined.PictureInPictureAlt,
             checked = normalizedPreferences.enabled,
+            targetId = "setting:floating_lyrics_enabled",
+            highlightTargetId = highlightTargetId,
+            highlightPulse = highlightPulse,
+            onHighlightFinished = onHighlightFinished,
             onCheckedChange = { enabled ->
                 if (enabled && !overlayPermissionGranted) {
                     FloatingLyricsOverlayManager.openOverlayPermissionSettings(context)
@@ -203,9 +213,20 @@ internal fun SettingsFloatingLyricsSection(
                 updatePreferences { it.copy(textColorHex = colorHex) }
             }
         )
+        FloatingLyricsRenderStyleSelector(
+            renderStyle = normalizedPreferences.renderStyle,
+            onRenderStyleChange = { renderStyle ->
+                updatePreferences { it.copy(renderStyle = renderStyle) }
+            }
+        )
+        val usesShadow = normalizedPreferences.renderStyle == FLOATING_LYRICS_RENDER_STYLE_SHADOW
         FloatingLyricsColorPicker(
-            titleRes = R.string.settings_floating_lyrics_outline_color,
-            icon = Icons.Outlined.BorderColor,
+            titleRes = if (usesShadow) {
+                R.string.settings_floating_lyrics_shadow_color
+            } else {
+                R.string.settings_floating_lyrics_outline_color
+            },
+            icon = if (usesShadow) Icons.Outlined.FormatColorFill else Icons.Outlined.BorderColor,
             selectedColorHex = normalizedPreferences.outlineColorHex,
             onColorSelected = { colorHex ->
                 updatePreferences { it.copy(outlineColorHex = colorHex) }
@@ -231,12 +252,22 @@ internal fun SettingsFloatingLyricsSection(
             }
         )
         FloatingLyricsSliderListItem(
-            title = stringResource(R.string.settings_floating_lyrics_lyric_outline_width),
+            title = stringResource(
+                if (usesShadow) {
+                    R.string.settings_floating_lyrics_lyric_shadow_blur
+                } else {
+                    R.string.settings_floating_lyrics_lyric_outline_width
+                }
+            ),
             valueText = stringResource(
-                R.string.settings_floating_lyrics_outline_width_value,
+                if (usesShadow) {
+                    R.string.settings_floating_lyrics_shadow_blur_value
+                } else {
+                    R.string.settings_floating_lyrics_outline_width_value
+                },
                 pendingOutlineWidthDp
             ),
-            icon = Icons.Outlined.LineWeight,
+            icon = if (usesShadow) Icons.Outlined.AutoAwesome else Icons.Outlined.LineWeight,
             value = pendingOutlineWidthDp,
             valueRange = MIN_FLOATING_LYRICS_OUTLINE_WIDTH_DP..MAX_FLOATING_LYRICS_OUTLINE_WIDTH_DP,
             steps = 0,
@@ -250,12 +281,22 @@ internal fun SettingsFloatingLyricsSection(
             }
         )
         FloatingLyricsSliderListItem(
-            title = stringResource(R.string.settings_floating_lyrics_translation_outline_width),
+            title = stringResource(
+                if (usesShadow) {
+                    R.string.settings_floating_lyrics_translation_shadow_blur
+                } else {
+                    R.string.settings_floating_lyrics_translation_outline_width
+                }
+            ),
             valueText = stringResource(
-                R.string.settings_floating_lyrics_outline_width_value,
+                if (usesShadow) {
+                    R.string.settings_floating_lyrics_shadow_blur_value
+                } else {
+                    R.string.settings_floating_lyrics_outline_width_value
+                },
                 pendingTranslationOutlineWidthDp
             ),
-            icon = Icons.Outlined.BorderOuter,
+            icon = if (usesShadow) Icons.Outlined.AutoAwesome else Icons.Outlined.BorderOuter,
             value = pendingTranslationOutlineWidthDp,
             valueRange = MIN_FLOATING_LYRICS_OUTLINE_WIDTH_DP..MAX_FLOATING_LYRICS_OUTLINE_WIDTH_DP,
             steps = 0,
@@ -400,10 +441,22 @@ private fun FloatingLyricsSwitchListItem(
     description: String,
     icon: ImageVector,
     checked: Boolean,
+    targetId: String? = null,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val highlightedModifier = targetId?.let { id ->
+        Modifier.settingsHighlightTarget(
+            targetId = id,
+            highlightTargetId = highlightTargetId,
+            highlightPulse = highlightPulse,
+            onHighlightFinished = onHighlightFinished
+        )
+    } ?: Modifier
     ListItem(
-        modifier = Modifier.settingsItemClickable { onCheckedChange(!checked) },
+        modifier = highlightedModifier.settingsItemClickable { onCheckedChange(!checked) },
         leadingContent = {
             Icon(
                 imageVector = icon,
@@ -460,6 +513,46 @@ private fun FloatingLyricsSliderListItem(
                 onValueChangeFinished = onValueChangeFinished,
                 valueRange = valueRange,
                 steps = steps
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
+}
+
+@Composable
+private fun FloatingLyricsRenderStyleSelector(
+    renderStyle: String,
+    onRenderStyleChange: (String) -> Unit
+) {
+    val renderStyles = listOf(
+        FLOATING_LYRICS_RENDER_STYLE_SHADOW,
+        FLOATING_LYRICS_RENDER_STYLE_OUTLINE
+    )
+    val selectedIndex = renderStyles.indexOf(renderStyle).takeIf { it >= 0 } ?: 0
+
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Outlined.AutoAwesome,
+                contentDescription = stringResource(R.string.settings_floating_lyrics_render_style),
+                tint = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        headlineContent = {
+            Text(stringResource(R.string.settings_floating_lyrics_render_style))
+        },
+        supportingContent = {
+            MiuixSettingsSegmentedTabs(
+                labels = listOf(
+                    stringResource(R.string.settings_floating_lyrics_render_shadow),
+                    stringResource(R.string.settings_floating_lyrics_render_outline)
+                ),
+                selectedIndex = selectedIndex,
+                onSelectedIndexChange = { index -> onRenderStyleChange(renderStyles[index]) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .padding(top = 8.dp)
             )
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent)

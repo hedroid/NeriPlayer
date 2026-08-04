@@ -18,6 +18,7 @@ import moe.ouom.neriplayer.ksp.annotations.autoFloatSetting
 import moe.ouom.neriplayer.ksp.annotations.autoIntSetting
 import moe.ouom.neriplayer.ksp.annotations.autoSetting
 import moe.ouom.neriplayer.ksp.annotations.autoSettingsSection
+import moe.ouom.neriplayer.ksp.annotations.autoStringSetting
 import moe.ouom.neriplayer.ksp.annotations.autoSwitchSetting
 
 /*
@@ -55,20 +56,6 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
-            key = "dynamic_color",
-            type = SettingValueType.Boolean,
-            defaultBoolean = true,
-            order = 10,
-            ui = SettingUiType.Switch,
-            access = SettingAccessMode.KeyOnly
-        )
-        val dynamicColor = autoSetting(
-            titleRes = R.string.settings_dynamic_color,
-            descriptionRes = R.string.settings_dynamic_color_desc,
-            icon = AutoSettingIcon.Colorize
-        )
-
-        @AutoSetting(
             key = "force_dark",
             type = SettingValueType.Boolean,
             defaultBoolean = false,
@@ -97,6 +84,36 @@ object AutoSettingsSchema {
             icon = AutoSettingIcon.AdsClick
         )
 
+        @AutoSetting(order = 42)
+        val exploreSearchHistoryEnabled = autoSwitchSetting(
+            key = "explore_search_history_enabled",
+            defaultValue = true,
+            titleRes = R.string.settings_explore_search_history,
+            descriptionRes = R.string.settings_explore_search_history_desc,
+            icon = AutoSettingIcon.Keyboard
+        )
+
+        @AutoSetting(order = 43)
+        val usbDeviceAttachHandlingEnabled = autoSwitchSetting(
+            key = "usb_device_attach_handling_enabled",
+            defaultValue = true,
+            titleRes = R.string.settings_usb_device_attach_handling,
+            descriptionRes = R.string.settings_usb_device_attach_handling_desc,
+            icon = AutoSettingIcon.Usb
+        )
+
+        @AutoSetting(
+            key = "ui_density_scale",
+            type = SettingValueType.Float,
+            defaultFloat = 1.0f,
+            order = 44,
+            ui = SettingUiType.Custom
+        )
+        val uiDensityScale = autoSetting(
+            titleRes = R.string.settings_ui_scale_dpi,
+            icon = AutoSettingIcon.ZoomInMap
+        )
+
         @AutoSetting(
             key = "playback_service_idle_shutdown_minutes",
             type = SettingValueType.Int,
@@ -111,6 +128,15 @@ object AutoSettingsSchema {
             titleRes = R.string.settings_playback_idle_shutdown,
             descriptionRes = R.string.settings_playback_idle_shutdown_desc,
             icon = AutoSettingIcon.Bolt
+        )
+
+        @AutoSetting(order = 46)
+        val preferHighRefreshRate = autoSwitchSetting(
+            key = "prefer_high_refresh_rate",
+            defaultValue = false,
+            titleRes = R.string.settings_prefer_high_refresh_rate,
+            descriptionRes = R.string.settings_prefer_high_refresh_rate_desc,
+            icon = AutoSettingIcon.AutoAwesome
         )
 
         @AutoSetting(
@@ -191,6 +217,20 @@ object AutoSettingsSchema {
             titleRes = R.string.settings_theme,
             descriptionRes = R.string.settings_theme_desc,
             icon = AutoSettingIcon.Palette
+        )
+
+        @AutoSetting(
+            key = "dynamic_color",
+            type = SettingValueType.Boolean,
+            defaultBoolean = true,
+            order = 5,
+            ui = SettingUiType.Switch,
+            access = SettingAccessMode.KeyOnly
+        )
+        val dynamicColor = autoSetting(
+            titleRes = R.string.settings_dynamic_color,
+            descriptionRes = R.string.settings_dynamic_color_desc,
+            icon = AutoSettingIcon.Colorize
         )
 
         @AutoSetting(
@@ -416,7 +456,7 @@ object AutoSettingsSchema {
             ui = SettingUiType.Custom
         )
         val homeCardTrending = autoSetting(
-            titleRes = R.string.settings_home_cards
+            titleRes = R.string.recommend_trending
         )
 
         @AutoSetting(
@@ -427,7 +467,7 @@ object AutoSettingsSchema {
             ui = SettingUiType.Custom
         )
         val homeCardRadar = autoSetting(
-            titleRes = R.string.settings_home_cards
+            titleRes = R.string.recommend_radar
         )
 
         @AutoSetting(
@@ -438,7 +478,7 @@ object AutoSettingsSchema {
             ui = SettingUiType.Custom
         )
         val homeCardRecommended = autoSetting(
-            titleRes = R.string.settings_home_cards
+            titleRes = R.string.recommend_for_you
         )
     }
 
@@ -491,6 +531,15 @@ object AutoSettingsSchema {
             titleRes = R.string.settings_nowplaying_title,
             descriptionRes = R.string.settings_nowplaying_title_desc,
             icon = AutoSettingIcon.LibraryMusic
+        )
+
+        @AutoSetting(order = 25)
+        val nowPlayingSongTitleMarqueeEnabled = autoSwitchSetting(
+            key = "nowplaying_song_title_marquee_enabled",
+            defaultValue = true,
+            titleRes = R.string.settings_nowplaying_song_title_marquee,
+            descriptionRes = R.string.settings_nowplaying_song_title_marquee_desc,
+            icon = AutoSettingIcon.FormatSize
         )
 
         @AutoSetting(
@@ -580,14 +629,55 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
-            key = "ui_density_scale",
+            key = "nowplaying_cover_lyric_font_scale",
             type = SettingValueType.Float,
             defaultFloat = 1.0f,
-            order = 90,
-            ui = SettingUiType.Custom
+            order = 81,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
         )
-        val uiDensityScale = autoSetting(
-            titleRes = R.string.settings_ui_scale_dpi
+        val nowPlayingCoverLyricFontScale = autoSetting(
+            titleRes = R.string.settings_lyrics_cover_lyric_font_size,
+            icon = AutoSettingIcon.FormatSize
+        )
+
+        @AutoSetting(
+            key = "nowplaying_cover_translation_font_scale",
+            type = SettingValueType.Float,
+            defaultFloat = 1.0f,
+            order = 82,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val nowPlayingCoverTranslationFontScale = autoSetting(
+            titleRes = R.string.settings_lyrics_cover_translation_font_size,
+            icon = AutoSettingIcon.Translate
+        )
+
+        @AutoSetting(
+            key = "lyrics_page_lyric_font_scale",
+            type = SettingValueType.Float,
+            defaultFloat = 1.0f,
+            order = 83,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val lyricsPageLyricFontScale = autoSetting(
+            titleRes = R.string.settings_lyrics_page_lyric_font_size,
+            icon = AutoSettingIcon.FormatSize
+        )
+
+        @AutoSetting(
+            key = "lyrics_page_translation_font_scale",
+            type = SettingValueType.Float,
+            defaultFloat = 1.0f,
+            order = 84,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val lyricsPageTranslationFontScale = autoSetting(
+            titleRes = R.string.settings_lyrics_page_translation_font_size,
+            icon = AutoSettingIcon.Translate
         )
 
         @AutoSetting(
@@ -734,6 +824,22 @@ object AutoSettingsSchema {
             key = "enhanced_advanced_blur_radius_dp",
             defaultValue = DEFAULT_ENHANCED_ADVANCED_BLUR_RADIUS_DP,
             titleRes = R.string.settings_enhanced_advanced_blur_radius
+        )
+
+        @AutoSetting(
+            key = "advanced_blur_quality",
+            type = SettingValueType.String,
+            defaultString = DEFAULT_ADVANCED_BLUR_QUALITY,
+            order = 28,
+            ui = SettingUiType.Custom,
+            normalizer = AdvancedBlurQualityPreference::class
+        )
+        val advancedBlurQuality = autoStringSetting(
+            key = "advanced_blur_quality",
+            defaultValue = DEFAULT_ADVANCED_BLUR_QUALITY,
+            titleRes = R.string.settings_advanced_blur_quality,
+            descriptionRes = R.string.settings_advanced_blur_quality_desc,
+            icon = AutoSettingIcon.Tune
         )
 
         @AutoSetting(
@@ -912,6 +1018,16 @@ object AutoSettingsSchema {
         val floatingLyricsTextColor = Unit
 
         @AutoSetting(
+            key = "floating_lyrics_render_style",
+            type = SettingValueType.String,
+            defaultString = FLOATING_LYRICS_RENDER_STYLE_SHADOW,
+            order = 17,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val floatingLyricsRenderStyle = Unit
+
+        @AutoSetting(
             key = "floating_lyrics_outline_color",
             type = SettingValueType.String,
             defaultString = "121212",
@@ -1045,6 +1161,19 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
+            key = "external_bluetooth_translation_enabled",
+            type = SettingValueType.Boolean,
+            defaultBoolean = false,
+            order = 27,
+            ui = SettingUiType.Switch
+        )
+        val externalBluetoothTranslationEnabled = autoSetting(
+            titleRes = R.string.settings_external_bluetooth_translation_enabled,
+            descriptionRes = R.string.settings_external_bluetooth_translation_enabled_desc,
+            icon = AutoSettingIcon.Translate
+        )
+
+        @AutoSetting(
             key = "cloud_music_lyric_default_offset_ms",
             type = SettingValueType.Long,
             defaultLong = DEFAULT_CLOUD_MUSIC_LYRIC_OFFSET_MS,
@@ -1114,45 +1243,6 @@ object AutoSettingsSchema {
         val metadata = autoSettingsSection(
             titleRes = R.string.settings_download_management,
             descriptionRes = R.string.settings_download_expand,
-            icon = AutoSettingIcon.Download
-        )
-
-        @AutoSetting(
-            key = "download_directory_uri",
-            type = SettingValueType.String,
-            defaultString = "",
-            order = 10,
-            ui = SettingUiType.Custom,
-            access = SettingAccessMode.KeyOnly
-        )
-        val downloadDirectoryUri = autoSetting(
-            titleRes = R.string.settings_download_directory,
-            descriptionRes = R.string.settings_download_directory_desc,
-            icon = AutoSettingIcon.Download
-        )
-
-        @AutoSetting(
-            key = "download_directory_label",
-            type = SettingValueType.String,
-            defaultString = "",
-            order = 20,
-            access = SettingAccessMode.KeyOnly
-        )
-        val downloadDirectoryLabel = autoSetting(
-            titleRes = R.string.settings_download_directory_current
-        )
-
-        @AutoSetting(
-            key = "download_file_name_template",
-            type = SettingValueType.String,
-            defaultString = "",
-            order = 30,
-            ui = SettingUiType.Custom,
-            access = SettingAccessMode.KeyOnly
-        )
-        val downloadFileNameTemplate = autoSetting(
-            titleRes = R.string.settings_download_file_name_format,
-            descriptionRes = R.string.settings_download_file_name_format_desc,
             icon = AutoSettingIcon.Download
         )
 
@@ -1230,10 +1320,49 @@ object AutoSettingsSchema {
         )
 
         @AutoSetting(
+            key = "download_directory_uri",
+            type = SettingValueType.String,
+            defaultString = "",
+            order = 10,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val downloadDirectoryUri = autoSetting(
+            titleRes = R.string.settings_download_directory,
+            descriptionRes = R.string.settings_download_directory_desc,
+            icon = AutoSettingIcon.Download
+        )
+
+        @AutoSetting(
+            key = "download_directory_label",
+            type = SettingValueType.String,
+            defaultString = "",
+            order = 20,
+            access = SettingAccessMode.KeyOnly
+        )
+        val downloadDirectoryLabel = autoSetting(
+            titleRes = R.string.settings_download_directory_current
+        )
+
+        @AutoSetting(
+            key = "download_file_name_template",
+            type = SettingValueType.String,
+            defaultString = "",
+            order = 30,
+            ui = SettingUiType.Custom,
+            access = SettingAccessMode.KeyOnly
+        )
+        val downloadFileNameTemplate = autoSetting(
+            titleRes = R.string.settings_download_file_name_format,
+            descriptionRes = R.string.settings_download_file_name_format_desc,
+            icon = AutoSettingIcon.Download
+        )
+
+        @AutoSetting(
             key = "max_cache_size_bytes",
             type = SettingValueType.Long,
             defaultLong = 1024L * 1024L * 1024L,
-            order = 10,
+            order = 40,
             ui = SettingUiType.Custom,
             access = SettingAccessMode.KeyOnly
         )

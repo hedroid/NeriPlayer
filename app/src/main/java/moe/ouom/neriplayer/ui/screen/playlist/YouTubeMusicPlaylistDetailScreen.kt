@@ -26,7 +26,6 @@ package moe.ouom.neriplayer.ui.screen.playlist
 import android.app.Application
 import android.content.ClipData
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -59,6 +58,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
@@ -88,10 +88,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -117,6 +119,8 @@ import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.component.download.BatchDownloadManagerSheet
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportAddedResult
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportCreatedResult
 import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
 import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
@@ -130,12 +134,14 @@ import moe.ouom.neriplayer.ui.haptic.HapticTextButton
 import moe.ouom.neriplayer.util.format.formatDuration
 import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
 import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
+import moe.ouom.neriplayer.util.search.playlistSearchValues
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
+import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.LocalPlaylistRepository
 import moe.ouom.neriplayer.data.local.playlist.launchLocalPlaylistMutation
@@ -171,6 +177,12 @@ fun YouTubeMusicPlaylistDetailScreen(
     val scope = rememberCoroutineScope()
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var headerSearchFocused by remember { mutableStateOf(false) }
+    var dockedSearchFocused by remember { mutableStateOf(false) }
+    val searchInputState = rememberPlaylistSearchInputState(
+        query = searchQuery,
+        onQueryChange = { searchQuery = it }
+    )
     val searchFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -203,8 +215,32 @@ fun YouTubeMusicPlaylistDetailScreen(
     var showExportAllSheet by remember { mutableStateOf(false) }
     val repo = remember(context) { LocalPlaylistRepository.getInstance(context) }
     val allPlaylists by repo.playlists.collectAsState()
+    val favoriteSongs = remember(allPlaylists, context) {
+        FavoritesPlaylist.firstOrNull(allPlaylists, context)?.songs.orEmpty()
+    }
     val favoriteRepo = remember(context) { FavoritePlaylistRepository.getInstance(context) }
     val favorites by favoriteRepo.favorites.collectAsState()
+    val favoriteAddedText = stringResource(R.string.favorite_added)
+    val favoriteRemovedText = stringResource(R.string.favorite_removed)
+    fun toggleSongFavorite(song: SongItem, isFavoriteSong: Boolean) {
+        val message = if (isFavoriteSong) favoriteRemovedText else favoriteAddedText
+        scope.launchLocalPlaylistMutation(
+            operation = "toggleYouTubeMusicDetailSongFavorite",
+            onResult = { result ->
+                if (result.isSuccess) {
+                    scope.launch {
+                        snackbarHostState.showNeriSnackbar(message)
+                    }
+                }
+            }
+        ) {
+            if (isFavoriteSong) {
+                repo.removeFromFavorites(song)
+            } else {
+                repo.addToFavorites(song)
+            }
+        }
+    }
 
     LaunchedEffect(playlist.browseId) {
         viewModel.start(playlist)
@@ -235,26 +271,89 @@ fun YouTubeMusicPlaylistDetailScreen(
         coverUrl = resolvedPlaylist.coverUrl,
         offlineMode = offlineMode
     )
-    val playlistChromeCollapsed by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    val density = LocalDensity.current
+    val searchVisible = shouldShowPlaylistSearch(
+        showSearch = showSearch,
+        selectionMode = selectionMode
+    )
+    val searchVisibilityProgress = playlistModernSearchVisibilityProgress(
+        searchVisible = searchVisible,
+        label = "youtube-music-playlist-search-visibility"
+    )
+    val searchVisibilityEased = resolvePlaylistEasedProgress(searchVisibilityProgress)
+    val playlistHeroHeight = interpolatePlaylistDp(
+        start = PlaylistModernHeroHeight,
+        end = PlaylistModernHeroSearchHeight,
+        fraction = searchVisibilityEased
+    )
+    val playlistChromeCollapseProgress by remember(
+        listState,
+        density,
+        playlistHeroHeight
+    ) {
+        derivedStateOf {
+            resolvePlaylistChromeCollapseProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                expandedHeroHeightPx = with(density) {
+                    playlistHeroHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarColor()
-    } else {
-        playlistChromeColor
+    val playlistChromeVisualProgress = resolvePlaylistEasedProgress(
+        playlistChromeCollapseProgress
+    )
+    val dockedSearchRevealProgress by remember(listState, density) {
+        derivedStateOf {
+            resolvePlaylistDockedSearchRevealProgress(
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
+                revealDistancePx = with(density) {
+                    PlaylistModernDockedSearchSlotHeight.roundToPx()
+                }
+            )
+        }
     }
-    val playlistTopBarContentColor = if (playlistChromeCollapsed) {
-        playlistModernCollapsedTopBarContentColor()
-    } else {
-        Color.White
-    }
-    val playlistHeroHeight by animateDpAsState(
-        targetValue = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
-            PlaylistModernHeroSearchHeight
-        } else {
-            PlaylistModernHeroHeight
-        },
-        label = "youtube-music-playlist-hero-height"
+    val searchDockedVisualProgress = resolvePlaylistEasedProgress(
+        dockedSearchRevealProgress
+    )
+    val dockedSearchProgress = resolvePlaylistDockedSearchSlotProgress(
+        searchVisibilityProgress = searchVisibilityProgress,
+        dockedRevealProgress = dockedSearchRevealProgress
+    )
+    val searchSlotVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = dockedSearchProgress
+    )
+    val headerSearchAlpha = resolvePlaylistHeaderSearchAlpha(
+        searchVisibilityProgress = searchVisibilityProgress,
+        chromeCollapseProgress = playlistChromeCollapseProgress
+    )
+    val headerSearchVisible = shouldComposePlaylistSearchSlot(
+        searchVisible = searchVisible,
+        visibilityProgress = headerSearchAlpha
+    )
+    val searchFieldFocusInHeader =
+        headerSearchVisible && dockedSearchRevealProgress < 0.5f
+    val searchFieldComposed = headerSearchVisible || searchSlotVisible
+    val playlistTopBarColor = resolvePlaylistTranslucentTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeVisualProgress
+    )
+    val playlistTopBarContentColor = interpolatePlaylistColor(
+        start = resolvePlaylistSolidTopBarContentColor(playlistChromeColor),
+        end = playlistModernCollapsedTopBarContentColor(),
+        fraction = playlistChromeVisualProgress
+    )
+    val playlistSelectionTopBarColor = resolvePlaylistSelectionTopBarColor(
+        playlistColor = playlistChromeColor,
+        collapseProgress = playlistChromeCollapseProgress
+    )
+    val playlistSelectionTopBarContentColor = resolvePlaylistSelectionTopBarContentColor(
+        playlistColor = playlistChromeColor,
+        collapsedContentColor = playlistModernCollapsedTopBarContentColor(),
+        collapseProgress = playlistChromeCollapseProgress
     )
     val autoShowKeyboard by AppContainer.settingsRepo.autoShowKeyboardFlow.collectAsState(
         initial = false
@@ -263,12 +362,30 @@ fun YouTubeMusicPlaylistDetailScreen(
         initial = null
     )
     val hasCustomBackground = backgroundImageUri != null
-    LaunchedEffect(showSearch, selectionMode, playlistChromeCollapsed, autoShowKeyboard) {
-        if (showSearch && !selectionMode && autoShowKeyboard) {
-            delay(120)
-            searchFocusRequester.requestFocus()
-            keyboardController?.show()
-        }
+    LaunchedEffect(
+        showSearch,
+        selectionMode,
+        searchFieldComposed,
+        autoShowKeyboard,
+        searchFieldFocusInHeader
+    ) {
+        if (!searchFieldComposed) return@LaunchedEffect
+        val shouldAutoFocus = shouldRequestPlaylistSearchFocus(
+            showSearch,
+            selectionMode,
+            autoShowKeyboard
+        )
+        val shouldTransferFocus = shouldTransferPlaylistSearchFocus(
+            showSearch = showSearch,
+            selectionMode = selectionMode,
+            searchFieldComposed = searchFieldComposed,
+            searchInputFocused = headerSearchFocused || dockedSearchFocused,
+            searchQuery = searchQuery
+        )
+        if (!shouldAutoFocus && !shouldTransferFocus) return@LaunchedEffect
+        if (shouldAutoFocus) delay(120)
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
     }
     val playlistFavoriteId = remember(resolvedPlaylist.playlistId, resolvedPlaylist.browseId) {
         resolvedPlaylist.favoriteId()
@@ -277,19 +394,11 @@ fun YouTubeMusicPlaylistDetailScreen(
         favoriteRepo.isFavorite(playlistFavoriteId, "youtubeMusic")
     }
     val resolvedTrackCount = resolvedPlaylist.trackCount.takeIf { it > 0 } ?: ui.tracks.size
-    val displayedTracks = remember(ui.tracks, searchQuery) {
-        if (searchQuery.isBlank()) {
-            ui.tracks
-        } else {
-            ui.tracks.filter { song ->
-                song.displayName().contains(searchQuery, ignoreCase = true) ||
-                    song.displayArtist().contains(searchQuery, ignoreCase = true) ||
-                    song.name.contains(searchQuery, ignoreCase = true) ||
-                    song.artist.contains(searchQuery, ignoreCase = true) ||
-                    song.album.contains(searchQuery, ignoreCase = true)
-            }
-        }
-    }
+    val displayedTracks = rememberPlaylistSearchResults(
+        query = searchQuery,
+        items = ui.tracks,
+        tokens = { song -> song.playlistSearchValues(context) }
+    )
     val currentIndex = displayedTracks.indexOfFirst { it.sameIdentityAs(currentSong) }
     val heroSubtitle = listOfNotNull(
         resolvedPlaylist.subtitle.takeIf { it.isNotBlank() },
@@ -498,8 +607,11 @@ fun YouTubeMusicPlaylistDetailScreen(
                     },
                     windowInsets = WindowInsets.statusBars,
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surface
+                        containerColor = playlistSelectionTopBarColor,
+                        scrolledContainerColor = playlistSelectionTopBarColor,
+                        titleContentColor = playlistSelectionTopBarContentColor,
+                        navigationIconContentColor = playlistSelectionTopBarContentColor,
+                        actionIconContentColor = playlistSelectionTopBarContentColor
                     )
                 )
             }
@@ -510,19 +622,22 @@ fun YouTubeMusicPlaylistDetailScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (showSearch && !selectionMode && playlistChromeCollapsed) {
-                PlaylistModernVisualColorsProvider(
-                    coverUrl = resolvedPlaylist.coverUrl,
-                    offlineMode = offlineMode
-                ) {
-                    PlaylistModernDockedSearchField(
-                        query = searchQuery,
-                        onQueryChange = { searchQuery = it },
-                        placeholder = stringResource(R.string.playlist_search_hint),
-                        focusRequester = searchFocusRequester
-                    )
-                }
-            }
+            PlaylistModernDockedSearchSlot(
+                revealProgress = dockedSearchProgress,
+                coverUrl = resolvedPlaylist.coverUrl,
+                offlineMode = offlineMode,
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholder = stringResource(R.string.playlist_search_hint),
+                inputState = searchInputState,
+                onFocusChanged = { dockedSearchFocused = it },
+                focusRequester = if (searchFieldFocusInHeader) {
+                    null
+                } else {
+                    searchFocusRequester
+                },
+                dockedProgress = searchDockedVisualProgress
+            )
 
             Box(
                 modifier = Modifier
@@ -546,14 +661,26 @@ fun YouTubeMusicPlaylistDetailScreen(
                                 offlineMode = offlineMode,
                                 height = playlistHeroHeight,
                                 coverContentDescription = resolvedPlaylist.title,
-                                actions = if (showSearch && !selectionMode && !playlistChromeCollapsed) {
+                                actions = if (headerSearchVisible) {
                                     {
-                                        PlaylistModernHeroSearchField(
-                                            query = searchQuery,
-                                            onQueryChange = { searchQuery = it },
-                                            placeholder = stringResource(R.string.playlist_search_hint),
-                                            focusRequester = searchFocusRequester
-                                        )
+                                        Box(
+                                            modifier = Modifier.graphicsLayer {
+                                                alpha = headerSearchAlpha
+                                            }
+                                        ) {
+                                            PlaylistModernHeroSearchField(
+                                                query = searchQuery,
+                                                onQueryChange = { searchQuery = it },
+                                                placeholder = stringResource(R.string.playlist_search_hint),
+                                                inputState = searchInputState,
+                                                onFocusChanged = { headerSearchFocused = it },
+                                                focusRequester = if (searchFieldFocusInHeader) {
+                                                    searchFocusRequester
+                                                } else {
+                                                    null
+                                                }
+                                            )
+                                        }
                                     }
                                 } else {
                                     null
@@ -653,6 +780,7 @@ fun YouTubeMusicPlaylistDetailScreen(
                                 key = { _, song -> song.stableKey() }
                             ) { index, song ->
                                 val isCurrent = currentSong?.sameIdentityAs(song) == true
+                                val isFavoriteSong = favoriteSongs.any { it.sameIdentityAs(song) }
                                 PlaylistModernListItemSurface(
                                     coverUrl = resolvedPlaylist.coverUrl,
                                     offlineMode = offlineMode
@@ -662,6 +790,8 @@ fun YouTubeMusicPlaylistDetailScreen(
                                         song = song,
                                         isCurrentSong = isCurrent,
                                         animatePlayingIndicator = isCurrent && isPlaying,
+                                        isFavorite = isFavoriteSong,
+                                        onFavoriteToggle = ::toggleSongFavorite,
                                         snackbarHostState = snackbarHostState,
                                         selectionMode = selectionMode,
                                         selected = song.stableKey() in selectedKeys,
@@ -746,15 +876,37 @@ fun YouTubeMusicPlaylistDetailScreen(
                 onCreateAndExport = { name ->
                     val songs = ui.tracks
                         .filter { selectedKeys.contains(it.stableKey()) }
-                    scope.launchLocalPlaylistMutation("createPlaylistFromYouTubeMusic") {
+                    scope.launchLocalPlaylistMutation(
+                        operation = "createPlaylistFromYouTubeMusic",
+                        onResult = { result ->
+                            scope.showPlaylistBatchExportCreatedResult(
+                                context = context,
+                                snackbarHostState = snackbarHostState,
+                                repository = repo,
+                                result = result
+                            )
+                        }
+                    ) {
                         repo.createPlaylistWithSongs(name, songs)
                     }
                 },
                 onExportToPlaylist = { playlist ->
                     val songs = ui.tracks
                         .filter { selectedKeys.contains(it.stableKey()) }
-                    scope.launchLocalPlaylistMutation("exportSongsFromYouTubeMusic") {
-                        repo.addSongsToPlaylist(playlist.id, songs)
+                    scope.launchLocalPlaylistMutation(
+                        operation = "exportSongsFromYouTubeMusic",
+                        onResult = { result ->
+                            scope.showPlaylistBatchExportAddedResult(
+                                context = context,
+                                snackbarHostState = snackbarHostState,
+                                repository = repo,
+                                targetPlaylistId = playlist.id,
+                                targetPlaylistName = playlist.name,
+                                result = result
+                            )
+                        }
+                    ) {
+                        repo.addSongsToPlaylistWithResult(playlist.id, songs)
                     }
                 }
             )
@@ -770,15 +922,37 @@ fun YouTubeMusicPlaylistDetailScreen(
                 onDismissRequest = { showExportAllSheet = false },
                 onCreateAndExport = { name ->
                     val songs = ui.tracks
-                    scope.launchLocalPlaylistMutation("createPlaylistFromYouTubeMusicAll") {
+                    scope.launchLocalPlaylistMutation(
+                        operation = "createPlaylistFromYouTubeMusicAll",
+                        onResult = { result ->
+                            scope.showPlaylistBatchExportCreatedResult(
+                                context = context,
+                                snackbarHostState = snackbarHostState,
+                                repository = repo,
+                                result = result
+                            )
+                        }
+                    ) {
                         repo.createPlaylistWithSongs(name, songs)
                     }
                     showExportAllSheet = false
                 },
                 onExportToPlaylist = { playlist ->
                     val songs = ui.tracks
-                    scope.launchLocalPlaylistMutation("exportAllSongsFromYouTubeMusic") {
-                        repo.addSongsToPlaylist(playlist.id, songs)
+                    scope.launchLocalPlaylistMutation(
+                        operation = "exportAllSongsFromYouTubeMusic",
+                        onResult = { result ->
+                            scope.showPlaylistBatchExportAddedResult(
+                                context = context,
+                                snackbarHostState = snackbarHostState,
+                                repository = repo,
+                                targetPlaylistId = playlist.id,
+                                targetPlaylistName = playlist.name,
+                                result = result
+                            )
+                        }
+                    ) {
+                        repo.addSongsToPlaylistWithResult(playlist.id, songs)
                     }
                     showExportAllSheet = false
                 }
@@ -898,6 +1072,8 @@ private fun YouTubeMusicSongRow(
     song: SongItem,
     isCurrentSong: Boolean,
     animatePlayingIndicator: Boolean,
+    isFavorite: Boolean,
+    onFavoriteToggle: (SongItem, Boolean) -> Unit,
     snackbarHostState: SnackbarHostState,
     selectionMode: Boolean,
     selected: Boolean,
@@ -1027,6 +1203,12 @@ private fun YouTubeMusicSongRow(
             ) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.local_playlist_play_next)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                            contentDescription = null
+                        )
+                    },
                     onClick = {
                         onPlayNext()
                         showMenu = false
@@ -1034,13 +1216,52 @@ private fun YouTubeMusicSongRow(
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.playlist_add_to_end)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                            contentDescription = null
+                        )
+                    },
                     onClick = {
                         onAddToQueueEnd()
                         showMenu = false
                     }
                 )
                 DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(
+                                if (isFavorite) {
+                                    R.string.favorite_remove
+                                } else {
+                                    R.string.favorite_add
+                                }
+                            )
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (isFavorite) {
+                                Icons.Filled.Favorite
+                            } else {
+                                Icons.Outlined.FavoriteBorder
+                            },
+                            contentDescription = null
+                        )
+                    },
+                    onClick = {
+                        onFavoriteToggle(song, isFavorite)
+                        showMenu = false
+                    }
+                )
+                DropdownMenuItem(
                     text = { Text(stringResource(R.string.download_to_local)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Download,
+                            contentDescription = null
+                        )
+                    },
                     onClick = {
                         onDownload()
                         showMenu = false
@@ -1048,6 +1269,12 @@ private fun YouTubeMusicSongRow(
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.action_copy_song_info)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = null
+                        )
+                    },
                     onClick = {
                         scope.launch {
                             clipboard.setClipEntry(

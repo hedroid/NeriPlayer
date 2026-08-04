@@ -36,11 +36,12 @@ import moe.ouom.neriplayer.core.player.model.toPersistedSongItem
 import moe.ouom.neriplayer.core.player.model.toPlaybackState
 import moe.ouom.neriplayer.core.player.model.withPlaybackState
 import moe.ouom.neriplayer.core.player.playback.playAtIndex
-import moe.ouom.neriplayer.core.player.playback.rebuildShuffleBag
 import moe.ouom.neriplayer.core.player.url.isCurrentListenTogetherFallbackMediaUrl
 import moe.ouom.neriplayer.core.player.playlist.PlayerFavoritesController
 import moe.ouom.neriplayer.core.player.policy.command.PlaybackCommandSource
 import moe.ouom.neriplayer.core.player.source.toSongItem
+import moe.ouom.neriplayer.data.local.media.LocalMediaMetadataWriteOutcome
+import moe.ouom.neriplayer.data.local.media.LocalMediaSupport
 import moe.ouom.neriplayer.data.local.media.LocalSongSupport
 import moe.ouom.neriplayer.data.auth.common.SavedCookieAuthState
 import moe.ouom.neriplayer.data.settings.rebaseLyricUserOffsetMs
@@ -65,6 +66,8 @@ internal data class RestoredPlayerStateSnapshot(
     val currentMediaUrl: String?,
     val repeatMode: Int,
     val shuffleEnabled: Boolean,
+    val shuffleRestorePlaylist: List<SongItem>?,
+    val shuffleRestoreIndex: Int,
     val resumePositionMs: Long,
     val shouldResumePlayback: Boolean,
     val persistedPlaybackState: PersistedPlaybackState,
@@ -112,6 +115,8 @@ private fun PlayerManager.buildPersistedPlaylistState(
     playlistReference: List<SongItem>,
     playbackStateSnapshot: PersistedPlaybackState
 ): PersistedState {
+    val currentSong = _currentSongFlow.value
+    val restorePlaylistReference = shuffleRestorePlaylistReference
     return PersistedState(
         playlist = playlistReference.mapIndexed { index, song ->
             // 只给当前歌曲保留内嵌歌词, 避免大队列切歌时反复序列化整批长文本
@@ -124,7 +129,25 @@ private fun PlayerManager.buildPersistedPlaylistState(
         positionMs = playbackStateSnapshot.positionMs,
         shouldResumePlayback = playbackStateSnapshot.shouldResumePlayback,
         repeatMode = playbackStateSnapshot.repeatMode,
-        shuffleEnabled = playbackStateSnapshot.shuffleEnabled
+        shuffleEnabled = playbackStateSnapshot.shuffleEnabled,
+        shuffleRestorePlaylist = if (playbackStateSnapshot.shuffleEnabled == true) {
+            restorePlaylistReference?.map { song ->
+                song.toPersistedSongItem(
+                    includeLyrics = shouldPersistEmbeddedLyrics(song) &&
+                        currentSong?.sameIdentityAs(song) == true
+                )
+            }
+        } else {
+            null
+        },
+        shuffleRestoreIndex = if (playbackStateSnapshot.shuffleEnabled == true) {
+            restorePlaylistReference
+                ?.indexOfFirst { currentSong?.sameIdentityAs(it) == true }
+                ?.takeIf { it >= 0 }
+                ?: shuffleRestoreCurrentIndex.takeIf { it >= 0 }
+        } else {
+            null
+        }
     )
 }
 
@@ -234,6 +257,16 @@ private fun loadRestoredStateSnapshot(
             currentMediaUrl = currentMediaUrl,
             repeatMode = repeatMode,
             shuffleEnabled = keepPlaybackModeStateEnabled && (data.shuffleEnabled == true),
+            shuffleRestorePlaylist = if (keepPlaybackModeStateEnabled && data.shuffleEnabled == true) {
+                data.shuffleRestorePlaylist?.map { persistedSong -> persistedSong.toSongItem() }
+            } else {
+                null
+            },
+            shuffleRestoreIndex = if (keepPlaybackModeStateEnabled && data.shuffleEnabled == true) {
+                data.shuffleRestoreIndex ?: -1
+            } else {
+                -1
+            },
             resumePositionMs = if (keepLastPlaybackProgressEnabled) {
                 data.positionMs.coerceAtLeast(0L)
             } else {
@@ -281,6 +314,8 @@ internal fun PlayerManager.applyRestoredStateSnapshot(snapshot: RestoredPlayerSt
         _currentPlaybackAudioInfo.value = null
         _playbackPositionMs.value = 0L
         currentMediaUrlResolvedAtMs = 0L
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
         restoredResumePositionMs = 0L
         restoredShouldResumePlayback = false
         updateResumePlaybackRequested(false)
@@ -297,12 +332,12 @@ internal fun PlayerManager.applyRestoredStateSnapshot(snapshot: RestoredPlayerSt
 
     player.shuffleModeEnabled = snapshot.shuffleEnabled
     _shuffleModeFlow.value = snapshot.shuffleEnabled
-    shuffleHistory.clear()
-    shuffleFuture.clear()
     if (snapshot.shuffleEnabled) {
-        rebuildShuffleBag(excludeIndex = currentIndex)
+        shuffleRestorePlaylistReference = snapshot.shuffleRestorePlaylist
+        shuffleRestoreCurrentIndex = snapshot.shuffleRestoreIndex
     } else {
-        shuffleBag.clear()
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
     }
 
     restoredResumePositionMs = snapshot.resumePositionMs
@@ -467,6 +502,8 @@ internal suspend fun PlayerManager.persistStateImpl(
                     restoredShouldResumePlayback = false
                     stateFile.delete()
                     playbackStateFile.delete()
+                    shuffleRestorePlaylistReference = null
+                    shuffleRestoreCurrentIndex = -1
                     lastPersistedPlaylistReference = null
                     lastPersistedPlaybackState = null
                     lastStatePersistAtMs = SystemClock.elapsedRealtime()
@@ -647,12 +684,6 @@ internal fun PlayerManager.playFromQueueImpl(
         return
     }
 
-    if (player.shuffleModeEnabled) {
-        if (currentIndex != -1) shuffleHistory.add(currentIndex)
-        shuffleFuture.clear()
-        shuffleBag.remove(index)
-    }
-
     currentIndex = index
     playAtIndex(index, commandSource = commandSource)
     emitPlaybackCommand(
@@ -717,14 +748,7 @@ internal fun PlayerManager.replaceCurrentInQueueAndPlayImpl(
     currentPlaylist = newPlaylist
     _currentQueueFlow.value = currentPlaylist
     currentIndex = targetIndex
-
-    shuffleHistory.clear()
-    shuffleFuture.clear()
-    if (player.shuffleModeEnabled) {
-        rebuildShuffleBag(excludeIndex = currentIndex)
-    } else {
-        shuffleBag.clear()
-    }
+    bumpCurrentQueueDisplayRevision()
 
     NPLogger.d(
         "NERI-PlayerManager",
@@ -738,56 +762,6 @@ internal fun PlayerManager.replaceCurrentInQueueAndPlayImpl(
         currentIndex = currentIndex,
         positionMs = _playbackPositionMs.value
     )
-}
-
-/**
- * addToQueueNext 随机模式下三个随机索引列表的快照,便于纯逻辑重映射与单测
- */
-internal data class ShuffleQueueIndexState(
-    val bag: List<Int>,
-    val history: List<Int>,
-    val future: List<Int>,
-)
-
-/**
- * "下一首播放"在随机模式下的随机索引重映射(纯函数)
- *
- * 队列变化固定为两步且顺序不可颠倒:先 removeAt(existingIndex)(existingIndex<0 表示不移除),
- * 再 add(insertIndex, 新曲); 随机列表里保存的是队列下标,必须做同样的收缩/扩张:
- * 移除时丢弃指向被删槽位的下标, 其后下标整体前移;插入时插入位及其后下标整体后移
- * 最后把新曲槽位从 bag/history 移除并放入 future,保证随机序不错播, 不漏曲, 不重复
- * currentIndex 由调用方经 queueIndexOf 单独重定位,这里不涉及 currentIndex
- */
-internal fun remapShuffleStateForInsertNext(
-    state: ShuffleQueueIndexState,
-    existingIndex: Int,
-    insertIndex: Int,
-    newSongIndex: Int,
-): ShuffleQueueIndexState {
-    fun List<Int>.afterRemoval(removed: Int): List<Int> =
-        if (removed < 0) this
-        else mapNotNull {
-            when {
-                it == removed -> null
-                it > removed -> it - 1
-                else -> it
-            }
-        }
-
-    fun List<Int>.afterInsertion(at: Int): List<Int> =
-        if (at < 0) this else map { if (it >= at) it + 1 else it }
-
-    var bag = state.bag.afterRemoval(existingIndex).afterInsertion(insertIndex)
-    var history = state.history.afterRemoval(existingIndex).afterInsertion(insertIndex)
-    var future = state.future.afterRemoval(existingIndex).afterInsertion(insertIndex)
-
-    if (newSongIndex >= 0) {
-        bag = bag.filter { it != newSongIndex }
-        history = history.filter { it != newSongIndex }
-        if (newSongIndex !in future) future = future + newSongIndex
-    }
-
-    return ShuffleQueueIndexState(bag = bag, history = history, future = future)
 }
 
 internal fun resolveQueueCurrentIndexAfterMove(
@@ -804,6 +778,23 @@ internal fun resolveQueueCurrentIndexAfterMove(
         currentIndex == fromIndex -> toIndex
         fromIndex < currentIndex && currentIndex <= toIndex -> currentIndex - 1
         toIndex <= currentIndex && currentIndex < fromIndex -> currentIndex + 1
+        else -> currentIndex
+    }
+}
+
+internal fun resolveQueueCurrentIndexAfterRemoval(
+    currentIndex: Int,
+    removedIndex: Int,
+    queueSize: Int
+): Int {
+    if (queueSize <= 0) return -1
+    if (removedIndex !in 0 until queueSize) return currentIndex
+    val newSize = queueSize - 1
+    if (newSize <= 0) return -1
+    if (currentIndex !in 0 until queueSize) return currentIndex
+    return when {
+        currentIndex == removedIndex -> removedIndex.coerceAtMost(newSize - 1)
+        removedIndex < currentIndex -> currentIndex - 1
         else -> currentIndex
     }
 }
@@ -827,18 +818,68 @@ internal fun PlayerManager.moveQueueItemImpl(fromIndex: Int, toIndex: Int) {
         toIndex = toIndex,
         queueSize = queueSize
     )
-
-    if (player.shuffleModeEnabled) {
-        shuffleHistory.clear()
-        shuffleFuture.clear()
-        rebuildShuffleBag(excludeIndex = currentIndex)
-    }
+    bumpCurrentQueueDisplayRevision()
 
     NPLogger.d(
         "NERI-PlayerManager",
         "moveQueueItem(): from=$fromIndex, to=$toIndex, queueSize=$queueSize, oldIndex=$oldIndex, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
     )
 
+    ioScope.launch {
+        persistState()
+    }
+}
+
+internal fun PlayerManager.removeQueueItemImpl(index: Int) {
+    ensureInitialized()
+    if (!initialized) return
+    val queueSize = currentPlaylist.size
+    if (index !in 0 until queueSize) return
+
+    val oldIndex = currentIndex
+    val removedSong = currentPlaylist[index]
+    val removingCurrent = index == oldIndex
+    val shouldContinuePlayback = removingCurrent && isTransportActiveWithoutInitialization()
+    val newPlaylist = currentPlaylist.toMutableList()
+    newPlaylist.removeAt(index)
+    currentPlaylist = newPlaylist
+    _currentQueueFlow.value = currentPlaylist
+    currentIndex = resolveQueueCurrentIndexAfterRemoval(
+        currentIndex = oldIndex,
+        removedIndex = index,
+        queueSize = queueSize
+    )
+    bumpCurrentQueueDisplayRevision()
+
+    NPLogger.d(
+        "NERI-PlayerManager",
+        "removeQueueItem(): index=$index, removed=${removedSong.name}/${removedSong.id}, queueSize=${currentPlaylist.size}, oldIndex=$oldIndex, currentIndex=$currentIndex, continue=$shouldContinuePlayback, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
+    )
+
+    if (currentPlaylist.isEmpty()) {
+        shuffleRestorePlaylistReference = null
+        shuffleRestoreCurrentIndex = -1
+        stopPlaybackPreservingQueue(clearMediaUrl = true)
+        return
+    }
+
+    if (removingCurrent) {
+        if (shouldContinuePlayback && currentIndex in currentPlaylist.indices) {
+            playAtIndex(currentIndex, commandSource = PlaybackCommandSource.LOCAL)
+            emitPlaybackCommand(
+                type = "PLAY_FROM_QUEUE",
+                source = PlaybackCommandSource.LOCAL,
+                queue = currentPlaylist.toList(),
+                currentIndex = currentIndex,
+                positionMs = _playbackPositionMs.value
+            )
+        } else {
+            stopPlaybackPreservingQueue(clearMediaUrl = true)
+        }
+        return
+    }
+
+    setCurrentSongForPlayback(currentPlaylist.getOrNull(currentIndex))
     ioScope.launch {
         persistState()
     }
@@ -872,12 +913,7 @@ internal fun PlayerManager.reorderQueueImpl(
     currentPlaylist = queue.toList()
     _currentQueueFlow.value = currentPlaylist
     currentIndex = newIndex.coerceIn(currentPlaylist.indices)
-
-    if (player.shuffleModeEnabled) {
-        shuffleHistory.clear()
-        shuffleFuture.clear()
-        rebuildShuffleBag(excludeIndex = currentIndex)
-    }
+    bumpCurrentQueueDisplayRevision()
 
     NPLogger.d(
         "NERI-PlayerManager",
@@ -925,25 +961,7 @@ internal fun PlayerManager.addToQueueNextImpl(song: SongItem) {
     } else {
         currentIndex.coerceIn(0, newPlaylist.lastIndex)
     }
-    if (player.shuffleModeEnabled) {
-        // 队列中部移除/插入后,同步重映射三个随机索引列表,避免旧下标错位导致错播, 漏曲, 重复
-        val newSongRealIndex = queueIndexOf(song, newPlaylist)
-        val remapped = remapShuffleStateForInsertNext(
-            state = ShuffleQueueIndexState(
-                bag = shuffleBag,
-                history = shuffleHistory,
-                future = shuffleFuture,
-            ),
-            existingIndex = existingIndex,
-            insertIndex = insertIndex,
-            newSongIndex = newSongRealIndex,
-        )
-        shuffleBag = remapped.bag.toMutableList()
-        shuffleHistory.clear()
-        shuffleHistory.addAll(remapped.history)
-        shuffleFuture.clear()
-        shuffleFuture.addAll(remapped.future)
-    }
+    bumpCurrentQueueDisplayRevision()
     NPLogger.d(
         "NERI-PlayerManager",
         "addToQueueNext(): song=${song.name}/${song.id}, existingIndex=$existingIndex, insertIndex=$insertIndex, queueSize=${currentPlaylist.size}, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
@@ -984,10 +1002,8 @@ internal fun PlayerManager.addToQueueEndImpl(song: SongItem) {
     } else {
         currentIndex.coerceIn(0, newPlaylist.lastIndex)
     }
+    bumpCurrentQueueDisplayRevision()
 
-    if (player.shuffleModeEnabled) {
-        rebuildShuffleBag()
-    }
     NPLogger.d(
         "NERI-PlayerManager",
         "addToQueueEnd(): song=${song.name}/${song.id}, existingIndex=$existingIndex, queueSize=${currentPlaylist.size}, currentIndex=$currentIndex, shuffle=${player.shuffleModeEnabled}, stack=[${debugStackHint()}]"
@@ -1238,6 +1254,27 @@ private fun PlayerManager.shouldApplySearchMetadataAsCustomOverride(song: SongIt
     return isLocalSong(song) || AudioDownloadManager.getLocalPlaybackUri(application, song) != null
 }
 
+private suspend fun PlayerManager.writeLocalEditableMetadata(song: SongItem) {
+    if (!LocalSongSupport.isLocalSong(song, application)) {
+        return
+    }
+    val outcome = LocalMediaSupport.writeEditableMetadata(application, song)
+    val messageResId = when (outcome) {
+        LocalMediaMetadataWriteOutcome.SUCCESS -> R.string.local_song_metadata_write_success
+        LocalMediaMetadataWriteOutcome.NOT_WRITABLE -> R.string.local_song_metadata_write_not_writable
+        LocalMediaMetadataWriteOutcome.UNSUPPORTED_OR_UNREADABLE -> {
+            R.string.local_song_metadata_write_unsupported
+        }
+        LocalMediaMetadataWriteOutcome.FAILED -> R.string.local_song_metadata_write_failed
+    }
+    mainScope.launch {
+        AppFeedback.show(
+            context = application,
+            message = getLocalizedString(messageResId)
+        )
+    }
+}
+
 internal fun PlayerManager.updateSongCustomInfoImpl(
     originalSong: SongItem,
     customCoverUrl: String?,
@@ -1246,7 +1283,8 @@ internal fun PlayerManager.updateSongCustomInfoImpl(
     restoreBaseCover: Boolean = false,
     restoreBaseName: Boolean = false,
     restoreBaseArtist: Boolean = false,
-    clearMatchedMetadata: Boolean = false
+    clearMatchedMetadata: Boolean = false,
+    writeLocalMetadata: Boolean = false
 ) {
     ioScope.launch {
         runSongMetadataMutation {
@@ -1322,6 +1360,10 @@ internal fun PlayerManager.updateSongCustomInfoImpl(
                 updatedSong = updatedSong,
                 triggerSync = true
             )
+
+            if (writeLocalMetadata) {
+                writeLocalEditableMetadata(updatedSong)
+            }
         }
     }
 }
@@ -1556,7 +1598,8 @@ internal suspend fun PlayerManager.updateSongTranslatedLyricsImpl(
 internal suspend fun PlayerManager.updateSongLyricsAndTranslationImpl(
     songToUpdate: SongItem,
     newLyrics: String?,
-    newTranslatedLyrics: String?
+    newTranslatedLyrics: String?,
+    writeLocalMetadata: Boolean = false
 ) = runSongMetadataMutation {
     val queueIndex = queueIndexOf(songToUpdate)
 
@@ -1612,6 +1655,9 @@ internal suspend fun PlayerManager.updateSongLyricsAndTranslationImpl(
             "PlayerManager",
             "歌词更新已同步到本地仓库: id=${latestSong.id}, lyric=${latestSong.matchedLyric?.take(32)}, translated=${latestSong.matchedTranslatedLyric?.take(32)}"
         )
+        if (writeLocalMetadata) {
+            writeLocalEditableMetadata(latestSong)
+        }
     } else {
         NPLogger.e("PlayerManager", "歌词更新后未找到最新歌曲副本，跳过本地仓库同步")
     }

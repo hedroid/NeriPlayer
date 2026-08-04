@@ -3,8 +3,12 @@
 package moe.ouom.neriplayer.core.player.service
 
 import android.media.AudioManager
-import android.support.v4.media.session.PlaybackStateCompat
+import android.content.pm.PackageManager
+import android.hardware.usb.UsbManager
+import android.media.session.PlaybackState
 import androidx.lifecycle.Lifecycle
+import moe.ouom.neriplayer.activity.shouldProcessUsbDeviceAttachedAction
+import moe.ouom.neriplayer.activity.usbDeviceAttachAliasComponentState
 import moe.ouom.neriplayer.core.player.audio.focus.shouldPauseUsbExclusiveForFocusChange
 import moe.ouom.neriplayer.core.player.audio.focus.shouldSuppressUsbExclusiveForFocusChange
 import moe.ouom.neriplayer.listentogether.protocol.ListenTogetherPlaybackState
@@ -41,12 +45,12 @@ class AudioPlayerServicePolicyTest {
     fun `media session actions no longer advertise stop`() {
         val actions = mediaSessionPlaybackActions()
 
-        assertEquals(0L, actions and PlaybackStateCompat.ACTION_STOP)
-        assertTrue(actions and PlaybackStateCompat.ACTION_PLAY != 0L)
-        assertTrue(actions and PlaybackStateCompat.ACTION_PAUSE != 0L)
-        assertTrue(actions and PlaybackStateCompat.ACTION_SKIP_TO_NEXT != 0L)
-        assertTrue(actions and PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS != 0L)
-        assertTrue(actions and PlaybackStateCompat.ACTION_SEEK_TO != 0L)
+        assertEquals(0L, actions and PlaybackState.ACTION_STOP)
+        assertTrue(actions and PlaybackState.ACTION_PLAY != 0L)
+        assertTrue(actions and PlaybackState.ACTION_PAUSE != 0L)
+        assertTrue(actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L)
+        assertTrue(actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L)
+        assertTrue(actions and PlaybackState.ACTION_SEEK_TO != 0L)
     }
 
     @Test
@@ -150,6 +154,34 @@ class AudioPlayerServicePolicyTest {
                 callerHasResumedUi = true
             )
         )
+    }
+
+    @Test
+    fun `widget action only starts in foreground when the playback service is unavailable`() {
+        assertFalse(
+            shouldStartPlaybackWidgetActionInForeground(
+                serviceInstanceActive = true,
+                serviceForegroundActive = true,
+            ),
+        )
+        assertTrue(
+            shouldStartPlaybackWidgetActionInForeground(
+                serviceInstanceActive = false,
+                serviceForegroundActive = false,
+            ),
+        )
+        assertTrue(
+            shouldStartPlaybackWidgetActionInForeground(
+                serviceInstanceActive = true,
+                serviceForegroundActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `widget accepts a state independent play pause command`() {
+        assertTrue(isSupportedPlaybackWidgetAction(AudioPlayerService.ACTION_TOGGLE_PLAY_PAUSE))
+        assertFalse(isSupportedPlaybackWidgetAction("moe.ouom.neriplayer.action.UNKNOWN"))
     }
 
     @Test
@@ -307,6 +339,38 @@ class AudioPlayerServicePolicyTest {
                 hasItems = true,
                 usbExclusivePlaybackActive = true
             )
+        )
+    }
+
+    @Test
+    fun `USB attach action is ignored when handling setting is off`() {
+        assertFalse(
+            shouldProcessUsbDeviceAttachedAction(
+                UsbManager.ACTION_USB_DEVICE_ATTACHED,
+                handlingEnabled = false
+            )
+        )
+    }
+
+    @Test
+    fun `non USB attach action is still processed when handling setting is off`() {
+        assertTrue(
+            shouldProcessUsbDeviceAttachedAction(
+                AudioManager.ACTION_AUDIO_BECOMING_NOISY,
+                handlingEnabled = false
+            )
+        )
+    }
+
+    @Test
+    fun `USB attach alias follows handling setting`() {
+        assertEquals(
+            PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+            usbDeviceAttachAliasComponentState(handlingEnabled = true)
+        )
+        assertEquals(
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            usbDeviceAttachAliasComponentState(handlingEnabled = false)
         )
     }
 

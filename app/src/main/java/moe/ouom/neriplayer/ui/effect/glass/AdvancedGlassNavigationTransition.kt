@@ -20,7 +20,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 
 internal const val ADVANCED_GLASS_NAVIGATION_DAMPING_RATIO =
     Spring.DampingRatioNoBouncy
@@ -88,7 +90,8 @@ internal fun isolatedAdvancedGlassVerticalTransition(
 
 internal fun buildAdvancedGlassDrawerTransition(
     forward: Boolean,
-    retainedExit: ExitTransition = ExitTransition.None
+    retainedExit: ExitTransition = ExitTransition.None,
+    targetContentZIndex: Float = if (forward) 1f else -1f
 ): ContentTransform {
     val durationMillis = if (forward) {
         DRAWER_NAVIGATION_OPEN_DURATION_MS
@@ -105,7 +108,7 @@ internal fun buildAdvancedGlassDrawerTransition(
             animationSpec = animationSpec
         ),
         initialContentExit = retainedExit,
-        targetContentZIndex = if (forward) 1f else -1f
+        targetContentZIndex = targetContentZIndex
     )
 }
 
@@ -122,6 +125,12 @@ internal data class AdvancedGlassSceneMotion(
         )
     }
 }
+
+internal fun resolveAdvancedGlassSceneZIndex(navigationDepth: Int): Float =
+    navigationDepth.coerceAtLeast(0).toFloat()
+
+internal fun Modifier.advancedGlassSceneZIndex(navigationDepth: Int): Modifier =
+    zIndex(resolveAdvancedGlassSceneZIndex(navigationDepth))
 
 @Composable
 internal fun <S> Transition<S>.animateAdvancedGlassSceneMotion(
@@ -318,13 +327,15 @@ internal fun resolveAdvancedGlassVisibilitySceneMotion(
 
 internal fun <S> AnimatedContentTransitionScope<S>.advancedGlassHostNavigationTransition(
     forward: Boolean,
-    coherentFeedbackEnabled: Boolean
+    coherentFeedbackEnabled: Boolean,
+    targetContentZIndex: Float = if (forward) 1f else -1f
 ): ContentTransform = if (coherentFeedbackEnabled) {
     isolatedAdvancedGlassVerticalTransition(forward)
 } else {
     buildAdvancedGlassDrawerTransition(
         forward = forward,
-        retainedExit = ExitTransition.KeepUntilTransitionsFinished
+        retainedExit = ExitTransition.KeepUntilTransitionsFinished,
+        targetContentZIndex = targetContentZIndex
     )
 }
 

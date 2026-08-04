@@ -116,10 +116,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
+import moe.ouom.neriplayer.data.settings.LyricFontScalePage
+import moe.ouom.neriplayer.data.settings.LyricFontScaleTarget
+import moe.ouom.neriplayer.data.settings.LyricFontScales
+import moe.ouom.neriplayer.data.settings.PlaybackControlLayoutPreferences
 import moe.ouom.neriplayer.data.settings.scaledLyricFontSize
 import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayCoverUrl
@@ -137,11 +142,15 @@ import moe.ouom.neriplayer.ui.component.local.LocalSongDetailsDialog
 import moe.ouom.neriplayer.ui.component.local.LocalSongSyncConfirmDialog
 import moe.ouom.neriplayer.ui.component.lyrics.LyricVisualSpec
 import moe.ouom.neriplayer.ui.component.playback.PlaybackControlIndicator
+import moe.ouom.neriplayer.ui.component.playback.NowPlayingSongTitle
+import moe.ouom.neriplayer.ui.component.playback.scaleButtonSize
+import moe.ouom.neriplayer.ui.component.playback.scaleIconSize
 import moe.ouom.neriplayer.ui.component.playback.rememberDelayedPlaybackWaiting
 import moe.ouom.neriplayer.ui.component.playback.WaveformSlider
 import moe.ouom.neriplayer.ui.component.playback.resolvePlaybackWaiting
+import moe.ouom.neriplayer.ui.component.overlay.DensityScaledModalBottomSheet
 import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
-import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
+import moe.ouom.neriplayer.ui.feedback.NeriOverlaySnackbarHost
 import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
 import moe.ouom.neriplayer.ui.component.lyrics.rememberLyricSeekHapticFeedback
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
@@ -162,8 +171,8 @@ fun LyricsScreen(
     rawTranslatedLyrics: String? = null,
     lyricBlurEnabled: Boolean,
     lyricBlurAmount: Float,
-    lyricFontScale: Float,
-    onLyricFontScaleChange: (Float) -> Unit,
+    lyricFontScales: LyricFontScales,
+    onLyricFontScaleChange: (LyricFontScaleTarget, Float) -> Unit,
     onEnterAlbum: (AlbumSummary) -> Unit,
     onExitNowPlaying: () -> Unit,
     onOpenCurrentNeteaseArtist: () -> Unit = {},
@@ -183,13 +192,25 @@ fun LyricsScreen(
 ) {
     // 处理返回键
     androidx.activity.compose.BackHandler(onBack = onNavigateBack)
+    val lyricFontScale = lyricFontScales.lyricsPageLyric
+    val translationFontScale = lyricFontScales.lyricsPageTranslation
 
     val currentSong by PlayerManager.currentSongFlow.collectAsState()
+    val settingsRepo = remember { AppContainer.settingsRepo }
+    val nowPlayingSongTitleMarqueeEnabled by settingsRepo
+        .nowPlayingSongTitleMarqueeEnabledFlow
+        .collectAsState(initial = true)
+    val playbackControlLayoutPreferences by settingsRepo
+        .playbackControlLayoutPreferencesFlow
+        .collectAsState(initial = PlaybackControlLayoutPreferences())
     val queue by PlayerManager.currentQueueFlow.collectAsState()
-    val displayedQueue = remember(queue) { queue }
-    val currentIndexInDisplay = remember(displayedQueue, currentSong) {
-        displayedQueue.indexOfFirst { it.sameIdentityAs(currentSong) }
+    val queueDisplayRevision by PlayerManager.currentQueueDisplayRevisionFlow.collectAsState()
+    val queueDisplayState = remember(queue, currentSong, queueDisplayRevision) {
+        PlayerManager.currentQueueDisplaySnapshot()
     }
+    val displayedQueueItems = queueDisplayState.items
+    val displayedQueue = remember(displayedQueueItems) { displayedQueueItems.map { it.song } }
+    val currentIndexInDisplay = queueDisplayState.currentDisplayIndex
     val isPlaying by PlayerManager.isPlayingFlow.collectAsState()
     val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsState()
     val usbPlaybackPreparing by PlayerManager.usbExclusivePlaybackPreparingFlow.collectAsState()
@@ -250,9 +271,19 @@ fun LyricsScreen(
     val lyricsWidthFraction = if (isTabletLandscape) 0.58f else 1f
     val controlWidthFraction = if (isTabletLandscape) 0.72f else 1f
     val toolbarWidthFraction = if (isTabletLandscape) 0.58f else 1f
-    val toolbarIconSize = if (isTabletLandscape) 22.dp else 20.dp
-    val primaryControlSize = if (isTabletLandscape) 50.dp else 42.dp
-    val secondaryControlSize = if (isTabletLandscape) 46.dp else 42.dp
+    val lyricsControlSize = playbackControlLayoutPreferences.lyricsSize
+    val baseToolbarIconSize = if (isTabletLandscape) 22.dp else 20.dp
+    val basePrimaryControlSize = if (isTabletLandscape) 50.dp else 42.dp
+    val baseSecondaryControlSize = if (isTabletLandscape) 46.dp else 42.dp
+    val lyricsTopActionButtonSize = lyricsControlSize.scaleButtonSize(48.dp)
+    val lyricsTopActionIconSize = lyricsControlSize.scaleIconSize(24.dp)
+    val lyricsTopBarHeight = maxOf(56.dp, lyricsTopActionButtonSize)
+    val toolbarIconSize = lyricsControlSize.scaleIconSize(baseToolbarIconSize)
+    val toolbarMinimumTouchTarget = lyricsControlSize.scaleButtonSize(48.dp)
+    val primaryControlSize = lyricsControlSize.scaleButtonSize(basePrimaryControlSize)
+    val secondaryControlSize = lyricsControlSize.scaleButtonSize(baseSecondaryControlSize)
+    val secondaryControlIconSize = lyricsControlSize.scaleIconSize(32.dp)
+    val primaryControlIconSize = lyricsControlSize.scaleIconSize(24.dp)
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 启动进入动画
@@ -330,12 +361,34 @@ fun LyricsScreen(
             modifier = Modifier
                 .fillMaxWidth(contentWidthFraction)
                 .widthIn(max = 1320.dp)
-                .height(56.dp),
+                .height(lyricsTopBarHeight),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start
         ) {
-            HapticIconButton(onClick = onNavigateBack) {
-                Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = stringResource(R.string.cd_back))
+            HapticIconButton(
+                onClick = onNavigateBack,
+                modifier = Modifier
+                    .size(lyricsTopActionButtonSize)
+                    .then(
+                        if (sharedTransitionScope != null && animatedContentScope != null) {
+                            with(sharedTransitionScope) {
+                                Modifier.sharedBounds(
+                                    rememberSharedContentState(
+                                        key = NowPlayingLyricsSharedTransitionElement.BACK.key
+                                    ),
+                                    animatedVisibilityScope = animatedContentScope,
+                                    enter = EnterTransition.None,
+                                    exit = ExitTransition.None
+                                ).zIndex(1f)
+                            }
+                        } else Modifier
+                    )
+            ) {
+                Icon(
+                    Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = stringResource(R.string.cd_back),
+                    modifier = Modifier.size(lyricsTopActionIconSize)
+                )
             }
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -348,7 +401,9 @@ fun LyricsScreen(
                         if (sharedTransitionScope != null && animatedContentScope != null) {
                             with(sharedTransitionScope) {
                                 Modifier.sharedElement(
-                                    rememberSharedContentState(key = "cover_image"),
+                                    rememberSharedContentState(
+                                        key = NowPlayingLyricsSharedTransitionElement.COVER.key
+                                    ),
                                     animatedVisibilityScope = animatedContentScope
                                 )
                             }
@@ -382,13 +437,25 @@ fun LyricsScreen(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.Start
             ) {
-                Box {
-                    Text(
+                BoxWithConstraints {
+                    NowPlayingSongTitle(
                         text = currentSong?.displayName() ?: stringResource(R.string.lyrics_unknown_song),
+                        marqueeEnabled = nowPlayingSongTitleMarqueeEnabled,
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
+                            .widthIn(max = maxWidth)
+                            .then(
+                                if (sharedTransitionScope != null && animatedContentScope != null) {
+                                    with(sharedTransitionScope) {
+                                        Modifier.sharedElement(
+                                            rememberSharedContentState(
+                                                key = NowPlayingLyricsSharedTransitionElement.TITLE.key
+                                            ),
+                                            animatedVisibilityScope = animatedContentScope
+                                        )
+                                    }
+                                } else Modifier
+                            )
                             .clip(RoundedCornerShape(6.dp))
                             .combinedClickable(
                                 onClick = {},
@@ -424,7 +491,9 @@ fun LyricsScreen(
                                 if (sharedTransitionScope != null && animatedContentScope != null) {
                                     with(sharedTransitionScope) {
                                         Modifier.sharedElement(
-                                            rememberSharedContentState(key = "song_artist"),
+                                            rememberSharedContentState(
+                                                key = NowPlayingLyricsSharedTransitionElement.ARTIST.key
+                                            ),
                                             animatedVisibilityScope = animatedContentScope
                                         )
                                     }
@@ -489,15 +558,13 @@ fun LyricsScreen(
                     }
                 },
                 enabled = localPlaylistsReady,
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(lyricsTopActionButtonSize)
                     .then(
                         if (sharedTransitionScope != null && animatedContentScope != null) {
                             with(sharedTransitionScope) {
-                                Modifier.sharedBounds(
+                                Modifier.sharedElement(
                                     rememberSharedContentState(key = "btn_favorite"),
-                                    animatedVisibilityScope = animatedContentScope,
-                                    enter = EnterTransition.None,
-                                    exit = ExitTransition.None,
+                                    animatedVisibilityScope = animatedContentScope
                                 ).zIndex(1f)
                             }
                         } else Modifier
@@ -506,6 +573,7 @@ fun LyricsScreen(
                 Icon(
                     imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = if (isFavorite) stringResource(R.string.lyrics_favorited) else stringResource(R.string.lyrics_favorite),
+                    modifier = Modifier.size(lyricsTopActionIconSize),
                     tint = if (isFavorite) {
                         Color.Red.copy(alpha = 0.6f)
                     } else {
@@ -514,13 +582,11 @@ fun LyricsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
-
             // 更多按钮
             var showMoreOptions by remember { mutableStateOf(false) }
             HapticIconButton(
                 onClick = { showMoreOptions = true },
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(lyricsTopActionButtonSize)
                     .then(
                         if (sharedTransitionScope != null && animatedContentScope != null) {
                             with(sharedTransitionScope) {
@@ -534,7 +600,11 @@ fun LyricsScreen(
                         } else Modifier
                     )
             ) {
-                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.lyrics_more_options))
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = stringResource(R.string.lyrics_more_options),
+                    modifier = Modifier.size(lyricsTopActionIconSize)
+                )
             }
             if (showMoreOptions && currentSong != null) {
                 val queue by PlayerManager.currentQueueFlow.collectAsState()
@@ -552,7 +622,8 @@ fun LyricsScreen(
                     onEnterAlbum = onEnterAlbum,
                     onNavigateUp = onExitNowPlaying,
                     snackbarHostState = snackbarHostState,
-                    lyricFontScale = lyricFontScale,
+                    lyricFontScalePage = LyricFontScalePage.LYRICS,
+                    lyricFontScales = lyricFontScales,
                     onLyricFontScaleChange = onLyricFontScaleChange
                 )
             }
@@ -573,11 +644,13 @@ fun LyricsScreen(
                 plainTranslatedLyrics = plainTranslatedLyrics,
                 translatedLyrics = translatedLyrics.orEmpty(),
                 phoneticLyrics = effectivePhoneticLyrics,
+                playbackSessionKey = currentSong?.stableKey(),
                 previewPositionOverrideMs = previewPositionOverrideMs,
                 advancedLyricsEnabled = advancedLyricsEnabled,
                 showLyricTranslation = showLyricTranslation,
                 lyricTranslationUsePhonetic = lyricTranslationUsePhonetic,
                 lyricFontScale = lyricFontScale,
+                translationFontScale = translationFontScale,
                 lyricOffsetMs = lyricOffsetMs,
                 lyricBlurEnabled = lyricBlurEnabled,
                 lyricBlurAmount = lyricBlurAmount,
@@ -605,35 +678,31 @@ fun LyricsScreen(
                 )
         ) {
             // 进度条
-            Row(
+            LyricsProgressSection(
+                songKey = currentSong?.stableKey(),
+                durationMs = durationMs,
+                lyrics = plainLyrics,
+                lyricOffsetMs = lyricOffsetMs,
+                isPlaying = isPlaying,
+                isPlaybackWaiting = isPlaybackWaiting,
+                onSeekTo = onSeekTo,
+                seekEnabled = progressSeekEnabled,
+                onPreviewPositionChange = { previewPositionOverrideMs = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
                         if (sharedTransitionScope != null && animatedContentScope != null) {
                             with(sharedTransitionScope) {
                                 Modifier.sharedBounds(
-                                    rememberSharedContentState(key = "progress_bar"),
+                                    rememberSharedContentState(
+                                        key = NowPlayingLyricsSharedTransitionElement.PROGRESS.key
+                                    ),
                                     animatedVisibilityScope = animatedContentScope
                                 ).zIndex(1f)
                             }
                         } else Modifier
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                LyricsProgressSection(
-                    songKey = currentSong?.stableKey(),
-                    durationMs = durationMs,
-                    lyrics = plainLyrics,
-                    lyricOffsetMs = lyricOffsetMs,
-                    isPlaying = isPlaying,
-                    isPlaybackWaiting = isPlaybackWaiting,
-                    onSeekTo = onSeekTo,
-                    seekEnabled = progressSeekEnabled,
-                    onPreviewPositionChange = { previewPositionOverrideMs = it },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+                    )
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -649,7 +718,9 @@ fun LyricsScreen(
                         if (sharedTransitionScope != null && animatedContentScope != null) {
                             with(sharedTransitionScope) {
                                 Modifier.sharedElement(
-                                    rememberSharedContentState(key = "player_previous"),
+                                    rememberSharedContentState(
+                                        key = NowPlayingLyricsSharedTransitionElement.PREVIOUS.key
+                                    ),
                                     animatedVisibilityScope = animatedContentScope
                                 )
                             }
@@ -660,7 +731,7 @@ fun LyricsScreen(
                     Icon(
                         Icons.Outlined.SkipPrevious,
                         contentDescription = stringResource(R.string.lyrics_previous),
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(secondaryControlIconSize)
                     )
                 }
 
@@ -672,7 +743,9 @@ fun LyricsScreen(
                             if (sharedTransitionScope != null && animatedContentScope != null) {
                                 with(sharedTransitionScope) {
                                     Modifier.sharedElement(
-                                        rememberSharedContentState(key = "play_button"),
+                                        rememberSharedContentState(
+                                            key = NowPlayingLyricsSharedTransitionElement.PLAY.key
+                                        ),
                                         animatedVisibilityScope = animatedContentScope
                                     )
                                 }
@@ -685,7 +758,9 @@ fun LyricsScreen(
                         isPlaybackWaiting = isPlaybackWaiting,
                         playContentDescription = stringResource(R.string.lyrics_play),
                         pauseContentDescription = stringResource(R.string.lyrics_pause),
-                        waitingContentDescription = stringResource(R.string.player_waiting)
+                        waitingContentDescription = stringResource(R.string.player_waiting),
+                        modifier = Modifier.size(primaryControlIconSize),
+                        progressIndicatorSize = primaryControlIconSize
                     )
                 }
 
@@ -695,7 +770,9 @@ fun LyricsScreen(
                             if (sharedTransitionScope != null && animatedContentScope != null) {
                                 with(sharedTransitionScope) {
                                     Modifier.sharedElement(
-                                        rememberSharedContentState(key = "player_next"),
+                                        rememberSharedContentState(
+                                            key = NowPlayingLyricsSharedTransitionElement.NEXT.key
+                                        ),
                                         animatedVisibilityScope = animatedContentScope
                                     )
                                 }
@@ -706,7 +783,7 @@ fun LyricsScreen(
                     Icon(
                         Icons.Outlined.SkipNext,
                         contentDescription = stringResource(R.string.lyrics_next),
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(secondaryControlIconSize)
                     )
                 }
             }
@@ -724,7 +801,8 @@ fun LyricsScreen(
             val toolbarLayout = resolvePlaybackActionToolbarLayout(
                 availableWidth = maxWidth,
                 preferredHorizontalPadding = if (isTabletLandscape) 18.dp else 16.dp,
-                defaultIconSize = toolbarIconSize
+                defaultIconSize = toolbarIconSize,
+                preferredMinimumTouchTarget = toolbarMinimumTouchTarget
             )
             CompositionLocalProvider(
                 LocalMinimumInteractiveComponentSize provides
@@ -899,7 +977,7 @@ fun LyricsScreen(
 
             // 音量控制弹窗
             if (showVolumeSheet) {
-                androidx.compose.material3.ModalBottomSheet(
+                DensityScaledModalBottomSheet(
                     onDismissRequest = { showVolumeSheet = false },
                     sheetGesturesEnabled = false
                 ) {
@@ -910,7 +988,7 @@ fun LyricsScreen(
             // 播放队列弹窗
             if (showQueueSheet) {
                 NowPlayingQueueSheet(
-                    displayedQueue = displayedQueue,
+                    displayedQueueItems = displayedQueueItems,
                     currentIndexInDisplay = currentIndexInDisplay,
                     offlineMode = offlineMode,
                     onDismissRequest = { showQueueSheet = false },
@@ -924,7 +1002,7 @@ fun LyricsScreen(
                 val selectablePlaylists = remember(playlists, context) {
                     playlists.filterNot { LocalFilesPlaylist.isSystemPlaylist(it, context) }
                 }
-                androidx.compose.material3.ModalBottomSheet(
+                DensityScaledModalBottomSheet(
                     onDismissRequest = { showAddSheet = false },
                     sheetState = addSheetState,
                     sheetGesturesEnabled = false
@@ -969,10 +1047,7 @@ fun LyricsScreen(
         }
         }
 
-        NeriSnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        NeriOverlaySnackbarHost(hostState = snackbarHostState)
 
         detailSong?.let { song ->
             LocalSongDetailsDialog(
@@ -1010,11 +1085,13 @@ private fun LyricsContentPane(
     plainTranslatedLyrics: List<LyricEntry>,
     translatedLyrics: List<LyricEntry>,
     phoneticLyrics: List<LyricEntry>,
+    playbackSessionKey: String?,
     previewPositionOverrideMs: Long?,
     advancedLyricsEnabled: Boolean,
     showLyricTranslation: Boolean,
     lyricTranslationUsePhonetic: Boolean,
     lyricFontScale: Float,
+    translationFontScale: Float,
     lyricOffsetMs: Long,
     lyricBlurEnabled: Boolean,
     lyricBlurAmount: Float,
@@ -1067,6 +1144,7 @@ private fun LyricsContentPane(
             modifier = Modifier.fillMaxSize(),
             textColor = textColor,
             lyricFontScale = lyricFontScale,
+            translationFontScale = translationFontScale,
             lyricOffsetMs = lyricOffsetMs,
             lyricBlurEnabled = lyricBlurEnabled,
             lyricBlurAmount = lyricBlurAmount,
@@ -1114,10 +1192,13 @@ private fun LyricsContentPane(
         },
         onLyricLongClick = onLyricLongClick,
         translatedLyrics = if (showLyricTranslation) effectivePlainTranslatedLyrics else null,
-        translationFontSize = scaledLyricFontSize(16f, lyricFontScale).sp,
+        showEmbeddedTranslations = showLyricTranslation && !usePhoneticTranslation,
+        translationFontSize = scaledLyricFontSize(16f, translationFontScale).sp,
         isPlaying = shouldAnimateFromPlayback,
         playbackSpeed = playbackSpeed,
-        interpolatePlaybackPosition = !lowPowerRendering
+        interpolatePlaybackPosition = !lowPowerRendering,
+        playbackSessionKey = playbackSessionKey,
+        stableEmbeddedViewport = true
     )
 }
 

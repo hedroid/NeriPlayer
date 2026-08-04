@@ -27,8 +27,11 @@ import android.app.Application
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,11 +49,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -58,13 +63,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
+import androidx.compose.material.icons.automirrored.outlined.QueueMusic
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -75,19 +85,23 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ripple
+import moe.ouom.neriplayer.ui.component.overlay.DensityScaledModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarState
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -97,6 +111,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -120,6 +135,10 @@ import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.core.api.bili.BiliClient
 import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.data.platform.youtube.YouTubeFeatureGate
+import moe.ouom.neriplayer.data.search.ExploreSearchHistoryRepository
+import moe.ouom.neriplayer.data.search.exploreSearchHistoryRecordKeyword
+import moe.ouom.neriplayer.data.search.exploreSearchHistoryForDisplay
+import moe.ouom.neriplayer.data.search.resolveExploreSearchKeyword
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassRole
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassSurface
 import moe.ouom.neriplayer.core.player.PlayerManager
@@ -132,16 +151,25 @@ import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.data.model.sameIdentityAs
 import moe.ouom.neriplayer.data.model.stableKey
+import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.component.playlist.PlaylistExportSheet
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportAddedResult
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistBatchExportCreatedResult
 import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
+import moe.ouom.neriplayer.ui.feedback.NeriSnackbarHost
 import moe.ouom.neriplayer.data.model.SongItem
+import moe.ouom.neriplayer.ui.viewmodel.tab.ExploreSearchResult
 import moe.ouom.neriplayer.ui.viewmodel.tab.ExploreUiState
 import moe.ouom.neriplayer.ui.viewmodel.tab.ExploreViewModel
+import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
+import moe.ouom.neriplayer.ui.viewmodel.tab.NeteaseExploreSearchType
+import moe.ouom.neriplayer.ui.viewmodel.tab.NeteaseSearchArtistResult
 import moe.ouom.neriplayer.ui.viewmodel.tab.PlaylistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.SearchSource
 import moe.ouom.neriplayer.ui.viewmodel.tab.YouTubeMusicPlaylist
+import moe.ouom.neriplayer.ui.viewmodel.tab.shouldLoadExploreSearchMore
 import moe.ouom.neriplayer.ui.util.currentWindowWidthDp
 import moe.ouom.neriplayer.ui.util.rememberSongDisplayCoverUrl
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
@@ -149,10 +177,12 @@ import moe.ouom.neriplayer.ui.haptic.HapticTextButton
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
 import moe.ouom.neriplayer.util.format.formatDuration
+import moe.ouom.neriplayer.util.format.formatPlayCount
 import moe.ouom.neriplayer.ui.haptic.performHapticFeedback
 
 private const val SEARCH_INPUT_DEBOUNCE_MS = 300L
 private val ExplorePrimaryTabShape = RoundedCornerShape(20.dp)
+private val ExplorePillShape = RoundedCornerShape(999.dp)
 private val ExploreSearchFieldShape = RoundedCornerShape(16.dp)
 
 internal fun exploreSearchSourceDisplayOrder(
@@ -160,28 +190,85 @@ internal fun exploreSearchSourceDisplayOrder(
     youtubeEnabled: Boolean
 ): List<SearchSource> {
     return if (!youtubeEnabled) {
-        listOf(SearchSource.NETEASE, SearchSource.BILIBILI)
+        listOf(SearchSource.NETEASE, SearchSource.BILIBILI, SearchSource.LINK_RECOGNITION)
     } else if (isInternational) {
         listOf(
             SearchSource.YOUTUBE_MUSIC,
             SearchSource.NETEASE,
-            SearchSource.BILIBILI
+            SearchSource.BILIBILI,
+            SearchSource.LINK_RECOGNITION
         )
     } else {
         listOf(
             SearchSource.NETEASE,
             SearchSource.BILIBILI,
-            SearchSource.YOUTUBE_MUSIC
+            SearchSource.YOUTUBE_MUSIC,
+            SearchSource.LINK_RECOGNITION
         )
     }
+}
+
+internal fun shouldClearExploreSearchQuery(
+    previous: SearchSource,
+    current: SearchSource
+): Boolean {
+    return previous != current && (
+        previous == SearchSource.LINK_RECOGNITION ||
+            current == SearchSource.LINK_RECOGNITION
+        )
+}
+
+internal fun exploreSearchScrollContextKey(
+    keyword: String,
+    source: SearchSource,
+    neteaseSearchType: NeteaseExploreSearchType
+): String? {
+    val normalizedKeyword = keyword.trim()
+    if (normalizedKeyword.isBlank()) return null
+    val sourceType = if (source == SearchSource.NETEASE) {
+        neteaseSearchType.name
+    } else {
+        "-"
+    }
+    return "${source.name}|$sourceType|$normalizedKeyword"
+}
+
+internal fun shouldResetExploreSearchScroll(
+    previousContextKey: String?,
+    currentContextKey: String?
+): Boolean {
+    return currentContextKey != null && previousContextKey != currentContextKey
+}
+
+internal fun shouldShowBiliPartsPicker(song: SongItem): Boolean {
+    return song.album == PlayerManager.BILI_SOURCE_TAG ||
+        song.album.startsWith("${PlayerManager.BILI_SOURCE_TAG}|")
 }
 
 @Composable
 private fun searchSourceLabel(source: SearchSource): String {
     return when (source) {
-        SearchSource.YOUTUBE_MUSIC -> stringResource(R.string.explore_tag_youtube_music)
+        SearchSource.YOUTUBE_MUSIC -> stringResource(R.string.explore_tab_youtube)
         SearchSource.NETEASE -> stringResource(R.string.platform_netease_short)
         SearchSource.BILIBILI -> stringResource(R.string.platform_bilibili)
+        SearchSource.LINK_RECOGNITION -> stringResource(R.string.explore_tab_links)
+    }
+}
+
+@Composable
+private fun neteaseSearchTypeLabel(type: NeteaseExploreSearchType): String {
+    return when (type) {
+        NeteaseExploreSearchType.SONG -> stringResource(R.string.explore_search_type_song)
+        NeteaseExploreSearchType.PLAYLIST -> stringResource(R.string.explore_search_type_playlist)
+        NeteaseExploreSearchType.ARTIST -> stringResource(R.string.explore_search_type_artist)
+    }
+}
+
+private fun neteaseSearchTypeIcon(type: NeteaseExploreSearchType): ImageVector {
+    return when (type) {
+        NeteaseExploreSearchType.SONG -> Icons.Outlined.MusicNote
+        NeteaseExploreSearchType.PLAYLIST -> Icons.AutoMirrored.Outlined.QueueMusic
+        NeteaseExploreSearchType.ARTIST -> Icons.Filled.AccountCircle
     }
 }
 
@@ -191,9 +278,16 @@ private fun searchSourceLabel(source: SearchSource): String {
 fun ExploreScreen(
     gridState: LazyGridState,
     topAppBarState: TopAppBarState,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    searchListState: LazyListState,
+    searchScrollContextKey: String?,
+    onSearchScrollContextKeyChange: (String?) -> Unit,
     offlineMode: Boolean = false,
     onPlay: (PlaylistSummary) -> Unit,
+    onBiliPlaylistClick: (BiliPlaylist) -> Unit = {},
     onYouTubeMusicPlaylistClick: (YouTubeMusicPlaylist) -> Unit = {},
+    onNeteaseArtistClick: (NeteaseArtistSummary) -> Unit = {},
     onSongClick: (List<SongItem>, Int) -> Unit = { _, _ -> },
     onSongPlayPreservingQueue: (SongItem) -> Unit = {},
     onSongPlayNext: (SongItem) -> Unit = {},
@@ -213,9 +307,33 @@ fun ExploreScreen(
         }
     )
     val ui by vm.uiState.collectAsStateWithLifecycle()
-    var searchQuery by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val searchHistoryRepository = remember(context) {
+        ExploreSearchHistoryRepository(context)
+    }
+    val searchHistory by searchHistoryRepository.historyFlow.collectAsStateWithLifecycle(
+        initialValue = emptyList()
+    )
+    val searchHistoryEnabled by AppContainer.settingsRepo.exploreSearchHistoryEnabledFlow
+        .collectAsStateWithLifecycle(initialValue = true)
+    val availableSearchHistory = remember(searchHistoryEnabled, searchHistory) {
+        exploreSearchHistoryForDisplay(searchHistoryEnabled, searchHistory)
+    }
+    val effectiveSearchKeyword = remember(searchQuery, availableSearchHistory, ui.selectedSearchSource) {
+        if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+            searchQuery.trim()
+        } else {
+            resolveExploreSearchKeyword(searchQuery, availableSearchHistory)
+        }
+    }
+    val visibleSearchHistory = remember(availableSearchHistory, ui.selectedSearchSource) {
+        if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+            emptyList()
+        } else {
+            filteredExploreSearchHistory(availableSearchHistory)
+        }
+    }
     val backgroundImageUri by AppContainer.settingsRepo.backgroundImageUriFlow.collectAsStateWithLifecycle(
         initialValue = null
     )
@@ -262,13 +380,66 @@ fun ExploreScreen(
         pageCount = { orderedSearchSources.size }
     )
     val miniPlayerHeight = LocalMiniPlayerHeight.current
+    val snackbarHostState = remember { SnackbarHostState() }
     val windowWidthDp = currentWindowWidthDp()
     val isTabletLayout = windowWidthDp >= 720.dp
     val searchPanelHorizontalPadding = if (isTabletLayout) 28.dp else 16.dp
     val searchResultHorizontalPadding = if (isTabletLayout) 88.dp else 0.dp
+    val youtubeGridState = rememberLazyGridState()
     val tagChipSelectedAlpha = if (backgroundImageUri == null) 1f else 0.86f
     val tagChipUnselectedAlpha = if (backgroundImageUri == null) 1f else 0.74f
     val tagChipBorderAlpha = if (backgroundImageUri == null) 1f else 0.58f
+    var previousSearchSource by remember { mutableStateOf(ui.selectedSearchSource) }
+    val isExploreContentScrolled by remember(
+        searchQuery,
+        ui.selectedSearchSource,
+        searchListState,
+        gridState,
+        youtubeGridState,
+        topAppBarState
+    ) {
+        derivedStateOf {
+            when {
+                topAppBarState.collapsedFraction > 0f -> true
+                searchQuery.isNotBlank() -> searchListState.canScrollBackward
+                ui.selectedSearchSource == SearchSource.NETEASE -> gridState.canScrollBackward
+                ui.selectedSearchSource == SearchSource.YOUTUBE_MUSIC -> {
+                    youtubeGridState.canScrollBackward
+                }
+                else -> false
+            }
+        }
+    }
+    val shouldShowSearchHistory = shouldShowExploreSearchHistory(
+        history = visibleSearchHistory,
+        contentScrolled = isExploreContentScrolled
+    )
+    val shouldShowNeteaseSearchTypeBar = shouldShowExploreNeteaseSearchTypeBar(
+        selectedSearchSource = ui.selectedSearchSource,
+        contentScrolled = isExploreContentScrolled
+    )
+
+    val shouldLoadMoreSearch by remember(
+        searchListState,
+        ui.searchItems.size,
+        ui.searchHasMore,
+        ui.searching,
+        ui.searchLoadingMore,
+        ui.searchLoadMoreError
+    ) {
+        derivedStateOf {
+            shouldLoadExploreSearchMore(
+                resultCount = ui.searchItems.size,
+                lastVisibleItemIndex = searchListState.layoutInfo.visibleItemsInfo
+                    .lastOrNull()
+                    ?.index,
+                hasMore = ui.searchHasMore,
+                searching = ui.searching,
+                loadingMore = ui.searchLoadingMore,
+                loadMoreFailed = ui.searchLoadMoreError != null
+            )
+        }
+    }
 
     fun exitPartsSelection() {
         partsSelectionMode = false
@@ -330,13 +501,117 @@ fun ExploreScreen(
         }
     }
 
-    LaunchedEffect(searchQuery, ui.selectedSearchSource) {
+    var lastRecordedSearchKeyword by remember { mutableStateOf<String?>(null) }
+    var pendingSearchHistoryRecord by remember { mutableStateOf<String?>(null) }
+
+    fun queueExploreSearchRecord(query: String) {
+        if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+            return
+        }
+        val keyword = exploreSearchHistoryRecordKeyword(
+            query = query,
+            enabled = searchHistoryEnabled,
+            history = searchHistory
+        ) ?: return
+        if (keyword.equals(lastRecordedSearchKeyword, ignoreCase = true)) {
+            return
+        }
+        lastRecordedSearchKeyword = keyword
+        pendingSearchHistoryRecord = keyword
+    }
+
+    LaunchedEffect(pendingSearchHistoryRecord) {
+        val keyword = pendingSearchHistoryRecord ?: return@LaunchedEffect
+        searchHistoryRepository.record(keyword)
+        if (pendingSearchHistoryRecord == keyword) {
+            pendingSearchHistoryRecord = null
+        }
+    }
+
+    LaunchedEffect(
+        searchQuery,
+        effectiveSearchKeyword,
+        searchHistoryEnabled,
+        ui.selectedSearchSource,
+        ui.selectedNeteaseSearchType
+    ) {
         if (searchQuery.isBlank()) {
+            lastRecordedSearchKeyword = null
+            pendingSearchHistoryRecord = null
             vm.search("")
             return@LaunchedEffect
         }
         delay(SEARCH_INPUT_DEBOUNCE_MS)
-        vm.search(searchQuery)
+        val displayQuery = searchQuery.trim()
+        if (
+            ui.searchKeyword != effectiveSearchKeyword ||
+            ui.searchDisplayQuery != displayQuery
+        ) {
+            vm.search(effectiveSearchKeyword, displayQuery = displayQuery)
+        }
+        delay(EXPLORE_HISTORY_RECORD_DEBOUNCE_MS - SEARCH_INPUT_DEBOUNCE_MS)
+        queueExploreSearchRecord(searchQuery)
+    }
+
+    LaunchedEffect(ui.selectedSearchSource) {
+        if (shouldClearExploreSearchQuery(previousSearchSource, ui.selectedSearchSource)) {
+            onSearchQueryChange("")
+        }
+        previousSearchSource = ui.selectedSearchSource
+    }
+
+    val currentSearchScrollContextKey = remember(
+        effectiveSearchKeyword,
+        ui.selectedSearchSource,
+        ui.selectedNeteaseSearchType
+    ) {
+        exploreSearchScrollContextKey(
+            keyword = effectiveSearchKeyword,
+            source = ui.selectedSearchSource,
+            neteaseSearchType = ui.selectedNeteaseSearchType
+        )
+    }
+
+    LaunchedEffect(
+        currentSearchScrollContextKey,
+        searchScrollContextKey
+    ) {
+        if (
+            shouldResetExploreSearchScroll(
+                previousContextKey = searchScrollContextKey,
+                currentContextKey = currentSearchScrollContextKey
+            )
+        ) {
+            searchListState.scrollToItem(0)
+        }
+        if (searchScrollContextKey != currentSearchScrollContextKey) {
+            onSearchScrollContextKeyChange(currentSearchScrollContextKey)
+        }
+    }
+
+    LaunchedEffect(
+        shouldLoadMoreSearch,
+        ui.searchItems.size,
+        ui.selectedSearchSource,
+        ui.selectedNeteaseSearchType
+    ) {
+        if (shouldLoadMoreSearch) {
+            vm.loadMoreSearchResults()
+        }
+    }
+
+    fun submitExploreSearch(query: String = searchQuery) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isBlank()) return
+        val keyword = if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+            normalizedQuery
+        } else {
+            resolveExploreSearchKeyword(normalizedQuery, availableSearchHistory)
+        }
+        onSearchQueryChange(normalizedQuery)
+        focusManager.clearFocus()
+        vm.search(keyword, displayQuery = normalizedQuery)
+        queueExploreSearchRecord(normalizedQuery)
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
@@ -346,6 +621,12 @@ fun ExploreScreen(
             .fillMaxSize()
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = Color.Transparent,
+        snackbarHost = {
+            NeriSnackbarHost(
+                hostState = snackbarHostState,
+                bottomPadding = miniPlayerHeight
+            )
+        },
         topBar = {
             LargeTopAppBar(
                 title = { Text(stringResource(R.string.nav_explore)) },
@@ -372,36 +653,72 @@ fun ExploreScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = {
-                            searchQuery = it
+                            onSearchQueryChange(it)
                         },
-                        label = { Text(stringResource(R.string.search_keyword)) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+                                        R.string.explore_link_input_label
+                                    } else {
+                                        R.string.search_keyword
+                                    }
+                                )
+                            )
+                        },
                         placeholder = {
-                            if (ui.selectedSearchSource == SearchSource.NETEASE && !ui.isNeteaseLoggedIn) {
-                                Text(stringResource(R.string.netease_login_required_search_placeholder))
+                            when {
+                                ui.selectedSearchSource == SearchSource.LINK_RECOGNITION -> {
+                                    Text(stringResource(R.string.explore_link_input_placeholder))
+                                }
+                                ui.selectedSearchSource == SearchSource.NETEASE && !ui.isNeteaseLoggedIn -> {
+                                    Text(stringResource(R.string.netease_login_required_search_placeholder))
+                                }
                             }
                         },
                         leadingIcon = { Icon(Icons.Default.Search, "Search") },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
                                 HapticIconButton(onClick = {
-                                    searchQuery = ""
+                                    onSearchQueryChange("")
                                     vm.search("")
                                 }) { Icon(Icons.Default.Clear, "Clear") }
                             }
                         },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = {
-                            focusManager.clearFocus()
+                            submitExploreSearch()
                         }),
                         singleLine = true,
                         shape = ExploreSearchFieldShape,
                         modifier = Modifier.fillMaxWidth()
+                    )
+                    ExploreSearchHistoryRow(
+                        history = visibleSearchHistory,
+                        visible = shouldShowSearchHistory,
+                        query = searchQuery,
+                        onHistoryClick = { item -> submitExploreSearch(item) },
+                        onClearHistory = {
+                            lastRecordedSearchKeyword = null
+                            pendingSearchHistoryRecord = null
+                            scope.launch {
+                                searchHistoryRepository.clear()
+                            }
+                        }
                     )
                     if (ui.selectedSearchSource == SearchSource.NETEASE && !ui.isNeteaseLoggedIn) {
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = stringResource(R.string.netease_login_required_search),
                             color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = stringResource(R.string.explore_link_input_hint),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -413,8 +730,9 @@ fun ExploreScreen(
                             .clip(ExplorePrimaryTabShape),
                         shape = ExplorePrimaryTabShape
                     ) {
-                        PrimaryTabRow(
+                        PrimaryScrollableTabRow(
                             selectedTabIndex = pagerState.currentPage,
+                            edgePadding = 0.dp,
                             containerColor = Color.Transparent,
                             contentColor = MaterialTheme.colorScheme.primary
                         ) {
@@ -426,7 +744,35 @@ fun ExploreScreen(
                                             pagerState.animateScrollToPage(index)
                                         }
                                     },
-                                    text = { Text(searchSourceLabel(source)) }
+                                    text = {
+                                        Text(
+                                            text = searchSourceLabel(source),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    AnimatedVisibility(visible = shouldShowNeteaseSearchTypeBar) {
+                        FlowRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            NeteaseExploreSearchType.entries.forEach { type ->
+                                ExploreTagChip(
+                                    label = neteaseSearchTypeLabel(type),
+                                    icon = neteaseSearchTypeIcon(type),
+                                    selected = ui.selectedNeteaseSearchType == type,
+                                    onClick = { vm.setNeteaseSearchType(type) },
+                                    selectedAlpha = tagChipSelectedAlpha,
+                                    unselectedAlpha = tagChipUnselectedAlpha,
+                                    borderAlpha = tagChipBorderAlpha
                                 )
                             }
                         }
@@ -458,7 +804,7 @@ fun ExploreScreen(
                                 Text(ui.searchError!!, color = MaterialTheme.colorScheme.error)
                             }
                         }
-                        ui.searchResults.isEmpty() -> {
+                        ui.searchItems.isEmpty() -> {
                             Box(
                                 Modifier
                                     .fillMaxSize()
@@ -468,6 +814,7 @@ fun ExploreScreen(
                         }
                         else -> {
                             LazyColumn(
+                                state = searchListState,
                                 contentPadding = PaddingValues(
                                     start = searchResultHorizontalPadding,
                                     end = searchResultHorizontalPadding,
@@ -477,65 +824,108 @@ fun ExploreScreen(
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 itemsIndexed(
-                                    items = ui.searchResults,
-                                    key = { _, song ->
-                                        listOfNotNull(
-                                            song.channelId,
-                                            song.audioId,
-                                            song.subAudioId,
-                                            song.mediaUri,
-                                            song.id.toString()
-                                        ).joinToString("|")
-                                    }
-                                ) { index, song ->
-                                    val isFavoriteSong = favoriteSongKeys.contains(song.stableKey())
-                                    SongRow(
-                                        index = index + 1,
-                                        song = song,
-                                        isFavorite = isFavoriteSong,
-                                        favoriteActionEnabled = localPlaylistsReady,
-                                        offlineMode = offlineMode,
-                                        onClick = {
-                                            if (song.album == PlayerManager.BILI_SOURCE_TAG) {
-                                                scope.launch {
-                                                    try {
-                                                        val info = vm.getVideoInfoByAvid(song.id)
-                                                        if (info.pages.size <= 1) {
-                                                            onSongClick(ui.searchResults, index)
-                                                        } else {
-                                                            partsInfo = info
-                                                            clickedSongCoverUrl = song.coverUrl ?: ""
-                                                            showPartsSheet = true
+                                    items = ui.searchItems,
+                                    key = { _, item -> item.stableKey }
+                                ) { index, item ->
+                                    when (item) {
+                                        is ExploreSearchResult.Song -> {
+                                            val song = item.song
+                                            val songListIndex = ui.searchResults.indexOfFirst {
+                                                it.stableKey() == song.stableKey()
+                                            }.takeIf { it >= 0 } ?: index
+                                            val isFavoriteSong = favoriteSongKeys.contains(song.stableKey())
+                                            SongRow(
+                                                index = index + 1,
+                                                song = song,
+                                                isFavorite = isFavoriteSong,
+                                                favoriteActionEnabled = localPlaylistsReady,
+                                                offlineMode = offlineMode,
+                                                onClick = {
+                                                    if (shouldShowBiliPartsPicker(song)) {
+                                                        scope.launch {
+                                                            try {
+                                                                val info = vm.getVideoInfoByAvid(song.id)
+                                                                if (info.pages.size <= 1) {
+                                                                    onSongClick(ui.searchResults, songListIndex)
+                                                                } else {
+                                                                    partsInfo = info
+                                                                    clickedSongCoverUrl = song.coverUrl ?: ""
+                                                                    showPartsSheet = true
+                                                                }
+                                                            } catch (e: Exception) {
+                                                                NPLogger.e("ExploreScreen", composeResources.getString(R.string.search_error), e)
+                                                            }
                                                         }
-                                                    } catch (e: Exception) {
-                                                        NPLogger.e("ExploreScreen", composeResources.getString(R.string.search_error), e)
-                                                    }
-                                                }
-                                            } else {
-                                                onSongClick(ui.searchResults, index)
-                                            }
-                                        },
-                                        onPlayNow = { onSongPlayPreservingQueue(song) },
-                                        onPlayNext = { onSongPlayNext(song) },
-                                        onAddToQueueEnd = { onSongAddToQueueEnd(song) },
-                                        onToggleFavorite = {
-                                            if (localPlaylistsReady) {
-                                                scope.launchLocalPlaylistMutation(
-                                                    "toggleFavoriteFromExplore"
-                                                ) {
-                                                    val isFavoriteAtAction = FavoritesPlaylist
-                                                        .firstOrNull(repo.playlists.value, context)
-                                                        ?.songs
-                                                        ?.any { it.sameIdentityAs(song) } == true
-                                                    if (isFavoriteAtAction) {
-                                                        repo.removeFromFavorites(song)
                                                     } else {
-                                                        repo.addToFavorites(song)
+                                                        onSongClick(ui.searchResults, songListIndex)
+                                                    }
+                                                },
+                                                onPlayNow = { onSongPlayPreservingQueue(song) },
+                                                onPlayNext = { onSongPlayNext(song) },
+                                                onAddToQueueEnd = { onSongAddToQueueEnd(song) },
+                                                onToggleFavorite = {
+                                                    if (localPlaylistsReady) {
+                                                        scope.launchLocalPlaylistMutation(
+                                                            "toggleFavoriteFromExplore"
+                                                        ) {
+                                                            val isFavoriteAtAction = FavoritesPlaylist
+                                                                .firstOrNull(repo.playlists.value, context)
+                                                                ?.songs
+                                                                ?.any { it.sameIdentityAs(song) } == true
+                                                            if (isFavoriteAtAction) {
+                                                                repo.removeFromFavorites(song)
+                                                            } else {
+                                                                repo.addToFavorites(song)
+                                                            }
+                                                        }
                                                     }
                                                 }
-                                            }
+                                            )
                                         }
-                                    )
+                                        is ExploreSearchResult.Playlist -> {
+                                            NeteasePlaylistSearchRow(
+                                                playlist = item.playlist,
+                                                offlineMode = offlineMode,
+                                                onClick = { onPlay(item.playlist) }
+                                            )
+                                        }
+                                        is ExploreSearchResult.YouTubePlaylist -> {
+                                            YouTubePlaylistSearchRow(
+                                                playlist = item.playlist,
+                                                offlineMode = offlineMode,
+                                                onClick = { onYouTubeMusicPlaylistClick(item.playlist) }
+                                            )
+                                        }
+                                        is ExploreSearchResult.BilibiliPlaylist -> {
+                                            BiliPlaylistSearchRow(
+                                                playlist = item.playlist,
+                                                offlineMode = offlineMode,
+                                                onClick = { onBiliPlaylistClick(item.playlist) }
+                                            )
+                                        }
+                                        is ExploreSearchResult.Artist -> {
+                                            NeteaseArtistSearchRow(
+                                                result = item.result,
+                                                offlineMode = offlineMode,
+                                                onClick = { onNeteaseArtistClick(item.result.artist) }
+                                            )
+                                        }
+                                        is ExploreSearchResult.Notice -> {
+                                            ExploreSearchNoticeRow(item)
+                                        }
+                                    }
+                                }
+                                if (ui.searchLoadingMore) {
+                                    item(key = "search-loading-more") {
+                                        SearchLoadingMoreRow()
+                                    }
+                                } else if (ui.searchLoadMoreError != null) {
+                                    item(key = "search-load-more-error") {
+                                        SearchLoadMoreErrorRow(
+                                            error = ui.searchLoadMoreError!!,
+                                            onRetry = vm::loadMoreSearchResults
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -568,8 +958,17 @@ fun ExploreScreen(
                                 vm = vm,
                                 onClick = onYouTubeMusicPlaylistClick,
                                 offlineMode = offlineMode,
-                                isTabletLayout = isTabletLayout
+                                isTabletLayout = isTabletLayout,
+                                gridState = youtubeGridState
                             )
+                        }
+                        SearchSource.LINK_RECOGNITION -> {
+                            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                                Text(
+                                    text = stringResource(R.string.explore_link_recognition_placeholder),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
                         }
                     }
                 }
@@ -727,7 +1126,17 @@ fun ExploreScreen(
                 val songs = partsInfo!!.pages
                     .filter { selectedParts.contains(it.page) }
                     .map { page -> vm.toSongItem(page, partsInfo!!, clickedSongCoverUrl) }
-                scope.launchLocalPlaylistMutation("createPlaylistFromExplore") {
+                scope.launchLocalPlaylistMutation(
+                    operation = "createPlaylistFromExplore",
+                    onResult = { result ->
+                        scope.showPlaylistBatchExportCreatedResult(
+                            context = context,
+                            snackbarHostState = snackbarHostState,
+                            repository = repo,
+                            result = result
+                        )
+                    }
+                ) {
                     repo.createPlaylistWithSongs(name, songs)
                 }
                 exitPartsSelection()
@@ -736,8 +1145,20 @@ fun ExploreScreen(
                 val songs = partsInfo!!.pages
                     .filter { selectedParts.contains(it.page) }
                     .map { page -> vm.toSongItem(page, partsInfo!!, clickedSongCoverUrl) }
-                scope.launchLocalPlaylistMutation("exportSongsFromExplore") {
-                    repo.addSongsToPlaylist(playlist.id, songs)
+                scope.launchLocalPlaylistMutation(
+                    operation = "exportSongsFromExplore",
+                    onResult = { result ->
+                        scope.showPlaylistBatchExportAddedResult(
+                            context = context,
+                            snackbarHostState = snackbarHostState,
+                            repository = repo,
+                            targetPlaylistId = playlist.id,
+                            targetPlaylistName = playlist.name,
+                            result = result
+                        )
+                    }
+                ) {
+                    repo.addSongsToPlaylistWithResult(playlist.id, songs)
                 }
                 exitPartsSelection()
             }
@@ -793,6 +1214,107 @@ private fun ExploreOfflineContent(topAppBarState: TopAppBarState) {
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ExploreSearchHistoryRow(
+    history: List<String>,
+    visible: Boolean,
+    query: String,
+    onHistoryClick: (String) -> Unit,
+    onClearHistory: () -> Unit
+) {
+    AnimatedVisibility(visible = visible && history.isNotEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = stringResource(R.string.search_history),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (query.isBlank()) {
+                    HapticTextButton(onClick = onClearHistory) {
+                        Text(stringResource(R.string.action_clear))
+                    }
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                history.forEach { item ->
+                    ExploreSearchHistoryChip(
+                        text = item,
+                        onClick = { onHistoryClick(item) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExploreSearchHistoryChip(
+    text: String,
+    onClick: () -> Unit
+) {
+    val containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.72f)
+    ExploreGlassPillSurface(
+        fallbackColor = containerColor,
+        tintColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        onClick = onClick
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+internal fun filteredExploreSearchHistory(history: List<String>): List<String> {
+    return history.take(EXPLORE_HISTORY_DISPLAY_LIMIT)
+}
+
+internal fun shouldShowExploreSearchHistory(
+    history: List<String>,
+    contentScrolled: Boolean
+): Boolean {
+    return history.isNotEmpty() && !contentScrolled
+}
+
+internal fun shouldShowExploreNeteaseSearchTypeBar(
+    selectedSearchSource: SearchSource,
+    contentScrolled: Boolean
+): Boolean {
+    return selectedSearchSource == SearchSource.NETEASE && !contentScrolled
+}
+
+private const val EXPLORE_HISTORY_DISPLAY_LIMIT = 15
+private const val EXPLORE_HISTORY_RECORD_DEBOUNCE_MS = 1_200L
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
@@ -898,7 +1420,8 @@ private fun ExploreTagChip(
     onClick: () -> Unit,
     selectedAlpha: Float,
     unselectedAlpha: Float,
-    borderAlpha: Float
+    borderAlpha: Float,
+    icon: ImageVector? = null
 ) {
     val containerColor = if (selected) {
         MaterialTheme.colorScheme.secondaryContainer.copy(alpha = selectedAlpha)
@@ -916,25 +1439,318 @@ private fun ExploreTagChip(
         MaterialTheme.colorScheme.outline.copy(alpha = borderAlpha)
     }
 
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(999.dp),
-        color = containerColor,
+    ExploreGlassPillSurface(
+        fallbackColor = containerColor,
+        tintColor = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
         contentColor = contentColor,
-        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
+        border = BorderStroke(1.dp, borderColor),
+        onClick = onClick
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .height(32.dp)
                 .padding(horizontal = 14.dp),
-            contentAlignment = Alignment.Center
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+@Composable
+internal fun ExploreGlassPillSurface(
+    fallbackColor: Color,
+    tintColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+    border: BorderStroke? = null,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        AdvancedGlassSurface(
+            role = AdvancedGlassRole.ExploreTag,
+            shape = ExplorePillShape,
+            fallbackColor = fallbackColor,
+            tintColor = tintColor
+        ) {
+            Surface(
+                modifier = Modifier
+                    .clip(ExplorePillShape)
+                    .indication(interactionSource, ripple()),
+                shape = ExplorePillShape,
+                color = Color.Transparent,
+                contentColor = contentColor,
+                border = border,
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+private fun NeteasePlaylistSearchRow(
+    playlist: PlaylistSummary,
+    offlineMode: Boolean,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    LinkedCollectionRow(
+        title = playlist.name,
+        subtitle = stringResource(
+            R.string.playlist_play_count_format,
+            formatPlayCount(context, playlist.playCount),
+            playlist.trackCount
+        ),
+        coverUrl = playlist.picUrl,
+        offlineMode = offlineMode,
+        fallbackIcon = {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(30.dp)
+            )
+        },
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun BiliPlaylistSearchRow(
+    playlist: BiliPlaylist,
+    offlineMode: Boolean,
+    onClick: () -> Unit
+) {
+    LinkedCollectionRow(
+        title = playlist.title,
+        subtitle = listOfNotNull(
+            playlist.subtitle.takeIf { it.isNotBlank() },
+            pluralStringResource(
+                R.plurals.bili_content_count,
+                playlist.count,
+                playlist.count
+            )
+        ).joinToString(" · "),
+        coverUrl = playlist.coverUrl,
+        offlineMode = offlineMode,
+        fallbackIcon = {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(30.dp)
+            )
+        },
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun YouTubePlaylistSearchRow(
+    playlist: YouTubeMusicPlaylist,
+    offlineMode: Boolean,
+    onClick: () -> Unit
+) {
+    LinkedCollectionRow(
+        title = playlist.title,
+        subtitle = listOfNotNull(
+            playlist.subtitle.takeIf { it.isNotBlank() },
+            pluralStringResource(
+                R.plurals.count_songs_format,
+                playlist.trackCount,
+                playlist.trackCount
+            ).takeIf { playlist.trackCount > 0 }
+        ).joinToString(" · "),
+        coverUrl = playlist.coverUrl,
+        offlineMode = offlineMode,
+        fallbackIcon = {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(30.dp)
+            )
+        },
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun NeteaseArtistSearchRow(
+    result: NeteaseSearchArtistResult,
+    offlineMode: Boolean,
+    onClick: () -> Unit
+) {
+    LinkedCollectionRow(
+        title = result.artist.name,
+        subtitle = listOf(
+            pluralStringResource(
+                R.plurals.artist_song_count,
+                result.musicSize,
+                result.musicSize
+            ),
+            pluralStringResource(
+                R.plurals.artist_album_count,
+                result.albumSize,
+                result.albumSize
+            )
+        ).joinToString(" · "),
+        coverUrl = result.picUrl,
+        offlineMode = offlineMode,
+        fallbackIcon = {
+            Icon(
+                imageVector = Icons.Filled.AccountCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(34.dp)
+            )
+        },
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun LinkedCollectionRow(
+    title: String,
+    subtitle: String,
+    coverUrl: String?,
+    offlineMode: Boolean,
+    fallbackIcon: @Composable () -> Unit,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                context.performHapticFeedback()
+                onClick()
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!coverUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = fastScrollableImageRequest(
+                        context = context,
+                        data = coverUrl,
+                        sizePx = 144,
+                        offlineMode = offlineMode
+                    ),
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                fallbackIcon()
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExploreSearchNoticeRow(item: ExploreSearchResult.Notice) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = item.message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun SearchLoadingMoreRow() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+    }
+}
+
+@Composable
+private fun SearchLoadMoreErrorRow(
+    error: String,
+    onRetry: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center
+        )
+        HapticTextButton(onClick = onRetry) {
+            Text(stringResource(R.string.action_retry))
         }
     }
 }
@@ -1087,6 +1903,7 @@ private fun YouTubeMusicExploreContent(
     vm: ExploreViewModel,
     onClick: (YouTubeMusicPlaylist) -> Unit,
     offlineMode: Boolean,
+    gridState: LazyGridState,
     isTabletLayout: Boolean = false
 ) {
     val miniPlayerHeight = LocalMiniPlayerHeight.current
@@ -1137,6 +1954,7 @@ private fun YouTubeMusicExploreContent(
         }
         else -> {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(gridMinCellSize),
                 contentPadding = PaddingValues(
                     start = gridHorizontalPadding, end = gridHorizontalPadding,

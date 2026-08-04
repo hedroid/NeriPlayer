@@ -33,6 +33,7 @@ data class CachedBiliFavoriteVideo(
     val bvid: String,
     val title: String,
     val uploader: String,
+    val uploaderMid: Long = 0L,
     val coverUrl: String,
     val durationSec: Int
 )

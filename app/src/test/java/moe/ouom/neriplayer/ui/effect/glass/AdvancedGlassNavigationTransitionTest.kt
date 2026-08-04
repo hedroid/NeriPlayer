@@ -93,6 +93,25 @@ class AdvancedGlassNavigationTransitionTest {
     }
 
     @Test
+    fun drawerTransitionCanKeepNestedScenesInDepthOrder() {
+        val root = buildAdvancedGlassDrawerTransition(
+            forward = false,
+            targetContentZIndex = 0f
+        )
+        val detail = buildAdvancedGlassDrawerTransition(
+            forward = false,
+            targetContentZIndex = 1f
+        )
+        val nestedDetail = buildAdvancedGlassDrawerTransition(
+            forward = true,
+            targetContentZIndex = 2f
+        )
+
+        assertTrue(root.targetContentZIndex < detail.targetContentZIndex)
+        assertTrue(detail.targetContentZIndex < nestedDetail.targetContentZIndex)
+    }
+
+    @Test
     fun drawerMotionKeepsTheOldPagePositionFixedWhileRecedingItsContent() {
         val recededList = resolveAdvancedGlassDrawerSceneMotion(
             sceneState = 0,
@@ -135,5 +154,16 @@ class AdvancedGlassNavigationTransitionTest {
         assertEquals(1f, intermediateDownloadManager.contentTranslationYFraction)
         assertEquals(1f, intermediateDownloadManager.contentScale)
         assertEquals(AdvancedGlassSceneMotion.None, restoredSettingsPage)
+    }
+
+    @Test
+    fun restoredDetailSceneStaysAboveTheRootListLayer() {
+        val rootLayer = resolveAdvancedGlassSceneZIndex(navigationDepth = 0)
+        val detailLayer = resolveAdvancedGlassSceneZIndex(navigationDepth = 1)
+        val nestedDetailLayer = resolveAdvancedGlassSceneZIndex(navigationDepth = 2)
+
+        assertTrue("详情场景必须覆盖根列表", detailLayer > rootLayer)
+        assertTrue("更深详情必须覆盖上一层详情", nestedDetailLayer > detailLayer)
+        assertEquals(0f, resolveAdvancedGlassSceneZIndex(navigationDepth = -1))
     }
 }

@@ -28,44 +28,18 @@ package moe.ouom.neriplayer.ui.screen.tab.settings.auth
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
 import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.activity.auth.NeteaseQrLoginActivity
-import moe.ouom.neriplayer.activity.auth.NeteaseWebLoginActivity
 import moe.ouom.neriplayer.core.di.AppContainer
-import moe.ouom.neriplayer.ui.component.sheet.bottomSheetDragBlocker
-import moe.ouom.neriplayer.ui.screen.tab.settings.component.InlineMessage
-import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsButton
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsDialog
-import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsSegmentedTabs
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsTextButton
-import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsTextField
 import moe.ouom.neriplayer.ui.viewmodel.debug.NeteaseAuthViewModel
 import org.json.JSONObject
 
@@ -80,9 +54,6 @@ internal fun SettingsNeteaseAuthDialogs(
     confirmPhoneMasked: String?,
     onDismissConfirmDialog: () -> Unit,
     vm: NeteaseAuthViewModel,
-    showCookieDialog: Boolean,
-    cookieText: String,
-    onDismissCookieDialog: () -> Unit,
     showSavedCookieDialog: Boolean = false,
     onDismissSavedCookieDialog: () -> Unit = {},
     onOpenSheetAtTab: (Int) -> Unit = {},
@@ -137,9 +108,6 @@ internal fun SettingsNeteaseAuthDialogs(
     }
 
     if (showSheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, 1)) }
-        var rawCookie by remember { mutableStateOf("") }
         val launchBrowserLogin: () -> Unit = onBrowserLogin?.let { injectedBrowserLogin ->
             {
                 onInlineMsgChange(null)
@@ -164,123 +132,33 @@ internal fun SettingsNeteaseAuthDialogs(
             defaultBrowserLogin
         }
 
-        ModalBottomSheet(
-            onDismissRequest = onDismissSheet,
-            sheetState = sheetState,
-            sheetGesturesEnabled = false,
-            containerColor = MaterialTheme.colorScheme.surface
-        ) {
-            Box(
-                modifier = Modifier
-                    .bottomSheetDragBlocker()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 48.dp, top = 12.dp)
-            ) {
-                Column {
-                    Text(
-                        text = stringResource(R.string.login_netease),
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    AnimatedVisibility(
-                        visible = inlineMsg != null,
-                        enter = fadeIn(),
-                        exit = fadeOut()
-                    ) {
-                        InlineMessage(
-                            text = inlineMsg ?: "",
-                            onClose = { onInlineMsgChange(null) }
-                        )
-                    }
-
-                    MiuixSettingsSegmentedTabs(
-                        labels = listOf(
-                            stringResource(R.string.login_qr),
-                            stringResource(R.string.login_paste_cookie)
-                        ),
-                        selectedIndex = selectedTab,
-                        onSelectedIndexChange = { selectedTab = it }
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-
-                    when (selectedTab) {
-                        0 -> {
-                            Text(
-                                stringResource(R.string.settings_netease_login_browser_hint),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            MiuixSettingsButton(onClick = launchBrowserLogin) {
-                                Text(stringResource(R.string.login_start_netease_qr))
-                            }
-                        }
-
-                        1 -> {
-                            MiuixSettingsTextField(
-                                value = rawCookie,
-                                onValueChange = { rawCookie = it },
-                                label = { Text(stringResource(R.string.login_paste_cookie_hint)) },
-                                minLines = 6,
-                                maxLines = 10,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            MiuixSettingsButton(
-                                onClick = {
-                                    if (rawCookie.isBlank()) {
-                                        onInlineMsgChange(composeResources.getString(R.string.settings_cookie_input_hint))
-                                    } else {
-                                        vm.importCookiesFromRaw(rawCookie)
-                                    }
-                                }
-                            ) {
-                                Text(stringResource(R.string.login_save_cookie))
-                            }
-                        }
-                    }
+        SettingsCookieLoginSheet(
+            title = stringResource(R.string.login_netease),
+            initialTab = initialTab,
+            inlineMsg = inlineMsg,
+            onInlineMsgChange = onInlineMsgChange,
+            onDismiss = onDismissSheet,
+            browserTabLabel = stringResource(R.string.login_qr),
+            browserButtonLabel = stringResource(R.string.login_start_netease_qr),
+            browserHintContent = {
+                Text(
+                    stringResource(R.string.settings_netease_login_browser_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            cookieLabel = stringResource(R.string.login_paste_cookie_hint),
+            onBrowserLogin = launchBrowserLogin,
+            onSaveCookie = { rawCookie ->
+                if (rawCookie.isBlank()) {
+                    onInlineMsgChange(composeResources.getString(R.string.settings_cookie_input_hint))
+                } else {
+                    vm.importCookiesFromRaw(rawCookie)
                 }
             }
-        }
-    }
-
-    if (showCookieDialog) {
-        CookieTextDialog(
-            title = stringResource(R.string.login_success),
-            cookieText = cookieText,
-            onDismiss = onDismissCookieDialog
         )
     }
-}
 
-@Composable
-internal fun CookieTextDialog(
-    title: String,
-    cookieText: String,
-    onDismiss: () -> Unit
-) {
-    MiuixSettingsDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    text = cookieText.ifBlank { stringResource(R.string.settings_empty_placeholder) },
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        },
-        confirmButton = {
-            MiuixSettingsTextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_ok))
-            }
-        }
-    )
 }
 
 private fun parseCookieMap(json: String): Map<String, String> {

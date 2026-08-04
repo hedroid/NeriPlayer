@@ -1,7 +1,15 @@
 package moe.ouom.neriplayer.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,10 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -45,6 +55,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.math.roundToInt
+
+private val Boolean.testNavigationDepth: Int
+    get() = if (this) 1 else 0
 
 @RunWith(AndroidJUnit4::class)
 class NeriAppNavigationTransitionTest {
@@ -147,6 +160,10 @@ class NeriAppNavigationTransitionTest {
             assertMainTabFrameCovered(sampledFrame, RapidSwitchRootTag)
             val bounds = listOf(RapidHomeTag, RapidExploreTag, RapidLibraryTag)
                 .mapNotNull(::singleNodeBoundsOrNull)
+            assertTrue(
+                "Rapid Tab retargeting removed every content scene at frame $sampledFrame",
+                bounds.isNotEmpty()
+            )
             assertHorizontalScenesDoNotOverlap(sampledFrame, bounds)
             sampledFrame++
         }
@@ -158,7 +175,7 @@ class NeriAppNavigationTransitionTest {
         composeRule.runOnIdle { selectedRoute.value = Destinations.Explore.route }
         repeat(2) { advanceAndTrackFrame() }
         composeRule.runOnIdle { selectedRoute.value = Destinations.Home.route }
-        repeat((ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS / FRAME_MS) + 8) {
+        repeat((ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS * 2 / FRAME_MS) + 12) {
             advanceAndTrackFrame()
         }
 
@@ -167,6 +184,593 @@ class NeriAppNavigationTransitionTest {
             composeRule.onAllNodesWithTag(RapidHomeTag).fetchSemanticsNodes().size == 1 &&
                 composeRule.onAllNodesWithTag(RapidExploreTag).fetchSemanticsNodes().isEmpty() &&
                 composeRule.onAllNodesWithTag(RapidLibraryTag).fetchSemanticsNodes().isEmpty()
+        )
+    }
+
+    @Test
+    fun rapidMainTabRetargetingKeepsTheFullMotionDuration() {
+        lateinit var selectedRoute: MutableState<String>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            MainTabLayerHost(
+                selectedRoute = selectedRoute.value,
+                modifier = Modifier.size(240.dp, 320.dp)
+            ) { route ->
+                RapidMainTabTestScene(route)
+            }
+        }
+
+        composeRule.runOnIdle { selectedRoute.value = Destinations.Explore.route }
+        repeat(18) { advanceRapidSwitchFrame() }
+        composeRule.runOnIdle { selectedRoute.value = Destinations.Library.route }
+        composeRule.mainClock.advanceTimeBy(
+            (ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS / 2).toLong()
+        )
+        composeRule.waitForIdle()
+
+        assertTrue(
+            "Queued Tab request interrupted the current animation",
+            nodeCount(RapidHomeTag) == 1 &&
+                nodeCount(RapidExploreTag) == 1 &&
+                nodeCount(RapidLibraryTag) == 0
+        )
+
+        composeRule.mainClock.advanceTimeBy(
+            (ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS * 2 + FRAME_MS * 4).toLong()
+        )
+        composeRule.waitForIdle()
+        assertTrue(
+            "Retargeted Tab animation did not settle on the latest route",
+            nodeCount(RapidLibraryTag) == 1 &&
+                nodeCount(RapidHomeTag) == 0 &&
+                nodeCount(RapidExploreTag) == 0
+        )
+    }
+
+    @Test
+    fun mainTabTransitionWaitsForFirstNonzeroContainerWidth() {
+        lateinit var selectedRoute: MutableState<String>
+        lateinit var hostWidth: MutableState<androidx.compose.ui.unit.Dp>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            hostWidth = remember { mutableStateOf(0.dp) }
+            MainTabLayerHost(
+                selectedRoute = selectedRoute.value,
+                modifier = Modifier.size(hostWidth.value, 320.dp)
+            ) { route ->
+                RapidMainTabTestScene(route)
+            }
+        }
+
+        composeRule.runOnIdle { selectedRoute.value = Destinations.Explore.route }
+        composeRule.waitForIdle()
+        assertTrue(
+            "Tab transition advanced before its container had a width",
+            nodeCount(RapidHomeTag) == 1 && nodeCount(RapidExploreTag) == 0
+        )
+
+        composeRule.runOnIdle { hostWidth.value = 240.dp }
+        waitForNodeCount(RapidHomeTag, expected = 1)
+        waitForNodeCount(RapidExploreTag, expected = 1)
+    }
+
+    @Test
+    fun firstMainTabTransitionPreparesTheIncomingSceneBeforeSliding() {
+        lateinit var transitionState: MainTabLayerTransitionState
+        lateinit var incomingSceneWasComposed: MutableState<Boolean>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            transitionState = rememberMainTabLayerTransitionState(Destinations.Home.route)
+            incomingSceneWasComposed = remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier
+                    .size(240.dp, 320.dp)
+                    .background(Color.Black)
+                    .testTag(RapidSwitchRootTag)
+            ) {
+                MainTabLayerHost(
+                    selectedRoute = Destinations.Home.route,
+                    transitionState = transitionState,
+                    modifier = Modifier.fillMaxSize()
+                ) { route ->
+                    if (route == Destinations.Explore.route) {
+                        SideEffect { incomingSceneWasComposed.value = true }
+                    }
+                    RapidMainTabTestScene(route)
+                }
+            }
+        }
+
+        repeat(4) { advanceRapidSwitchFrame() }
+        composeRule.runOnIdle {
+            transitionState.request(Destinations.Explore.route)
+        }
+        repeat(2) { advanceRapidSwitchFrame() }
+
+        val rootBounds = singleNodeBoundsOrNull(RapidSwitchRootTag)
+        val homeBounds = singleNodeBoundsOrNull(RapidHomeTag)
+        assertTrue(
+            "Incoming Tab started moving before its offscreen preparation completed: " +
+                "home=$homeBounds",
+            rootBounds != null &&
+                homeBounds != null &&
+                incomingSceneWasComposed.value &&
+                homeBounds.left >= rootBounds.left - POSITION_TOLERANCE_PX &&
+                homeBounds.right <= rootBounds.right + POSITION_TOLERANCE_PX
+        )
+
+        repeat(4) { advanceRapidSwitchFrame() }
+        val movingHomeBounds = singleNodeBoundsOrNull(RapidHomeTag)
+        assertTrue(
+            "Incoming Tab did not start after its offscreen preparation: " +
+                "home=$movingHomeBounds",
+            rootBounds != null &&
+                movingHomeBounds != null &&
+                movingHomeBounds.right < rootBounds.right - POSITION_TOLERANCE_PX
+        )
+    }
+
+    @Test
+    fun queuedMainTabRequestKeepsTheCurrentMotionRunning() {
+        lateinit var transitionState: MainTabLayerTransitionState
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            transitionState = rememberMainTabLayerTransitionState(Destinations.Home.route)
+            Box(
+                modifier = Modifier
+                    .size(240.dp, 320.dp)
+                    .background(Color.Black)
+                    .testTag(RapidSwitchRootTag)
+            ) {
+                MainTabLayerHost(
+                    selectedRoute = Destinations.Home.route,
+                    transitionState = transitionState,
+                    modifier = Modifier.fillMaxSize()
+                ) { route ->
+                    RapidMainTabTestScene(route)
+                }
+            }
+        }
+
+        composeRule.runOnIdle { transitionState.request(Destinations.Explore.route) }
+        var homeRightWhenMotionStarted: Float? = null
+        repeat(16) {
+            if (homeRightWhenMotionStarted == null) {
+                advanceRapidSwitchFrame()
+                val rootBounds = singleNodeBoundsOrNull(RapidSwitchRootTag)
+                val homeBounds = singleNodeBoundsOrNull(RapidHomeTag)
+                if (
+                    rootBounds != null &&
+                    homeBounds != null &&
+                    homeBounds.right < rootBounds.right - POSITION_TOLERANCE_PX
+                ) {
+                    homeRightWhenMotionStarted = homeBounds.right
+                }
+            }
+        }
+        assertTrue(
+            "Initial Tab motion did not start",
+            homeRightWhenMotionStarted != null
+        )
+
+        composeRule.runOnIdle { transitionState.request(Destinations.Library.route) }
+        repeat(4) { advanceRapidSwitchFrame() }
+        val continuedHomeBounds = singleNodeBoundsOrNull(RapidHomeTag)
+        assertTrue(
+            "Queued Tab request paused the current motion: home=$continuedHomeBounds",
+            continuedHomeBounds != null &&
+                continuedHomeBounds.right <
+                checkNotNull(homeRightWhenMotionStarted) - POSITION_TOLERANCE_PX
+        )
+        assertTrue(
+            "Queued Tab request replaced the current transition before it settled",
+            nodeCount(RapidLibraryTag) == 0
+        )
+
+        repeat((ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS * 2 / FRAME_MS) + 12) {
+            advanceRapidSwitchFrame()
+        }
+        assertTrue(
+            "Queued Tab request did not settle on the latest target",
+            nodeCount(RapidLibraryTag) == 1 &&
+                nodeCount(RapidHomeTag) == 0 &&
+                nodeCount(RapidExploreTag) == 0
+        )
+    }
+
+    @Test
+    fun immediateMainTabRequestsDoNotWaitForRouteRecomposition() {
+        lateinit var transitionState: MainTabLayerTransitionState
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            transitionState = rememberMainTabLayerTransitionState(Destinations.Home.route)
+            Box(
+                modifier = Modifier
+                    .size(240.dp, 320.dp)
+                    .background(Color.Black)
+                    .testTag(RapidSwitchRootTag)
+            ) {
+                MainTabLayerHost(
+                    selectedRoute = Destinations.Home.route,
+                    transitionState = transitionState,
+                    modifier = Modifier.fillMaxSize()
+                ) { route ->
+                    RapidMainTabTestScene(route)
+                }
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { transitionState.request(Destinations.Explore.route) }
+        var initialMotionObserved = false
+        repeat(12) {
+            if (!initialMotionObserved) {
+                advanceRapidSwitchFrame()
+                val rootBounds = singleNodeBoundsOrNull(RapidSwitchRootTag)
+                val homeBounds = singleNodeBoundsOrNull(RapidHomeTag)
+                initialMotionObserved = rootBounds != null &&
+                    homeBounds != null &&
+                    homeBounds.right < rootBounds.right - POSITION_TOLERANCE_PX
+            }
+        }
+        assertTrue("Immediate Tab request did not begin its initial motion", initialMotionObserved)
+        composeRule.runOnIdle { transitionState.request(Destinations.Home.route) }
+
+        var observedPairedScenes = false
+        repeat((ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS * 2 / FRAME_MS) + 12) { frame ->
+            advanceRapidSwitchFrame()
+            assertMainTabFrameCovered(frame, RapidSwitchRootTag)
+            val bounds = listOf(RapidHomeTag, RapidExploreTag)
+                .mapNotNull(::singleNodeBoundsOrNull)
+            assertTrue(
+                "Immediate Tab request exposed no content scene at frame $frame",
+                bounds.isNotEmpty()
+            )
+            if (bounds.size == 2) {
+                observedPairedScenes = true
+                assertHorizontalScenesDoNotOverlap(frame, bounds)
+            }
+        }
+
+        assertTrue("Immediate Tab request did not keep paired scenes during reversal", observedPairedScenes)
+        assertTrue(
+            "Immediate Tab request did not settle on the latest tab",
+            composeRule.onAllNodesWithTag(RapidHomeTag).fetchSemanticsNodes().size == 1 &&
+                composeRule.onAllNodesWithTag(RapidExploreTag).fetchSemanticsNodes().isEmpty()
+        )
+    }
+
+    @Test
+    fun mainTabAnimationDoesNotRecomposeStableSceneContentEveryFrame() {
+        lateinit var transitionState: MainTabLayerTransitionState
+        lateinit var sceneCompositionCounts: MutableMap<String, Int>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            transitionState = rememberMainTabLayerTransitionState(Destinations.Home.route)
+            sceneCompositionCounts = remember { mutableMapOf() }
+            MainTabLayerHost(
+                selectedRoute = Destinations.Home.route,
+                transitionState = transitionState,
+                modifier = Modifier.size(240.dp, 320.dp)
+            ) { route ->
+                SideEffect {
+                    sceneCompositionCounts[route] =
+                        sceneCompositionCounts.getOrDefault(route, 0) + 1
+                }
+                RapidMainTabTestScene(route)
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { transitionState.request(Destinations.Explore.route) }
+        waitForNodeCount(RapidHomeTag, expected = 1)
+        waitForNodeCount(RapidExploreTag, expected = 1)
+        val countsAfterTransitionStarts = sceneCompositionCounts.toMap()
+
+        repeat(4) {
+            composeRule.mainClock.advanceTimeBy(FRAME_MS.toLong())
+            composeRule.waitForIdle()
+        }
+
+        assertTrue(
+            "Stable Tab content recomposed while only the frame offset changed: " +
+                "before=$countsAfterTransitionStarts after=$sceneCompositionCounts",
+            sceneCompositionCounts == countsAfterTransitionStarts
+        )
+    }
+
+    @Test
+    fun restoredMainTabSceneStateEndsWhenItsTabTransitionSettles() {
+        lateinit var selectedRoute: MutableState<String>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            MainTabLayerHost(
+                selectedRoute = selectedRoute.value,
+                modifier = Modifier
+                    .size(240.dp, 320.dp)
+                    .testTag(RestoredSceneRootTag)
+            ) { route ->
+                val restoredEntry = rememberMainTabSceneRestoredEntry()
+                val tag = if (
+                    route == Destinations.Home.route &&
+                        restoredEntry
+                ) {
+                    RestoredHomeSceneTag
+                } else {
+                    FreshHomeSceneTag
+                }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(FirstTabColor)
+                        .testTag(tag)
+                )
+            }
+        }
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Settings.route
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Home.route
+        }
+        waitForNodeCount(RestoredHomeSceneTag, expected = 1)
+
+        composeRule.mainClock.advanceTimeBy(
+            (ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS + FRAME_MS * 4).toLong()
+        )
+        composeRule.waitForIdle()
+        assertTrue(
+            "restored state remained active after the Tab transition settled",
+            composeRule.onAllNodesWithTag(RestoredHomeSceneTag)
+                .fetchSemanticsNodes()
+                .isEmpty()
+        )
+    }
+
+    @Test
+    fun restoredDetailVisibilityDoesNotLeakIntoLaterDetailOpens() {
+        lateinit var selectedRoute: MutableState<String>
+        lateinit var detailKey: MutableState<String>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            detailKey = remember { mutableStateOf("restored_playlist") }
+            MainTabLayerHost(selectedRoute = selectedRoute.value) { route ->
+                if (route == Destinations.Home.route) {
+                    val visibilityState = rememberMainTabDetailVisibilityState(detailKey.value)
+                    val startedVisible = remember(detailKey.value) {
+                        visibilityState.currentState
+                    }
+                    val tag = if (startedVisible) {
+                        RestoredEntryTag
+                    } else {
+                        FreshEntryTag
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .testTag(tag)
+                    )
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Settings.route
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Home.route
+        }
+        waitForNodeCount(RestoredEntryTag, expected = 1)
+
+        composeRule.mainClock.advanceTimeBy(
+            (ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS + FRAME_MS * 4).toLong()
+        )
+        composeRule.waitForIdle()
+        assertTrue(
+            "restored detail restarted its entry animation after the Tab transition settled",
+            composeRule.onAllNodesWithTag(RestoredEntryTag)
+                .fetchSemanticsNodes()
+                .size == 1
+        )
+
+        composeRule.runOnIdle {
+            detailKey.value = "new_playlist"
+        }
+        waitForNodeCount(FreshEntryTag, expected = 1)
+    }
+
+    @Test
+    fun restoredDetailVisibilitySurvivesDelayedDetailComposition() {
+        lateinit var selectedRoute: MutableState<String>
+        lateinit var detailComposed: MutableState<Boolean>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            detailComposed = remember { mutableStateOf(true) }
+            MainTabLayerHost(selectedRoute = selectedRoute.value) { route ->
+                if (route == Destinations.Home.route && detailComposed.value) {
+                    val visibilityState = rememberMainTabDetailVisibilityState(
+                        "restored_playlist"
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .testTag(
+                                if (visibilityState.currentState) {
+                                    DelayedRestoredDetailTag
+                                } else {
+                                    DelayedFreshDetailTag
+                                }
+                            )
+                    )
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Settings.route
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+        composeRule.runOnIdle {
+            detailComposed.value = false
+        }
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Home.route
+        }
+        composeRule.mainClock.advanceTimeBy(
+            (ADVANCED_GLASS_MAIN_TAB_TRANSITION_DURATION_MS + FRAME_MS * 4).toLong()
+        )
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            detailComposed.value = true
+        }
+        waitForNodeCount(DelayedRestoredDetailTag, expected = 1)
+        assertTrue(
+            "delayed restored detail replayed its entry animation",
+            composeRule.onAllNodesWithTag(DelayedFreshDetailTag)
+                .fetchSemanticsNodes()
+                .isEmpty()
+        )
+    }
+
+    @Test
+    fun closingRestoredHostDetailAfterTabSwitchKeepsCloseAnimation() {
+        lateinit var selectedRoute: MutableState<String>
+        lateinit var detailVisible: MutableState<Boolean>
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            selectedRoute = remember { mutableStateOf(Destinations.Home.route) }
+            MainTabLayerHost(selectedRoute = selectedRoute.value) { route ->
+                if (route == Destinations.Home.route) {
+                    detailVisible = rememberSaveable { mutableStateOf(false) }
+                    val suppressRestoredEntry = rememberMainTabSceneRestoredEntry()
+                    val detailTransition = updateTransition(
+                        targetState = detailVisible.value,
+                        label = "restored_host_detail_transition"
+                    )
+                    val rootRevealFraction =
+                        detailTransition.animateMainTabDetailCloseRootRevealFraction(
+                            navigationDepth = { visible -> visible.testNavigationDepth },
+                            label = "restored_host_detail_close"
+                        )
+                    detailTransition.AnimatedContent(
+                        transitionSpec = {
+                            if (
+                                shouldSuppressRestoredMainTabHostEntry(
+                                    restoredEntry = suppressRestoredEntry,
+                                    initialDepth = initialState.testNavigationDepth,
+                                    targetDepth = targetState.testNavigationDepth
+                                )
+                            ) {
+                                EnterTransition.None togetherWith ExitTransition.None
+                            } else {
+                                fadeIn(tween(200)) togetherWith fadeOut(tween(200))
+                            }.using(SizeTransform(clip = true))
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    ) { detail ->
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag(
+                                    if (detail) {
+                                        RestoredHostDetailTag
+                                    } else {
+                                        RestoredHostRootSceneTag
+                                    }
+                                )
+                        ) {
+                            if (!detail) {
+                                Box(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .clipMainTabDetailCloseRoot(rootRevealFraction)
+                                        .background(FirstTabColor)
+                                        .testTag(RestoredHostRootContentTag)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .testTag(RestoredHostOtherTabTag)
+                    )
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            detailVisible.value = true
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+        assertTrue(
+            "test detail did not open before switching tabs",
+            nodeCount(RestoredHostDetailTag) == 1
+        )
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Settings.route
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        composeRule.mainClock.autoAdvance = false
+
+        composeRule.runOnIdle {
+            selectedRoute.value = Destinations.Home.route
+        }
+        waitForNodeCount(RestoredHostDetailTag, expected = 1)
+
+        composeRule.runOnIdle {
+            detailVisible.value = false
+        }
+        advanceRapidSwitchFrame()
+        assertTrue(
+            "restored host close animation was cut at its first frame",
+            nodeCount(RestoredHostRootSceneTag) == 1 &&
+                nodeCount(RestoredHostDetailTag) == 1
+        )
+        assertTrue(
+            "restored root content disappeared during the close",
+            nodeCount(RestoredHostRootContentTag) == 1
+        )
+        val firstCloseFramePixels = composeRule
+            .onNodeWithTag(RestoredHostRootContentTag)
+            .captureToImage()
+            .toPixelMap()
+        assertTrue(
+            "restored root content was fully exposed behind the closing detail",
+            countDominantPixelsInBottomHalf(
+                pixels = firstCloseFramePixels,
+                dominantRed = true
+            ) == 0
+        )
+
+        composeRule.mainClock.advanceTimeBy(240)
+        composeRule.waitForIdle()
+        assertTrue(
+            "restored host detail remained after close animation",
+            nodeCount(RestoredHostDetailTag) == 0 &&
+                nodeCount(RestoredHostRootContentTag) == 1
         )
     }
 
@@ -806,6 +1410,22 @@ class NeriAppNavigationTransitionTest {
     private fun nodeCount(tag: String): Int =
         composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes().size
 
+    private fun waitForNodeCount(
+        tag: String,
+        expected: Int,
+        maxFrames: Int = 4
+    ) {
+        repeat(maxFrames + 1) {
+            composeRule.waitForIdle()
+            if (nodeCount(tag) == expected) return
+            composeRule.mainClock.advanceTimeBy(FRAME_MS.toLong())
+        }
+        assertTrue(
+            "Expected $expected node(s) with tag $tag, found ${nodeCount(tag)}",
+            nodeCount(tag) == expected
+        )
+    }
+
     private fun navigateMainTab(navController: NavHostController, route: String): String? {
         navController.navigate(route) {
             popUpTo(navController.graph.startDestinationId) {
@@ -859,6 +1479,25 @@ class NeriAppNavigationTransitionTest {
         return count
     }
 
+    private fun countDominantPixelsInBottomHalf(
+        pixels: androidx.compose.ui.graphics.PixelMap,
+        dominantRed: Boolean
+    ): Int {
+        var count = 0
+        for (y in pixels.height / 2 until pixels.height) {
+            for (x in 0 until pixels.width) {
+                val color = pixels[x, y]
+                val isDominant = if (dominantRed) {
+                    color.red > 0.15f && color.red > color.blue * 2f
+                } else {
+                    color.blue > 0.15f && color.blue > color.red * 2f
+                }
+                if (isDominant) count++
+            }
+        }
+        return count
+    }
+
     private companion object {
         const val RootTag = "navigation_transition_root"
         const val MainTabRootTag = "main_tab_transition_root"
@@ -868,6 +1507,17 @@ class NeriAppNavigationTransitionTest {
         const val RapidHomeTag = "rapid_home_scene"
         const val RapidExploreTag = "rapid_explore_scene"
         const val RapidLibraryTag = "rapid_library_scene"
+        const val RestoredSceneRootTag = "restored_scene_root"
+        const val FreshHomeSceneTag = "fresh_home_scene"
+        const val RestoredHomeSceneTag = "restored_home_scene"
+        const val RestoredEntryTag = "restored_entry_scene"
+        const val FreshEntryTag = "fresh_entry_scene"
+        const val DelayedRestoredDetailTag = "delayed_restored_detail_scene"
+        const val DelayedFreshDetailTag = "delayed_fresh_detail_scene"
+        const val RestoredHostRootSceneTag = "restored_host_root_scene"
+        const val RestoredHostRootContentTag = "restored_host_root_content"
+        const val RestoredHostDetailTag = "restored_host_detail"
+        const val RestoredHostOtherTabTag = "restored_host_other_tab"
         const val ExternalRootTag = "external_transition_root"
         const val ExternalHomeTag = "external_home_scene"
         const val ExternalExploreTag = "external_explore_scene"

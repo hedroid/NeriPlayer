@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Error
+import androidx.compose.material.icons.outlined.FormatSize
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Keyboard
@@ -28,8 +29,11 @@ import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tab
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Usb
 import androidx.compose.material.icons.outlined.Wallpaper
+import androidx.compose.material.icons.outlined.ZoomInMap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -53,6 +57,7 @@ import moe.ouom.neriplayer.data.settings.AutoSettingSpecRepository
 import moe.ouom.neriplayer.ksp.annotations.AutoSettingIcon
 import moe.ouom.neriplayer.ksp.annotations.AutoSettingSpec
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsSwitch
+import moe.ouom.neriplayer.ui.screen.tab.settings.page.settingsHighlightTarget
 
 @Composable
 internal fun rememberAutoSettingSpecRepository(): AutoSettingSpecRepository {
@@ -69,14 +74,23 @@ internal fun <T> AutoSettingSpecListItem(
     leadingContent: (@Composable () -> Unit)? = null,
     supportingContent: (@Composable () -> Unit)? = null,
     trailingContent: (@Composable () -> Unit)? = null,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
     val title = autoSettingSpecString(setting.titleRes) ?: setting.key
     val description = autoSettingSpecString(setting.descriptionRes)
+    val highlightedModifier = modifier.settingsHighlightTarget(
+        targetId = "setting:${setting.key}",
+        highlightTargetId = highlightTargetId,
+        highlightPulse = highlightPulse,
+        onHighlightFinished = onHighlightFinished
+    )
     val clickableModifier = if (onClick == null) {
-        modifier
+        highlightedModifier
     } else {
-        modifier.settingsItemClickable(enabled = enabled, onClick = onClick)
+        highlightedModifier.settingsItemClickable(enabled = enabled, onClick = onClick)
     }
     val defaultLeadingContent: (@Composable () -> Unit)? = if (showDefaultIcon) {
         {
@@ -112,6 +126,9 @@ internal fun AutoSettingSpecSwitchItem(
     showDefaultIcon: Boolean = true,
     leadingContent: (@Composable () -> Unit)? = null,
     supportingContent: (@Composable () -> Unit)? = null,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null,
     afterCheckedChange: ((Boolean) -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
@@ -131,7 +148,10 @@ internal fun AutoSettingSpecSwitchItem(
         enabled = enabled,
         showDefaultIcon = showDefaultIcon,
         leadingContent = leadingContent,
-        supportingContent = supportingContent
+        supportingContent = supportingContent,
+        highlightTargetId = highlightTargetId,
+        highlightPulse = highlightPulse,
+        onHighlightFinished = onHighlightFinished
     )
 }
 
@@ -144,7 +164,10 @@ internal fun AutoSettingSpecSwitchItem(
     enabled: Boolean = true,
     showDefaultIcon: Boolean = true,
     leadingContent: (@Composable () -> Unit)? = null,
-    supportingContent: (@Composable () -> Unit)? = null
+    supportingContent: (@Composable () -> Unit)? = null,
+    highlightTargetId: String? = null,
+    highlightPulse: Int = 0,
+    onHighlightFinished: (() -> Unit)? = null
 ) {
     AutoSettingSpecListItem(
         setting = setting,
@@ -153,6 +176,9 @@ internal fun AutoSettingSpecSwitchItem(
         showDefaultIcon = showDefaultIcon,
         leadingContent = leadingContent,
         supportingContent = supportingContent,
+        highlightTargetId = highlightTargetId,
+        highlightPulse = highlightPulse,
+        onHighlightFinished = onHighlightFinished,
         trailingContent = {
             MiuixSettingsSwitch(
                 checked = checked,
@@ -187,6 +213,7 @@ private fun autoSettingSpecIconVector(icon: AutoSettingIcon): ImageVector? {
         AutoSettingIcon.Colorize -> Icons.Outlined.Colorize
         AutoSettingIcon.Download -> Icons.Outlined.Download
         AutoSettingIcon.Error -> Icons.Outlined.Error
+        AutoSettingIcon.FormatSize -> Icons.Outlined.FormatSize
         AutoSettingIcon.Home -> Icons.Outlined.Home
         AutoSettingIcon.Info -> Icons.Outlined.Info
         AutoSettingIcon.Keyboard -> Icons.Outlined.Keyboard
@@ -200,8 +227,11 @@ private fun autoSettingSpecIconVector(icon: AutoSettingIcon): ImageVector? {
         AutoSettingIcon.Subtitles -> Icons.Outlined.Subtitles
         AutoSettingIcon.Sync -> Icons.Outlined.Sync
         AutoSettingIcon.Tab -> Icons.Outlined.Tab
+        AutoSettingIcon.Translate -> Icons.Outlined.Translate
         AutoSettingIcon.Tune -> Icons.Outlined.Tune
+        AutoSettingIcon.Usb -> Icons.Outlined.Usb
         AutoSettingIcon.Wallpaper -> Icons.Outlined.Wallpaper
+        AutoSettingIcon.ZoomInMap -> Icons.Outlined.ZoomInMap
     }
 }
 

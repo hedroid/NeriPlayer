@@ -27,6 +27,7 @@ internal fun createAdvancedGlassRenderEffect(
     shaderSource: AdvancedGlassShaderSource,
     sdkInt: Int,
     radiusPx: Float,
+    renderProfile: AdvancedGlassRenderProfile = AdvancedGlassRenderProfile.Native,
     regions: List<AdvancedGlassRenderRegion>
 ): RenderEffect? {
     if (Build.VERSION.SDK_INT < ADVANCED_GLASS_BACKEND_MIN_SDK ||
@@ -39,6 +40,9 @@ internal fun createAdvancedGlassRenderEffect(
     }
     require(regions.size <= ADVANCED_GLASS_MAX_REGIONS) {
         "Advanced glass supports at most $ADVANCED_GLASS_MAX_REGIONS visible regions"
+    }
+    require(!renderProfile.usesRegionLocalRendering) {
+        "Region-local profiles must render through AdvancedGlassLocalBlurRenderer"
     }
     return createAdvancedGlassRenderEffectSession(shaderSource, sdkInt)
         .update(radiusPx, regions)
@@ -87,7 +91,7 @@ private class AdvancedGlassRuntimeShaderSession(
             "Advanced glass supports at most $ADVANCED_GLASS_MAX_REGIONS visible regions"
         }
         val activeBackend = backend ?: AdvancedGlassRuntimeShaderBackend.Session(
-            shaderSource.load()
+            maskShaderSource = shaderSource.load()
         ).also { backend = it }
         return activeBackend.update(radiusPx, regions)
     }
@@ -95,52 +99,28 @@ private class AdvancedGlassRuntimeShaderSession(
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private object AdvancedGlassRuntimeShaderBackend {
-    class Session(shaderSource: String) {
-        private val regionBounds = FloatArray(
-            ADVANCED_GLASS_MAX_REGIONS * RegionComponentCount
-        )
-        private val cornerRadii = FloatArray(
-            ADVANCED_GLASS_MAX_REGIONS * RegionComponentCount
-        )
-        private val maskShader = createMaskShader(shaderSource, invertMask = false)
-        private val outsideShader = createMaskShader(shaderSource, invertMask = true)
-        private var cachedRadiusPx = Float.NaN
+    class Session(
+        private val maskShaderSource: String
+    ) {
+        private var cachedBlurRadiusPx = Float.NaN
         private var cachedBlurEffect: AndroidRenderEffect? = null
 
         fun update(
             radiusPx: Float,
             regions: List<AdvancedGlassRenderRegion>
         ): RenderEffect {
-            updateRegionUniforms(regions)
-            val blurEffect = cachedBlurEffect?.takeIf { cachedRadiusPx == radiusPx }
-                ?: AndroidRenderEffect.createBlurEffect(
-                    radiusPx,
-                    radiusPx,
-                    Shader.TileMode.CLAMP
-                ).also { effect ->
-                    cachedRadiusPx = radiusPx
-                    cachedBlurEffect = effect
-                }
-            val maskEffect = AndroidRenderEffect.createRuntimeShaderEffect(
-                maskShader,
-                ChildShaderUniform
+            val regionUniforms = regionUniforms(regions)
+            return resolveNativeEffect(
+                regionUniforms = regionUniforms,
+                radiusPx = radiusPx
             )
-            val outsideOriginalEffect = AndroidRenderEffect.createRuntimeShaderEffect(
-                outsideShader,
-                ChildShaderUniform
-            )
-            val maskedBlurEffect = AndroidRenderEffect.createChainEffect(
-                maskEffect,
-                blurEffect
-            )
-            return AndroidRenderEffect.createBlendModeEffect(
-                outsideOriginalEffect,
-                maskedBlurEffect,
-                BlendMode.SRC_OVER
-            ).asComposeRenderEffect()
         }
 
-        private fun updateRegionUniforms(regions: List<AdvancedGlassRenderRegion>) {
+        private fun regionUniforms(
+            regions: List<AdvancedGlassRenderRegion>
+        ): AdvancedGlassRegionUniforms {
+            val regionBounds = FloatArray(ADVANCED_GLASS_MAX_REGIONS * RegionComponentCount)
+            val cornerRadii = FloatArray(ADVANCED_GLASS_MAX_REGIONS * RegionComponentCount)
             regions.forEachIndexed { index, region ->
                 val offset = index * RegionComponentCount
                 regionBounds[offset] = region.left
@@ -152,25 +132,66 @@ private object AdvancedGlassRuntimeShaderBackend {
                 cornerRadii[offset + 2] = region.cornerRadiiPx.bottomRight.coerceAtLeast(0f)
                 cornerRadii[offset + 3] = region.cornerRadiiPx.bottomLeft.coerceAtLeast(0f)
             }
-            updateShaderUniforms(maskShader, regions.size)
-            updateShaderUniforms(outsideShader, regions.size)
+            return AdvancedGlassRegionUniforms(
+                count = regions.size,
+                bounds = regionBounds,
+                cornerRadii = cornerRadii
+            )
+        }
+
+        private fun resolveNativeEffect(
+            regionUniforms: AdvancedGlassRegionUniforms,
+            radiusPx: Float
+        ): RenderEffect {
+            val blurEffect = cachedBlurEffect?.takeIf { cachedBlurRadiusPx == radiusPx }
+                ?: AndroidRenderEffect.createBlurEffect(
+                    radiusPx,
+                    radiusPx,
+                    Shader.TileMode.CLAMP
+                ).also { effect ->
+                    cachedBlurRadiusPx = radiusPx
+                    cachedBlurEffect = effect
+                }
+            return applyRegionMask(blurEffect, regionUniforms)
+        }
+
+        private fun applyRegionMask(
+            blurEffect: AndroidRenderEffect,
+            regionUniforms: AdvancedGlassRegionUniforms
+        ): RenderEffect {
+            // some GPU backends capture uniforms on the first effect bind, so each
+            // mask shader begins with the current region data rather than an empty mask
+            val maskEffect = AndroidRenderEffect.createRuntimeShaderEffect(
+                createMaskShader(regionUniforms, invertMask = false),
+                ChildShaderUniform
+            )
+            val outsideOriginalEffect = AndroidRenderEffect.createRuntimeShaderEffect(
+                createMaskShader(regionUniforms, invertMask = true),
+                ChildShaderUniform
+            )
+            val maskedBlurEffect = AndroidRenderEffect.createChainEffect(maskEffect, blurEffect)
+            return AndroidRenderEffect.createBlendModeEffect(
+                outsideOriginalEffect,
+                maskedBlurEffect,
+                BlendMode.SRC_OVER
+            ).asComposeRenderEffect()
         }
 
         private fun createMaskShader(
-            shaderSource: String,
+            regionUniforms: AdvancedGlassRegionUniforms,
             invertMask: Boolean
-        ) = RuntimeShader(shaderSource).apply {
-            setFloatUniform(RegionCountUniform, 0f)
-            setFloatUniform(RegionBoundsUniform, regionBounds)
-            setFloatUniform(CornerRadiiUniform, cornerRadii)
+        ) = RuntimeShader(maskShaderSource).apply {
+            setFloatUniform(RegionCountUniform, regionUniforms.count.toFloat())
+            setFloatUniform(RegionBoundsUniform, regionUniforms.bounds)
+            setFloatUniform(CornerRadiiUniform, regionUniforms.cornerRadii)
             setFloatUniform(InvertMaskUniform, if (invertMask) 1f else 0f)
         }
 
-        private fun updateShaderUniforms(shader: RuntimeShader, regionCount: Int) {
-            shader.setFloatUniform(RegionCountUniform, regionCount.toFloat())
-            shader.setFloatUniform(RegionBoundsUniform, regionBounds)
-            shader.setFloatUniform(CornerRadiiUniform, cornerRadii)
-        }
+        private data class AdvancedGlassRegionUniforms(
+            val count: Int,
+            val bounds: FloatArray,
+            val cornerRadii: FloatArray
+        )
     }
 
     private const val RegionComponentCount = 4

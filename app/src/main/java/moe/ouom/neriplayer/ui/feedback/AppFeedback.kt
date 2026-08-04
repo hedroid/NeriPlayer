@@ -17,24 +17,42 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import moe.ouom.neriplayer.R
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -47,6 +65,9 @@ private const val StyledToastMinHeightDp = 48
 private const val StyledToastHorizontalMarginDp = 32
 private const val StyledToastHorizontalPaddingDp = 16
 private const val StyledToastVerticalPaddingDp = 14
+private const val NeriSnackbarMaxLines = 2
+private const val NeriCompactSnackbarMaxLines = 1
+internal const val NeriSnackbarTestTag = "neri_feedback_snackbar"
 
 internal data class FeedbackDedupState(
     val message: String,
@@ -58,7 +79,10 @@ private val snackbarDedupStates = WeakHashMap<SnackbarHostState, FeedbackDedupSt
 
 internal data class AppFeedbackMessage(
     val text: String,
-    val duration: SnackbarDuration
+    val duration: SnackbarDuration,
+    val actionLabel: String? = null,
+    val withDismissAction: Boolean = false,
+    val onActionPerformed: (suspend () -> Unit)? = null
 )
 
 internal enum class FeedbackDelivery {
@@ -153,7 +177,30 @@ object AppFeedback {
             message = message,
             duration = duration,
             preferSnackbar = preferSnackbar,
-            forceToast = false
+            forceToast = false,
+            actionLabel = null,
+            withDismissAction = false,
+            onActionPerformed = null
+        )
+    }
+
+    fun showWithAction(
+        context: Context? = null,
+        message: String,
+        actionLabel: String,
+        duration: SnackbarDuration = SnackbarDuration.Long,
+        withDismissAction: Boolean = true,
+        onActionPerformed: suspend () -> Unit
+    ) {
+        showInternal(
+            context = context,
+            message = message,
+            duration = duration,
+            preferSnackbar = true,
+            forceToast = false,
+            actionLabel = actionLabel,
+            withDismissAction = withDismissAction,
+            onActionPerformed = onActionPerformed
         )
     }
 
@@ -167,7 +214,10 @@ object AppFeedback {
             message = message,
             duration = duration,
             preferSnackbar = false,
-            forceToast = true
+            forceToast = true,
+            actionLabel = null,
+            withDismissAction = false,
+            onActionPerformed = null
         )
     }
 
@@ -192,7 +242,10 @@ object AppFeedback {
         message: String,
         duration: SnackbarDuration,
         preferSnackbar: Boolean,
-        forceToast: Boolean
+        forceToast: Boolean,
+        actionLabel: String?,
+        withDismissAction: Boolean,
+        onActionPerformed: (suspend () -> Unit)?
     ) {
         val text = message.trim().takeIf { it.isNotEmpty() } ?: return
         val toastContext = context ?: applicationContext ?: return
@@ -209,7 +262,14 @@ object AppFeedback {
             )
         ) {
             FeedbackDelivery.Snackbar -> {
-                if (!events.trySend(AppFeedbackMessage(text, duration)).isSuccess) {
+                val event = AppFeedbackMessage(
+                    text = text,
+                    duration = duration,
+                    actionLabel = actionLabel,
+                    withDismissAction = withDismissAction,
+                    onActionPerformed = onActionPerformed
+                )
+                if (!events.trySend(event).isSuccess) {
                     showToastOnMain(toastContext, text, duration, isForeground)
                 }
             }
@@ -379,6 +439,17 @@ internal fun isDuplicateFeedbackMessage(
         nowMs - last.shownAtMs < FeedbackDedupWindowMs
 }
 
+internal fun resolveNeriSnackbarMessageMaxLines(
+    actionLabel: String?,
+    withDismissAction: Boolean
+): Int {
+    return if (actionLabel != null || withDismissAction) {
+        NeriCompactSnackbarMaxLines
+    } else {
+        NeriSnackbarMaxLines
+    }
+}
+
 @Composable
 fun AppFeedbackHostEffect(snackbarHostState: SnackbarHostState) {
     DisposableEffect(snackbarHostState) {
@@ -387,10 +458,15 @@ fun AppFeedbackHostEffect(snackbarHostState: SnackbarHostState) {
     }
     LaunchedEffect(snackbarHostState) {
         AppFeedback.collectMessages { message ->
-            snackbarHostState.showNeriSnackbar(
+            val result = snackbarHostState.showNeriSnackbar(
                 message = message.text,
+                actionLabel = message.actionLabel,
+                withDismissAction = message.withDismissAction,
                 duration = message.duration
             )
+            if (result == SnackbarResult.ActionPerformed) {
+                message.onActionPerformed?.invoke()
+            }
         }
     }
 }
@@ -414,6 +490,81 @@ fun NeriSnackbarHost(
     }
     SnackbarHost(
         hostState = hostState,
-        modifier = hostModifier
+        modifier = hostModifier,
+        snackbar = ::NeriSnackbar
     )
+}
+
+@Composable
+fun BoxScope.NeriOverlaySnackbarHost(
+    hostState: SnackbarHostState,
+    bottomPadding: Dp = 0.dp,
+    applyNavigationBarsPadding: Boolean = true,
+    applyImePadding: Boolean = true
+) {
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .zIndex(SnackbarLayerZIndex),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        NeriSnackbarHost(
+            hostState = hostState,
+            modifier = Modifier.fillMaxWidth(),
+            bottomPadding = bottomPadding,
+            applyNavigationBarsPadding = applyNavigationBarsPadding,
+            applyImePadding = applyImePadding
+        )
+    }
+}
+
+@Composable
+private fun NeriSnackbar(snackbarData: SnackbarData) {
+    val actionLabel = snackbarData.visuals.actionLabel
+    val messageMaxLines = resolveNeriSnackbarMessageMaxLines(
+        actionLabel = actionLabel,
+        withDismissAction = snackbarData.visuals.withDismissAction
+    )
+    Snackbar(
+        modifier = Modifier
+            .padding(12.dp)
+            .testTag(NeriSnackbarTestTag),
+        action = if (actionLabel != null) {
+            {
+                TextButton(
+                    onClick = snackbarData::performAction,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = SnackbarDefaults.actionColor
+                    )
+                ) {
+                    Text(
+                        text = actionLabel,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else {
+            null
+        },
+        dismissAction = if (snackbarData.visuals.withDismissAction) {
+            {
+                IconButton(onClick = snackbarData::dismiss) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.cd_close)
+                    )
+                }
+            }
+        } else {
+            null
+        },
+        actionOnNewLine = false
+    ) {
+        Text(
+            text = snackbarData.visuals.message,
+            maxLines = messageMaxLines,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }

@@ -3,6 +3,8 @@ package moe.ouom.neriplayer.ui.screen.tab.settings.component
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -10,6 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.data.settings.AdvancedBlurQuality
 import moe.ouom.neriplayer.testutil.assumeComposeHostAvailable
 import moe.ouom.neriplayer.ui.effect.glass.ADVANCED_GLASS_MIN_SDK
 import org.junit.Assert.assertFalse
@@ -30,10 +33,11 @@ class EnhancedAdvancedBlurSettingItemTest {
     }
 
     @Test
-    fun itemAppearsWithParentAndRestoresSavedChildChoice() {
+    fun enhancedItemDoesNotOwnBlurAmountOrQualitySettings() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val title = context.getString(R.string.settings_enhanced_advanced_blur)
         val radiusTitle = context.getString(R.string.settings_enhanced_advanced_blur_radius)
+        val qualityTitle = context.getString(R.string.settings_advanced_blur_quality)
         val parentEnabled = mutableStateOf(false)
         val childEnabled = mutableStateOf(true)
 
@@ -52,12 +56,51 @@ class EnhancedAdvancedBlurSettingItemTest {
 
         composeRule.runOnUiThread { parentEnabled.value = true }
         composeRule.onAllNodesWithText(title).assertCountEquals(1)
-        composeRule.onAllNodesWithText(radiusTitle).assertCountEquals(1)
+        composeRule.onAllNodesWithText(radiusTitle).assertCountEquals(0)
+        composeRule.onAllNodesWithText(qualityTitle).assertCountEquals(0)
         composeRule.onNodeWithText(title).performClick()
         composeRule.onAllNodesWithText(radiusTitle).assertCountEquals(0)
+        composeRule.onAllNodesWithText(qualityTitle).assertCountEquals(0)
 
         composeRule.runOnIdle {
             assertFalse("恢复显示后应沿用已保存值并允许切换", childEnabled.value)
+        }
+    }
+
+    @Test
+    fun highBlurQualityRequiresEnhancedBlurButOtherQualitiesRemainAvailable() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val title = context.getString(R.string.settings_advanced_blur_quality)
+        val high = context.getString(R.string.settings_advanced_blur_quality_high)
+        val default = context.getString(R.string.settings_advanced_blur_quality_default)
+        val selectedQuality = mutableStateOf(AdvancedBlurQuality.UltraLow)
+        val enhancedEnabled = mutableStateOf(false)
+
+        composeRule.setContent {
+            MaterialTheme {
+                AdvancedBlurQualitySettingItem(
+                    quality = selectedQuality.value,
+                    enhancedAdvancedBlurEnabled = enhancedEnabled.value,
+                    onQualityChange = { selectedQuality.value = it },
+                    highlightTargetId = null,
+                    highlightPulse = 0,
+                    onHighlightFinished = null
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(title).performClick()
+        composeRule.onNodeWithText(high).assertIsNotEnabled()
+        composeRule.onNodeWithText(default).assertIsEnabled().performClick()
+        composeRule.runOnIdle {
+            assertTrue("默认档不应依赖进阶高级模糊开关", selectedQuality.value == AdvancedBlurQuality.Default)
+        }
+
+        composeRule.runOnUiThread { enhancedEnabled.value = true }
+        composeRule.onNodeWithText(title).performClick()
+        composeRule.onNodeWithText(high).assertIsEnabled().performClick()
+        composeRule.runOnIdle {
+            assertTrue("高档应在进阶高级模糊开启后可选", selectedQuality.value == AdvancedBlurQuality.High)
         }
     }
 

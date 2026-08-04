@@ -45,6 +45,7 @@ import moe.ouom.neriplayer.core.di.AppContainer
 import moe.ouom.neriplayer.data.auth.common.SavedCookieAuthState
 import moe.ouom.neriplayer.data.model.stableKey
 import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
+import moe.ouom.neriplayer.data.model.BiliUploaderSummary
 import moe.ouom.neriplayer.ui.viewmodel.artist.parseNeteaseArtistsFromSongDetail
 import moe.ouom.neriplayer.core.logging.NPLogger
 import moe.ouom.neriplayer.R
@@ -306,6 +307,40 @@ class NowPlayingViewModel : ViewModel() {
         }
     }
 
+    fun resolveBiliUploader(
+        song: SongItem,
+        onResult: (BiliUploaderSummary) -> Unit,
+        onUnavailable: () -> Unit = {},
+        onError: (Throwable) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val uploader = withContext(Dispatchers.IO) {
+                    resolveBiliSong(song, AppContainer.biliClient)
+                        ?.videoInfo
+                        ?.takeIf { it.ownerMid > 0L }
+                        ?.let { videoInfo ->
+                            BiliUploaderSummary(
+                                mid = videoInfo.ownerMid,
+                                name = videoInfo.ownerName.ifBlank { song.artist },
+                                avatarUrl = videoInfo.ownerFace
+                            )
+                        }
+                }
+                if (uploader != null) {
+                    onResult(uploader)
+                } else {
+                    onUnavailable()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                NPLogger.e("NowPlayingViewModel", "解析 B 站 UP 主失败", error)
+                onError(error)
+            }
+        }
+    }
+
     fun setPlaybackSpeed(speed: Float, persist: Boolean = true) {
         PlayerManager.setPlaybackSpeed(speed, persist)
     }
@@ -363,7 +398,7 @@ class NowPlayingViewModel : ViewModel() {
                     // 一次性更新歌词和翻译歌词, 避免数据竞争
                     PlayerManager.updateSongLyricsAndTranslation(
                         song,
-                        songDetails.lyric!!,
+                        songDetails.lyric,
                         songDetails.translatedLyric
                     )
                     NPLogger.d("NowPlayingViewModel", "歌词已保存: songId=${song.id}, album=${song.album}, lyrics length=${songDetails.lyric.length}, hasTranslation=${!songDetails.translatedLyric.isNullOrBlank()}")
@@ -387,7 +422,8 @@ class NowPlayingViewModel : ViewModel() {
         restoreBaseCover: Boolean = false,
         restoreBaseName: Boolean = false,
         restoreBaseArtist: Boolean = false,
-        clearMatchedMetadata: Boolean = false
+        clearMatchedMetadata: Boolean = false,
+        writeLocalMetadata: Boolean = false
     ) {
         PlayerManager.updateSongCustomInfo(
             originalSong = originalSong,
@@ -397,7 +433,8 @@ class NowPlayingViewModel : ViewModel() {
             restoreBaseCover = restoreBaseCover,
             restoreBaseName = restoreBaseName,
             restoreBaseArtist = restoreBaseArtist,
-            clearMatchedMetadata = clearMatchedMetadata
+            clearMatchedMetadata = clearMatchedMetadata,
+            writeLocalMetadata = writeLocalMetadata
         )
     }
 
@@ -436,25 +473,21 @@ class NowPlayingViewModel : ViewModel() {
                 } else {
                     // 网易云音乐: 从网易云获取原始信息
                     val appContainer = AppContainer
-                    val songDetails = appContainer.cloudMusicSearchApi?.getSongInfo(originalSong.id.toString())
+                    val songDetails = appContainer.cloudMusicSearchApi.getSongInfo(originalSong.id.toString())
 
-                    if (songDetails != null) {
-                        val coverUrl = songDetails.coverUrl?.let {
-                            if (it.startsWith("http://")) it.replaceFirst("http://", "https://") else it
-                        }
-
-                        val info = OriginalSongInfo(
-                            name = songDetails.songName,
-                            artist = songDetails.singer,
-                            coverUrl = coverUrl,
-                            shouldClearLyrics = false,  // 网易云音源不清除歌词
-                            lyric = songDetails.lyric,  // 保存原始歌词
-                            translatedLyric = songDetails.translatedLyric  // 保存原始翻译歌词
-                        )
-                        onResult(true, info, context.getString(R.string.music_restore_success))
-                    } else {
-                        onResult(false, null, context.getString(R.string.music_restore_failed))
+                    val coverUrl = songDetails.coverUrl?.let {
+                        if (it.startsWith("http://")) it.replaceFirst("http://", "https://") else it
                     }
+
+                    val info = OriginalSongInfo(
+                        name = songDetails.songName,
+                        artist = songDetails.singer,
+                        coverUrl = coverUrl,
+                        shouldClearLyrics = false,  // 网易云音源不清除歌词
+                        lyric = songDetails.lyric,  // 保存原始歌词
+                        translatedLyric = songDetails.translatedLyric  // 保存原始翻译歌词
+                    )
+                    onResult(true, info, context.getString(R.string.music_restore_success))
                 }
             } catch (e: Exception) {
                 NPLogger.e("NowPlayingViewModel", "获取原始信息失败", e)

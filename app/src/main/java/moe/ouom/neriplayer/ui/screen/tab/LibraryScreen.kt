@@ -61,7 +61,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material3.AlertDialog
+import moe.ouom.neriplayer.ui.component.overlay.DensityScaledAlertDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -116,6 +116,7 @@ import moe.ouom.neriplayer.data.platform.youtube.YouTubeFeatureGate
 import moe.ouom.neriplayer.data.playlist.favorite.FAVORITE_SOURCE_NETEASE_ARTIST
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylist
 import moe.ouom.neriplayer.data.playlist.favorite.FavoritePlaylistRepository
+import moe.ouom.neriplayer.ui.viewmodel.tab.toBiliPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.FavoritesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.system.LocalFilesPlaylist
 import moe.ouom.neriplayer.data.local.playlist.model.LocalArtistSummary
@@ -129,6 +130,7 @@ import moe.ouom.neriplayer.data.model.displayArtist
 import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.feedback.AppFeedback
+import moe.ouom.neriplayer.ui.component.playlist.showPlaylistDeleteResultGlobally
 import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
@@ -141,6 +143,11 @@ import moe.ouom.neriplayer.ui.util.rememberPlaylistDisplayCoverUrl
 import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
 import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsButton
+import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsDialog
+import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsDialogContent
+import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsTextButton
+import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsTextField
 import moe.ouom.neriplayer.ui.util.currentWindowWidthDp
 import moe.ouom.neriplayer.util.format.formatPlayCount
 import moe.ouom.neriplayer.util.media.offlineCachedImageRequest
@@ -264,7 +271,11 @@ fun LibraryScreen(
     val vm: LibraryViewModel = viewModel()
     val ui by vm.uiState.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
+    val context = LocalContext.current
     val defaultPlaylistName = stringResource(R.string.library_create_playlist_default)
+    val localPlaylistRepo = remember(context) {
+        LocalPlaylistRepository.getInstance(context)
+    }
     val isInternational by AppContainer.settingsRepo.internationalizationEnabledFlow
         .collectAsStateWithLifecycle(initialValue = false)
     val youtubeEnabled by AppContainer.settingsRepo.youtubeEnabledFlow
@@ -382,8 +393,14 @@ fun LibraryScreen(
                             onRename = { playlistId, newName ->
                                 vm.renameLocalPlaylist(playlistId, newName)
                             },
-                            onDelete = { playlistId ->
-                                vm.deleteLocalPlaylist(playlistId)
+                            onDelete = { playlistIds ->
+                                vm.deleteLocalPlaylists(playlistIds) { result ->
+                                    showPlaylistDeleteResultGlobally(
+                                        context = context,
+                                        repository = localPlaylistRepo,
+                                        result = result
+                                    )
+                                }
                             },
                             onReorder = { order ->
                                 vm.reorderLocalPlaylists(order)
@@ -741,20 +758,23 @@ private fun BiliPlaylistList(
     val createdLabel = stringResource(R.string.library_bili_created_favorite)
     val collectedLabel = stringResource(R.string.library_bili_collected_favorite)
     val collectionLabel = stringResource(R.string.library_bili_collection)
+    val seriesLabel = stringResource(R.string.library_bili_series)
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val filteredPlaylists = remember(
         playlists,
         searchQuery,
         createdLabel,
         collectedLabel,
-        collectionLabel
+        collectionLabel,
+        seriesLabel
     ) {
         filterBiliPlaylists(
             playlists = playlists,
             query = searchQuery,
             createdLabel = createdLabel,
             collectedLabel = collectedLabel,
-            collectionLabel = collectionLabel
+            collectionLabel = collectionLabel,
+            seriesLabel = seriesLabel
         )
     }
 
@@ -860,6 +880,7 @@ private fun BiliPlaylistList(
                 BiliPlaylistKind.CREATED_FAVORITE -> stringResource(R.string.library_bili_created_favorite)
                 BiliPlaylistKind.COLLECTED_FAVORITE -> stringResource(R.string.library_bili_collected_favorite)
                 BiliPlaylistKind.COLLECTION -> stringResource(R.string.library_bili_collection)
+                BiliPlaylistKind.SERIES -> stringResource(R.string.library_bili_series)
             }
             Card(
                 shape = cardShape,
@@ -926,7 +947,7 @@ private fun LocalPlaylistList(
     onClick: (LocalPlaylist) -> Unit,
     onArtistClick: (LocalArtistSummary) -> Unit,
     onRename: (Long, String) -> Unit = { _, _ -> },
-    onDelete: (Long) -> Unit = {},
+    onDelete: (List<Long>) -> Unit = {},
     onReorder: (List<Long>) -> Unit = {},
     offlineMode: Boolean
 ) {
@@ -1243,7 +1264,7 @@ private fun LocalPlaylistList(
             }
 
             if (showDialog) {
-                AlertDialog(
+                MiuixSettingsDialog(
                     onDismissRequest = {
                         showDialog = false
                         newName = ""
@@ -1251,8 +1272,8 @@ private fun LocalPlaylistList(
                     },
                     title = { Text(stringResource(R.string.playlist_create)) },
                     text = {
-                        Column {
-                            OutlinedTextField(
+                        MiuixSettingsDialogContent(verticalSpacing = 12.dp) {
+                            MiuixSettingsTextField(
                                 value = newName,
                                 onValueChange = {
                                     newName = it.take(maxNameLength)
@@ -1260,28 +1281,29 @@ private fun LocalPlaylistList(
                                 },
                                 placeholder = { Text(stringResource(R.string.playlist_enter_name)) },
                                 singleLine = true,
-                                isError = nameError != null,
-                                supportingText = {
-                                    val err = nameError
-                                    if (err != null) Text(err, color = MaterialTheme.colorScheme.error)
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(focusRequester),
+                                modifier = Modifier.focusRequester(focusRequester),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(
-                                    onDone = { tryCreate() }
-                                )
+                                keyboardActions = KeyboardActions(onDone = { tryCreate() })
                             )
+                            if (nameError != null) {
+                                Text(
+                                    text = nameError.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     },
                     confirmButton = {
-                        HapticTextButton(
-                            onClick = { tryCreate() }
-                        ) { Text(stringResource(R.string.action_create)) }
+                        MiuixSettingsButton(
+                            onClick = { tryCreate() },
+                            enabled = newName.trim().isNotBlank()
+                        ) {
+                            Text(stringResource(R.string.action_create))
+                        }
                     },
                     dismissButton = {
-                        HapticTextButton(
+                        MiuixSettingsTextButton(
                             onClick = {
                                 showDialog = false
                                 newName = ""
@@ -1310,7 +1332,7 @@ private fun LocalPlaylistList(
                             onClick = {
                                 val idsToDelete = selectedIds.toList()
                                 exitSelection()
-                                idsToDelete.forEach { onDelete(it) }
+                                onDelete(idsToDelete)
                             }
                         ) { Text(stringResource(R.string.action_delete)) }
                     },
@@ -1561,30 +1583,33 @@ private fun LocalPlaylistList(
                 }
 
                 if (showRenameDialog) {
-                    AlertDialog(
+                    MiuixSettingsDialog(
                         onDismissRequest = { showRenameDialog = false },
                         title = { Text(stringResource(R.string.action_rename)) },
                         text = {
-                            OutlinedTextField(
-                                value = renameText,
-                                onValueChange = { renameText = it.take(maxNameLength) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            MiuixSettingsDialogContent(verticalSpacing = 12.dp) {
+                                MiuixSettingsTextField(
+                                    value = renameText,
+                                    onValueChange = { renameText = it.take(maxNameLength) },
+                                    placeholder = { Text(displayName) },
+                                    singleLine = true
+                                )
+                            }
                         },
                         confirmButton = {
-                            HapticTextButton(
+                            MiuixSettingsButton(
                                 onClick = {
                                     val trimmed = renameText.trim().take(maxNameLength)
                                     if (trimmed.isNotBlank()) {
                                         onRename(pl.id, trimmed)
                                         showRenameDialog = false
                                     }
-                                }
+                                },
+                                enabled = renameText.trim().isNotBlank()
                             ) { Text(stringResource(R.string.action_confirm)) }
                         },
                         dismissButton = {
-                            HapticTextButton(
+                            MiuixSettingsTextButton(
                                 onClick = { showRenameDialog = false }
                             ) { Text(stringResource(R.string.action_cancel)) }
                         }
@@ -1603,7 +1628,7 @@ private fun LocalPlaylistList(
                                 onClick = {
                                     val playlistId = pl.id
                                     showDeleteDialog = false
-                                    onDelete(playlistId)
+                                    onDelete(listOf(playlistId))
                                 }
                             ) { Text(stringResource(R.string.action_delete)) }
                         },
@@ -3108,16 +3133,7 @@ private fun FavoritePlaylistList(
                                             }
                                         }
                                         "bili" -> {
-                                            onBiliPlaylistClick(
-                                                BiliPlaylist(
-                                                    mediaId = favorite.id,
-                                                    fid = 0L,
-                                                    mid = 0L,
-                                                    title = favorite.name,
-                                                    count = favorite.trackCount,
-                                                    coverUrl = favorite.coverUrl.orEmpty()
-                                                )
-                                            )
+                                            onBiliPlaylistClick(favorite.toBiliPlaylist())
                                         }
                                     }
                                 },

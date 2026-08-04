@@ -31,10 +31,13 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -42,7 +45,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CancellationException
+import moe.ouom.neriplayer.data.settings.AdvancedBlurQuality
 import moe.ouom.neriplayer.data.settings.FloatingLyricsPreferences
+import moe.ouom.neriplayer.data.settings.LyricFontScaleTarget
+import moe.ouom.neriplayer.data.settings.LyricFontScales
 import moe.ouom.neriplayer.data.settings.ThemeMode
 import moe.ouom.neriplayer.data.storage.StorageCacheClearOptions
 import moe.ouom.neriplayer.ui.effect.glass.advancedGlassHostNavigationTransition
@@ -86,8 +92,12 @@ internal fun shouldAdvanceSettingsScreenTransition(
     targetState: SettingsScreenState,
     currentState: SettingsScreenState,
     isRunning: Boolean,
-    requestedState: SettingsScreenState
-): Boolean = !isRunning && currentState == targetState && targetState != requestedState
+    requestedState: SettingsScreenState,
+    renderedScreenStates: Set<SettingsScreenState>
+): Boolean = !isRunning &&
+    currentState == targetState &&
+    targetState != requestedState &&
+    renderedScreenStates == setOf(targetState)
 
 @Composable
 fun SettingsHostScreen(
@@ -138,6 +148,8 @@ fun SettingsHostScreen(
     onEnhancedAdvancedBlurEnabledChange: (Boolean) -> Unit,
     enhancedAdvancedBlurRadiusDp: Float,
     onEnhancedAdvancedBlurRadiusDpChange: (Float) -> Unit,
+    advancedBlurQuality: AdvancedBlurQuality,
+    onAdvancedBlurQualityChange: (AdvancedBlurQuality) -> Unit,
     nowPlayingAudioReactiveEnabled: Boolean,
     onNowPlayingAudioReactiveEnabledChange: (Boolean) -> Unit,
     nowPlayingDynamicBackgroundEnabled: Boolean,
@@ -148,8 +160,8 @@ fun SettingsHostScreen(
     onNowPlayingCoverBlurAmountChange: (Float) -> Unit,
     nowPlayingCoverBlurDarken: Float,
     onNowPlayingCoverBlurDarkenChange: (Float) -> Unit,
-    lyricFontScale: Float,
-    onLyricFontScaleChange: (Float) -> Unit,
+    lyricFontScales: LyricFontScales,
+    onLyricFontScaleChange: (LyricFontScaleTarget, Float) -> Unit,
     uiDensityScale: Float,
     onUiDensityScaleChange: (Float) -> Unit,
     bypassProxy: Boolean,
@@ -251,6 +263,8 @@ fun SettingsHostScreen(
         targetState = screenState,
         label = "settings_screen_switch"
     )
+    val renderedScreenStates = remember { mutableStateListOf<SettingsScreenState>() }
+    val settledRenderedScreenStates = renderedScreenStates.toSet()
 
     fun captureSettingsListPosition() {
         val position = settingsListState.captureHostScrollPosition()
@@ -266,30 +280,22 @@ fun SettingsHostScreen(
             captureSettingsListPosition()
         }
         requestedScreenState = target
-        if (
-            shouldAdvanceSettingsScreenTransition(
-                targetState = screenState,
-                currentState = navigationTransition.currentState,
-                isRunning = navigationTransition.isRunning,
-                requestedState = requestedScreenState
-            )
-        ) {
-            screenState = screenState.nextTowards(requestedScreenState)
-        }
     }
 
     LaunchedEffect(
         navigationTransition.currentState,
         navigationTransition.isRunning,
         requestedScreenState,
-        screenState
+        screenState,
+        settledRenderedScreenStates
     ) {
         if (
             shouldAdvanceSettingsScreenTransition(
                 targetState = screenState,
                 currentState = navigationTransition.currentState,
                 isRunning = navigationTransition.isRunning,
-                requestedState = requestedScreenState
+                requestedState = requestedScreenState,
+                renderedScreenStates = settledRenderedScreenStates
             )
         ) {
             screenState = screenState.nextTowards(requestedScreenState)
@@ -337,10 +343,17 @@ fun SettingsHostScreen(
             transitionSpec = {
                 advancedGlassHostNavigationTransition(
                     forward = targetState.navigationDepth > initialState.navigationDepth,
-                    coherentFeedbackEnabled = coherentFeedbackEnabled
+                    coherentFeedbackEnabled = coherentFeedbackEnabled,
+                    targetContentZIndex = targetState.navigationDepth.toFloat()
                 ).using(SizeTransform(clip = true))
             }
         ) { state ->
+            DisposableEffect(state) {
+                renderedScreenStates += state
+                onDispose {
+                    renderedScreenStates.remove(state)
+                }
+            }
             val sceneMotion = navigationTransition.animateAdvancedGlassSceneMotion(
                 sceneState = state,
                 coherentFeedbackEnabled = coherentFeedbackEnabled,
@@ -412,6 +425,8 @@ fun SettingsHostScreen(
                             enhancedAdvancedBlurRadiusDp = enhancedAdvancedBlurRadiusDp,
                             onEnhancedAdvancedBlurRadiusDpChange =
                                 onEnhancedAdvancedBlurRadiusDpChange,
+                            advancedBlurQuality = advancedBlurQuality,
+                            onAdvancedBlurQualityChange = onAdvancedBlurQualityChange,
                             nowPlayingAudioReactiveEnabled = nowPlayingAudioReactiveEnabled,
                             onNowPlayingAudioReactiveEnabledChange = onNowPlayingAudioReactiveEnabledChange,
                             nowPlayingDynamicBackgroundEnabled = nowPlayingDynamicBackgroundEnabled,
@@ -422,7 +437,7 @@ fun SettingsHostScreen(
                             onNowPlayingCoverBlurAmountChange = onNowPlayingCoverBlurAmountChange,
                             nowPlayingCoverBlurDarken = nowPlayingCoverBlurDarken,
                             onNowPlayingCoverBlurDarkenChange = onNowPlayingCoverBlurDarkenChange,
-                            lyricFontScale = lyricFontScale,
+                            lyricFontScales = lyricFontScales,
                             onLyricFontScaleChange = onLyricFontScaleChange,
                             uiDensityScale = uiDensityScale,
                             onUiDensityScaleChange = onUiDensityScaleChange,

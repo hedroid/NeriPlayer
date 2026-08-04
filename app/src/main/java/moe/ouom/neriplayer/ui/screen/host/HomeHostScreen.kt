@@ -33,21 +33,25 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TopAppBarState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.core.api.bili.BiliClient
 import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.core.di.AppContainer
@@ -61,8 +65,13 @@ import moe.ouom.neriplayer.ui.screen.playlist.NeteaseAlbumDetailScreen
 import moe.ouom.neriplayer.ui.screen.playlist.NeteasePlaylistDetailScreen
 import moe.ouom.neriplayer.ui.screen.playlist.YouTubeMusicPlaylistDetailScreen
 import moe.ouom.neriplayer.ui.screen.tab.HomeScreen
+import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassSceneMotion
 import moe.ouom.neriplayer.ui.effect.glass.advancedGlassHostNavigationTransition
 import moe.ouom.neriplayer.ui.effect.glass.animateAdvancedGlassSceneMotion
+import moe.ouom.neriplayer.ui.animateMainTabDetailCloseRootRevealFraction
+import moe.ouom.neriplayer.ui.clipMainTabDetailCloseRoot
+import moe.ouom.neriplayer.ui.rememberMainTabSceneRestoredEntry
+import moe.ouom.neriplayer.ui.shouldSuppressRestoredMainTabHostEntry
 import moe.ouom.neriplayer.data.model.SongItem
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
@@ -75,6 +84,7 @@ import moe.ouom.neriplayer.ui.util.restoreAlbumSummary
 import moe.ouom.neriplayer.ui.util.restorePlaylistSummary
 import moe.ouom.neriplayer.ui.util.restoreYouTubeMusicPlaylist
 import moe.ouom.neriplayer.ui.util.toSaveMap
+import moe.ouom.neriplayer.util.media.CoverArtColorCache
 
 // 用密封类承载四种目标
 private sealed class HomeSelectedItem {
@@ -89,7 +99,29 @@ private sealed class HomeSelectedItem {
 private val HomeSelectedItem?.navigationDepth: Int
     get() = if (this == null) 0 else 1
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Stable
+class HomeHostRuntimeState {
+    val gridState: LazyGridState = LazyGridState(
+        firstVisibleItemIndex = 0,
+        firstVisibleItemScrollOffset = 0
+    )
+    val topAppBarState: TopAppBarState = TopAppBarState(
+        initialHeightOffsetLimit = -Float.MAX_VALUE,
+        initialHeightOffset = 0f,
+        initialContentOffset = 0f
+    )
+    var pendingGridRestoreIndex by mutableStateOf<Int?>(null)
+    var pendingGridRestoreOffset by mutableIntStateOf(0)
+    var pendingGridRestoreKey by mutableStateOf<String?>(null)
+    var pendingGridRestoreArmed by mutableStateOf(false)
+    var homeScrollAnchorIndexes by mutableStateOf<Map<String, Int>>(emptyMap())
+}
+
+@Composable
+fun rememberHomeHostRuntimeState(): HomeHostRuntimeState {
+    return remember { HomeHostRuntimeState() }
+}
+
 @Composable
 fun HomeHostScreen(
     showContinueCard: Boolean = true,
@@ -97,6 +129,7 @@ fun HomeHostScreen(
     showRadarCard: Boolean = true,
     showRecommendedCard: Boolean = true,
     offlineMode: Boolean = false,
+    runtimeState: HomeHostRuntimeState = rememberHomeHostRuntimeState(),
     onSongClick: (List<SongItem>, Int) -> Unit = { _, _ -> },
     onSongClickWithSourceRoute: (List<SongItem>, Int, String?) -> Unit = { songs, index, _ ->
         onSongClick(songs, index)
@@ -131,13 +164,80 @@ fun HomeHostScreen(
         mutableStateOf(null)
     }
     var skipDetailCloseAnimation by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingNeteaseCoverWarmupJob by remember { mutableStateOf<Job?>(null) }
+    var pendingNeteaseCoverWarmupToken by remember { mutableIntStateOf(0) }
+    val gridState = runtimeState.gridState
+
+    fun clearPendingHomeScrollRestore() {
+        runtimeState.pendingGridRestoreIndex = null
+        runtimeState.pendingGridRestoreOffset = 0
+        runtimeState.pendingGridRestoreKey = null
+        runtimeState.pendingGridRestoreArmed = false
+    }
+
+    fun captureHomeScrollPosition() {
+        val position = gridState.captureHostScrollPosition()
+        runtimeState.pendingGridRestoreIndex = position.index
+        runtimeState.pendingGridRestoreOffset = position.offset
+        runtimeState.pendingGridRestoreKey = position.key
+        runtimeState.pendingGridRestoreArmed = false
+    }
+
+    fun ensureHomeScrollPositionCaptured() {
+        if (runtimeState.pendingGridRestoreIndex == null) {
+            captureHomeScrollPosition()
+        }
+    }
+
+    fun cancelPendingNeteaseCoverWarmup() {
+        pendingNeteaseCoverWarmupToken += 1
+        pendingNeteaseCoverWarmupJob?.cancel()
+        pendingNeteaseCoverWarmupJob = null
+    }
+
+    fun openAfterNeteaseCoverWarmup(
+        coverUrl: String?,
+        item: HomeSelectedItem
+    ) {
+        val token = pendingNeteaseCoverWarmupToken + 1
+        pendingNeteaseCoverWarmupToken = token
+        pendingNeteaseCoverWarmupJob?.cancel()
+        pendingNeteaseCoverWarmupJob = scope.launch {
+            CoverArtColorCache.preload(context, coverUrl, offlineMode)
+            if (pendingNeteaseCoverWarmupToken == token) {
+                ensureHomeScrollPositionCaptured()
+                selected = item
+                pendingNeteaseCoverWarmupJob = null
+            }
+        }
+    }
+
+    fun openHomeSelectedItem(item: HomeSelectedItem) {
+        when (item) {
+            is HomeSelectedItem.Netease -> {
+                openAfterNeteaseCoverWarmup(item.playlist.picUrl, item)
+            }
+            is HomeSelectedItem.NeteaseAlbumList -> {
+                openAfterNeteaseCoverWarmup(item.album.picUrl, item)
+            }
+            else -> {
+                cancelPendingNeteaseCoverWarmup()
+                ensureHomeScrollPositionCaptured()
+                selected = item
+            }
+        }
+    }
 
     fun closeSelectedDetail() {
+        cancelPendingNeteaseCoverWarmup()
         skipDetailCloseAnimation = false
         selected = null
     }
 
     fun closeDeletedLocalPlaylist() {
+        cancelPendingNeteaseCoverWarmup()
         skipDetailCloseAnimation = true
         selected = null
     }
@@ -145,6 +245,10 @@ fun HomeHostScreen(
     LaunchedEffect(selected) {
         if (selected != null) {
             skipDetailCloseAnimation = false
+            if (runtimeState.pendingGridRestoreIndex != null) {
+                runtimeState.pendingGridRestoreArmed = true
+                runtimeState.homeScrollAnchorIndexes = emptyMap()
+            }
         }
     }
 
@@ -156,68 +260,86 @@ fun HomeHostScreen(
         }
     }
 
-    val gridState = rememberSaveable(saver = LazyGridState.Saver) {
-        LazyGridState(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 0)
-    }
-    val topAppBarState = rememberTopAppBarState()
-    var pendingGridRestoreIndex by rememberSaveable { mutableStateOf<Int?>(null) }
-    var pendingGridRestoreOffset by rememberSaveable { mutableIntStateOf(0) }
-    var pendingTopAppBarHeightOffset by rememberSaveable { mutableFloatStateOf(Float.NaN) }
-    var pendingTopAppBarContentOffset by rememberSaveable { mutableFloatStateOf(Float.NaN) }
-
-    fun captureHomeScrollPosition() {
-        val position = gridState.captureHostScrollPosition()
-        pendingGridRestoreIndex = position.index
-        pendingGridRestoreOffset = position.offset
-        pendingTopAppBarHeightOffset = topAppBarState.heightOffset
-        pendingTopAppBarContentOffset = topAppBarState.contentOffset
-    }
-
-    LaunchedEffect(selected, pendingGridRestoreIndex) {
-        val restoreIndex = pendingGridRestoreIndex ?: return@LaunchedEffect
-        if (selected != null) return@LaunchedEffect
-        gridState.restoreHostScrollPosition(
-            HostScrollPosition(
-                index = restoreIndex,
-                offset = pendingGridRestoreOffset
-            )
-        )
-        if (!pendingTopAppBarHeightOffset.isNaN()) {
-            topAppBarState.heightOffset = pendingTopAppBarHeightOffset
-        }
-        if (!pendingTopAppBarContentOffset.isNaN()) {
-            topAppBarState.contentOffset = pendingTopAppBarContentOffset
-        }
-        pendingGridRestoreIndex = null
-        pendingGridRestoreOffset = 0
-        pendingTopAppBarHeightOffset = Float.NaN
-        pendingTopAppBarContentOffset = Float.NaN
-    }
     val navigationTransition = updateTransition(
         targetState = selected,
         label = "home_host_switch"
     )
 
+    val pendingGridRestoreIndex = runtimeState.pendingGridRestoreIndex
+    val pendingGridRestoreOffset = runtimeState.pendingGridRestoreOffset
+    val pendingGridRestoreKey = runtimeState.pendingGridRestoreKey
+    val pendingGridRestoreArmed = runtimeState.pendingGridRestoreArmed
+    val homeScrollAnchorIndexes = runtimeState.homeScrollAnchorIndexes
+    LaunchedEffect(
+        selected,
+        pendingGridRestoreIndex,
+        pendingGridRestoreKey,
+        pendingGridRestoreArmed,
+        homeScrollAnchorIndexes
+    ) {
+        val restoreIndex = pendingGridRestoreIndex ?: return@LaunchedEffect
+        if (selected != null) return@LaunchedEffect
+        if (!pendingGridRestoreArmed) return@LaunchedEffect
+        val restoreKey = pendingGridRestoreKey
+        val resolvedIndex = restoreKey?.let { homeScrollAnchorIndexes[it] }
+        if (restoreKey != null && resolvedIndex == null && homeScrollAnchorIndexes.isEmpty()) {
+            return@LaunchedEffect
+        }
+        gridState.restoreHostScrollPosition(
+            HostScrollPosition(
+                index = restoreIndex,
+                offset = pendingGridRestoreOffset,
+                key = restoreKey
+            ),
+            resolvedIndex = resolvedIndex
+        )
+        clearPendingHomeScrollRestore()
+    }
+    val suppressRestoredSceneEntry = rememberMainTabSceneRestoredEntry()
+    val detailCloseRootRevealFraction =
+        navigationTransition.animateMainTabDetailCloseRootRevealFraction(
+            navigationDepth = { item -> item.navigationDepth },
+            label = "home_host_detail_close"
+        )
+
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
         navigationTransition.AnimatedContent(
             modifier = Modifier.fillMaxSize(),
             transitionSpec = {
-                if (targetState == null && skipDetailCloseAnimation) {
+                if (
+                    shouldSuppressRestoredMainTabHostEntry(
+                        restoredEntry = suppressRestoredSceneEntry,
+                        initialDepth = initialState.navigationDepth,
+                        targetDepth = targetState.navigationDepth
+                    )
+                ) {
+                    EnterTransition.None togetherWith ExitTransition.None
+                } else if (targetState == null && skipDetailCloseAnimation) {
                     EnterTransition.None togetherWith ExitTransition.None
                 } else {
                     advancedGlassHostNavigationTransition(
                         forward = targetState.navigationDepth > initialState.navigationDepth,
-                        coherentFeedbackEnabled = coherentFeedbackEnabled
+                        coherentFeedbackEnabled = coherentFeedbackEnabled,
+                        targetContentZIndex = targetState.navigationDepth.toFloat()
                     )
                 }.using(SizeTransform(clip = true))
             }
         ) { current ->
-            val sceneMotion = navigationTransition.animateAdvancedGlassSceneMotion(
-                sceneState = current,
-                coherentFeedbackEnabled = coherentFeedbackEnabled,
-                navigationDepth = { item -> item.navigationDepth },
-                label = "home_host_scene"
+            val suppressRestoredSceneMotion = shouldSuppressRestoredMainTabHostEntry(
+                restoredEntry = suppressRestoredSceneEntry,
+                initialDepth = navigationTransition.currentState.navigationDepth,
+                targetDepth = navigationTransition.targetState.navigationDepth
             )
+            val sceneMotion = if (suppressRestoredSceneMotion) {
+                AdvancedGlassSceneMotion.None
+            } else {
+                navigationTransition.animateAdvancedGlassSceneMotion(
+                    sceneState = current,
+                    coherentFeedbackEnabled = coherentFeedbackEnabled,
+                    navigationDepth = { item -> item.navigationDepth },
+                    label = "home_host_scene"
+                )
+            }
             renderScene(
                 sceneMotion.revealTopFraction,
                 sceneMotion.contentTranslationYFraction,
@@ -226,49 +348,62 @@ fun HomeHostScreen(
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     if (current == null) {
-                        HomeScreen(
-                            showContinueCard = showContinueCard,
-                            showTrendingCard = showTrendingCard,
-                            showRadarCard = showRadarCard,
-                            showRecommendedCard = showRecommendedCard,
-                            offlineMode = offlineMode,
-                            gridState = gridState,
-                            topAppBarState = topAppBarState,
-                            onItemClick = { pl ->
-                                skipDetailCloseAnimation = false
-                                captureHomeScrollPosition()
-                                AppContainer.playlistUsageRepo.recordOpen(
-                                    id = pl.id,
-                                    name = pl.name,
-                                    picUrl = pl.picUrl,
-                                    trackCount = pl.trackCount,
-                                    source = "netease"
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clipMainTabDetailCloseRoot(
+                                    detailCloseRootRevealFraction
                                 )
-                                selected = HomeSelectedItem.Netease(pl)
-                            },
-                            onYouTubeMusicPlaylistClick = { pl ->
-                                skipDetailCloseAnimation = false
-                                captureHomeScrollPosition()
-                                AppContainer.playlistUsageRepo.recordOpen(
-                                    id = stableYouTubeMusicId(
-                                        pl.playlistId.ifBlank { pl.browseId }
-                                    ),
-                                    name = pl.title,
-                                    picUrl = pl.coverUrl,
-                                    trackCount = pl.trackCount,
-                                    source = "youtubeMusic",
-                                    browseId = pl.browseId,
-                                    playlistId = pl.playlistId
-                                )
-                                selected = HomeSelectedItem.YouTubeMusic(pl)
-                            },
-                            onOpenRecent = { entry ->
-                                skipDetailCloseAnimation = false
-                                captureHomeScrollPosition()
-                                openRecent(entry) { next -> selected = next }
-                            },
-                            onSongClick = onSongClick
-                        )
+                        ) {
+                            HomeScreen(
+                                showContinueCard = showContinueCard,
+                                showTrendingCard = showTrendingCard,
+                                showRadarCard = showRadarCard,
+                                showRecommendedCard = showRecommendedCard,
+                                offlineMode = offlineMode,
+                                gridState = gridState,
+                                topAppBarState = runtimeState.topAppBarState,
+                                onScrollAnchorIndexesChanged = { indexes ->
+                                    if (runtimeState.homeScrollAnchorIndexes != indexes) {
+                                        runtimeState.homeScrollAnchorIndexes = indexes
+                                    }
+                                },
+                                onItemClick = { pl ->
+                                    skipDetailCloseAnimation = false
+                                    captureHomeScrollPosition()
+                                    AppContainer.playlistUsageRepo.recordOpen(
+                                        id = pl.id,
+                                        name = pl.name,
+                                        picUrl = pl.picUrl,
+                                        trackCount = pl.trackCount,
+                                        source = "netease"
+                                    )
+                                    openHomeSelectedItem(HomeSelectedItem.Netease(pl))
+                                },
+                                onYouTubeMusicPlaylistClick = { pl ->
+                                    skipDetailCloseAnimation = false
+                                    captureHomeScrollPosition()
+                                    AppContainer.playlistUsageRepo.recordOpen(
+                                        id = stableYouTubeMusicId(
+                                            pl.playlistId.ifBlank { pl.browseId }
+                                        ),
+                                        name = pl.title,
+                                        picUrl = pl.coverUrl,
+                                        trackCount = pl.trackCount,
+                                        source = "youtubeMusic",
+                                        browseId = pl.browseId,
+                                        playlistId = pl.playlistId
+                                    )
+                                    openHomeSelectedItem(HomeSelectedItem.YouTubeMusic(pl))
+                                },
+                                onOpenRecent = { entry ->
+                                    skipDetailCloseAnimation = false
+                                    captureHomeScrollPosition()
+                                    openRecent(entry, ::openHomeSelectedItem)
+                                },
+                                onSongClick = onSongClick
+                            )
+                        }
                     } else {
                         when (current) {
                             is HomeSelectedItem.NeteaseAlbumList -> {
@@ -459,7 +594,8 @@ private fun openRecent(
                 count = entry.trackCount,
                 fid = entry.fid ?: 0L,
                 mid = entry.mid ?: 0L,
-                kind = kind
+                kind = kind,
+                subtitle = entry.subtitle.orEmpty()
             )
             onSelected(HomeSelectedItem.Bili(bili))
         }
