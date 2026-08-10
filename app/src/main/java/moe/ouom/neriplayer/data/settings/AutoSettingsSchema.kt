@@ -1476,7 +1476,7 @@ object AutoSettingsSchema {
         @AutoSetting(
             key = "playback_fade_in",
             type = SettingValueType.Boolean,
-            defaultBoolean = false,
+            defaultBoolean = true,
             order = 10,
             ui = SettingUiType.Custom,
             access = SettingAccessMode.KeyOnly
@@ -1489,7 +1489,7 @@ object AutoSettingsSchema {
         @AutoSetting(
             key = "playback_crossfade_next",
             type = SettingValueType.Boolean,
-            defaultBoolean = false,
+            defaultBoolean = true,
             order = 20,
             ui = SettingUiType.Custom,
             access = SettingAccessMode.KeyOnly
@@ -1700,7 +1700,7 @@ object AutoSettingsSchema {
         @AutoSetting(
             key = "netease_auto_source_switch",
             type = SettingValueType.Boolean,
-            defaultBoolean = true,
+            defaultBoolean = false,
             order = 135,
             ui = SettingUiType.Custom,
             access = SettingAccessMode.KeyOnly
@@ -1714,7 +1714,7 @@ object AutoSettingsSchema {
         @AutoSetting(
             key = "netease_local_source_fallback",
             type = SettingValueType.Boolean,
-            defaultBoolean = true,
+            defaultBoolean = false,
             order = 136,
             ui = SettingUiType.Custom,
             access = SettingAccessMode.KeyOnly

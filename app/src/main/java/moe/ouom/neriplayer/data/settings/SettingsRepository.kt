@@ -437,10 +437,10 @@ class SettingsRepository(private val context: Context) {
         autoSettingsRepository.homeCardRecommendedFlow
 
     val playbackFadeInFlow: Flow<Boolean> =
-        dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_FADE_IN] ?: false }
+        dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_FADE_IN] ?: true }
 
     val playbackCrossfadeNextFlow: Flow<Boolean> =
-        dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_CROSSFADE_NEXT] ?: false }
+        dataStoreSettingFlow { it[SettingsKeys.PLAYBACK_CROSSFADE_NEXT] ?: true }
 
     val sleepTimerFinishCurrentOnExpiryFlow: Flow<Boolean> =
         dataStoreSettingFlow {
@@ -518,10 +518,10 @@ class SettingsRepository(private val context: Context) {
         dataStoreSettingFlow { it[SettingsKeys.KEEP_PLAYBACK_MODE_STATE] ?: true }
 
     val neteaseAutoSourceSwitchFlow: Flow<Boolean> =
-        dataStoreSettingFlow { it[SettingsKeys.NETEASE_AUTO_SOURCE_SWITCH] ?: true }
+        dataStoreSettingFlow { it[SettingsKeys.NETEASE_AUTO_SOURCE_SWITCH] ?: false }
 
     val neteaseLocalSourceFallbackFlow: Flow<Boolean> =
-        dataStoreSettingFlow { it[SettingsKeys.NETEASE_LOCAL_SOURCE_FALLBACK] ?: true }
+        dataStoreSettingFlow { it[SettingsKeys.NETEASE_LOCAL_SOURCE_FALLBACK] ?: false }
 
     val stopOnBluetoothDisconnectFlow: Flow<Boolean> =
         dataStoreSettingFlow { it[SettingsKeys.STOP_ON_BLUETOOTH_DISCONNECT] ?: true }
@@ -1253,6 +1253,19 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[SettingsKeys.NETEASE_LOCAL_SOURCE_FALLBACK] = enabled }
         updatePlaybackPreferenceSnapshot(context) {
             it.copy(neteaseLocalSourceFallback = enabled)
+        }
+    }
+
+    suspend fun setNeteasePlaybackSourceFallback(enabled: Boolean) {
+        context.dataStore.edit {
+            it[SettingsKeys.NETEASE_AUTO_SOURCE_SWITCH] = enabled
+            it[SettingsKeys.NETEASE_LOCAL_SOURCE_FALLBACK] = enabled
+        }
+        updatePlaybackPreferenceSnapshot(context) {
+            it.copy(
+                neteaseAutoSourceSwitch = enabled,
+                neteaseLocalSourceFallback = enabled
+            )
         }
     }
 

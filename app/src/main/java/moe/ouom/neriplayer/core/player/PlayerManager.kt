@@ -406,8 +406,8 @@ object PlayerManager {
     internal var mobileDataNeteaseAudioQuality: String = "standard"
     internal var mobileDataYouTubeAudioQuality: String = "low"
     internal var mobileDataBiliAudioQuality: String = "low"
-    internal var playbackFadeInEnabled = false
-    internal var playbackCrossfadeNextEnabled = false
+    internal var playbackFadeInEnabled = true
+    internal var playbackCrossfadeNextEnabled = true
     internal var playbackFadeInDurationMs = DEFAULT_FADE_DURATION_MS
     internal var playbackFadeOutDurationMs = DEFAULT_FADE_DURATION_MS
     internal var playbackCrossfadeInDurationMs = DEFAULT_FADE_DURATION_MS
@@ -432,9 +432,9 @@ object PlayerManager {
     internal var rememberLongFormPlaybackProgressEnabled = true
     internal var keepPlaybackModeStateEnabled = true
     @Volatile
-    internal var neteaseAutoSourceSwitchEnabled = true
+    internal var neteaseAutoSourceSwitchEnabled = false
     @Volatile
-    internal var neteaseLocalSourceFallbackEnabled = true
+    internal var neteaseLocalSourceFallbackEnabled = false
     internal var stopOnBluetoothDisconnectEnabled = true
     @Volatile
     internal var usbExclusivePlaybackEnabled = false
