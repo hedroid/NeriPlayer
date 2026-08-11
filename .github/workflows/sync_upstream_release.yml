@@ -61,6 +61,20 @@ jobs:
         run: |
           git merge --no-ff --no-edit -m "[skip ci] Sync upstream cwuom/NeriPlayer" upstream/master
 
+      - name: Update submodules after upstream merge
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+
+          if git submodule status --recursive | grep -q '^[+-U]'; then
+            echo "Submodule worktrees do not match the merged commit."
+            git submodule status --recursive
+            exit 1
+          fi
+
       - name: Detect workflow file changes
         if: steps.upstream.outputs.has_changes == 'true'
         id: workflow_changes
