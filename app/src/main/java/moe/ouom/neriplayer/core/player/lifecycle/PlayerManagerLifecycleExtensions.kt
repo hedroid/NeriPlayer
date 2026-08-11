@@ -94,6 +94,7 @@ import moe.ouom.neriplayer.core.player.policy.usb.shouldDeferUsbExclusiveRecover
 import moe.ouom.neriplayer.core.player.policy.usb.shouldSkipRedundantUsbExclusiveReconfiguration
 import moe.ouom.neriplayer.core.player.playlist.PlayerFavoritesController
 import moe.ouom.neriplayer.core.player.policy.command.shouldClearResumePlaybackRequestOnPlayWhenReadyPause
+import moe.ouom.neriplayer.core.player.policy.command.shouldResumeSilentlyForListenTogetherNoisyPause
 import moe.ouom.neriplayer.core.player.playback.advanceAfterPlaybackFailure
 import moe.ouom.neriplayer.core.player.playback.clearAudioRouteMuteSuppression
 import moe.ouom.neriplayer.core.player.playback.pauseForAudioRouteLoss
@@ -563,6 +564,26 @@ internal fun PlayerManager.initializeImpl(
                         "NERI-PlayerManager",
                         "playWhenReady=false, reason=${playWhenReadyChangeReasonName(reason)}, state=${playbackStateName(player.playbackState)}, mediaId=${player.currentMediaItem?.mediaId}, stack=[${debugStackHint()}]"
                     )
+                    if (shouldResumeSilentlyForListenTogetherNoisyPause(
+                            playWhenReady = playWhenReady,
+                            playWhenReadyChangeReason = reason,
+                            muteListenTogetherListenerForAudioRouteLoss =
+                                shouldMuteListenTogetherListenerForAudioRouteLoss()
+                        )
+                    ) {
+                        NPLogger.d(
+                            "NERI-PlayerManager",
+                            "restore Listen Together listener playWhenReady after noisy route by muting locally"
+                        )
+                        suppressPlaybackForAudioRouteLoss(
+                            reason = "listen_together_exoplayer_becoming_noisy"
+                        )
+                        playImpl(
+                            commandSource = PlaybackCommandSource.LOCAL_SAFETY,
+                            allowFadeIn = false
+                        )
+                        return
+                    }
                     if (
                         shouldClearResumePlaybackRequestOnPlayWhenReadyPause(
                             playWhenReady = playWhenReady,
@@ -931,12 +952,26 @@ internal fun PlayerManager.initializeImpl(
         }
         ioScope.launch {
             settingsRepo.neteaseAutoSourceSwitchFlow.collect { enabled ->
+                val previousEnabled = neteaseAutoSourceSwitchEnabled
                 neteaseAutoSourceSwitchEnabled = enabled
+                if (!previousEnabled && enabled) {
+                    scheduleQualityRefresh(
+                        source = PlaybackAudioSource.NETEASE,
+                        reason = "netease_auto_source_switch_enabled"
+                    )
+                }
             }
         }
         ioScope.launch {
             settingsRepo.neteaseLocalSourceFallbackFlow.collect { enabled ->
+                val previousEnabled = neteaseLocalSourceFallbackEnabled
                 neteaseLocalSourceFallbackEnabled = enabled
+                if (!previousEnabled && enabled) {
+                    scheduleQualityRefresh(
+                        source = PlaybackAudioSource.NETEASE,
+                        reason = "netease_local_source_fallback_enabled"
+                    )
+                }
             }
         }
         ioScope.launch {
@@ -1284,6 +1319,14 @@ internal fun PlayerManager.handleAudioBecomingNoisyImpl(): Boolean {
         NPLogger.d("NERI-PlayerManager", "handleAudioBecomingNoisy(): ignored for USB exclusive route")
         return false
     }
+    if (shouldMuteListenTogetherListenerForAudioRouteLoss()) {
+        NPLogger.d(
+            "NERI-PlayerManager",
+            "handleAudioBecomingNoisy(): mute Listen Together listener without pausing"
+        )
+        suppressPlaybackForAudioRouteLoss(reason = "listen_together_becoming_noisy")
+        return true
+    }
     if (currentDevice != null && requiresDisconnectConfirmation(currentDevice.type)) {
         if (!shouldPauseForBluetoothDisconnect(currentDevice, null)) {
             NPLogger.d("NERI-PlayerManager", "handleAudioBecomingNoisy(): bluetooth confirmation rejected")
@@ -1291,8 +1334,10 @@ internal fun PlayerManager.handleAudioBecomingNoisyImpl(): Boolean {
         }
         NPLogger.d(
             "NERI-PlayerManager",
-            "handleAudioBecomingNoisy(): schedule delayed pause for device=${currentDevice.type}:${currentDevice.name}"
+            "handleAudioBecomingNoisy(): mute while confirming disconnect for " +
+                "device=${currentDevice.type}:${currentDevice.name}"
         )
+        suppressPlaybackForAudioRouteLoss(reason = "bluetooth_disconnect_pending")
         schedulePauseForBluetoothDisconnect(
             previousDevice = currentDevice,
             reason = "becoming_noisy"
@@ -1414,7 +1459,15 @@ private fun PlayerManager.handleDeviceChange(
         "NERI-PlayerManager",
         "handleDeviceChange(): ${previousDevice?.type}:${previousDevice?.name} -> ${newDevice.type}:${newDevice.name}, isPlaying=${_isPlayingFlow.value}"
     )
-    if (shouldPauseForBluetoothDisconnect(previousDevice, newDevice)) {
+    if (shouldMuteListenTogetherListenerForOutputDisconnect(previousDevice, newDevice)) {
+        bluetoothDisconnectPauseJob?.cancel()
+        bluetoothDisconnectPauseJob = null
+        NPLogger.d(
+            "NERI-PlayerManager",
+            "Detected Listen Together listener output disconnect (${previousDevice?.type} -> ${newDevice.type}), muting without pausing."
+        )
+        suppressPlaybackForAudioRouteLoss(reason = "listen_together_output_disconnect")
+    } else if (shouldPauseForBluetoothDisconnect(previousDevice, newDevice)) {
         schedulePauseForBluetoothDisconnect(
             previousDevice = previousDevice,
             reason = "device_changed_to_${newDevice.type}"
@@ -3487,6 +3540,16 @@ private fun PlayerManager.shouldPauseForImmediateOutputDisconnect(
 ): Boolean {
     if (previousDevice == null || !isWiredOutputType(previousDevice.type)) return false
     if (usbExclusivePlaybackEnabled && isUsbOutputType(previousDevice.type)) return false
+    if (!_isPlayingFlow.value) return false
+    return newDevice == null || newDevice.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+}
+
+private fun PlayerManager.shouldMuteListenTogetherListenerForOutputDisconnect(
+    previousDevice: AudioDevice?,
+    newDevice: AudioDevice?
+): Boolean {
+    if (!shouldMuteListenTogetherListenerForAudioRouteLoss()) return false
+    if (previousDevice?.type?.let(::isHeadsetLikeOutput) != true) return false
     if (!_isPlayingFlow.value) return false
     return newDevice == null || newDevice.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
 }
