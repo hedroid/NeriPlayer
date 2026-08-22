@@ -39,6 +39,31 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      - name: Resolve signing key alias
+        id: signing
+        env:
+          CONFIGURED_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          key_alias="${CONFIGURED_KEY_ALIAS}"
+          if [ -z "${key_alias}" ]; then
+            key_alias="$(
+              keytool -list \
+                -keystore app/neri.jks \
+                -storepass "${KEYSTORE_PASSWORD}" |
+                awk -F, '/PrivateKeyEntry/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1; exit }'
+            )"
+          fi
+
+          if [ -z "${key_alias}" ]; then
+            echo "No private key alias found in signing keystore."
+            exit 1
+          fi
+
+          echo "key_alias=${key_alias}" >> "$GITHUB_OUTPUT"
+
       - name: Prepare release metadata
         id: meta
         run: |
@@ -62,7 +87,7 @@ jobs:
             -PbuildVersionTimestamp=${{ steps.meta.outputs.release_time }} \
             -PKEYSTORE_FILE=neri.jks \
             -PKEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} \
-            -PKEY_ALIAS=key0 \
+            -PKEY_ALIAS=${{ steps.signing.outputs.key_alias }} \
             -PKEY_PASSWORD=${{ secrets.KEY_PASSWORD }} \
             --warning-mode all --stacktrace
 
