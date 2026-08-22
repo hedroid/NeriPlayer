@@ -1006,7 +1006,7 @@ fun BiliPlaylistDetailScreen(
                         exitPartsSelection()
                     },
                     sheetState = partsSheetState,
-                    sheetGesturesEnabled = false
+                    sheetGesturesEnabled = true
                 ) {
                     Column(
                         Modifier

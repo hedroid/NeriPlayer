@@ -36,15 +36,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
-import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
@@ -70,11 +67,9 @@ import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassNavigationHandoff
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassRole
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassScene
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassSurface
-import moe.ouom.neriplayer.ui.effect.glass.LocalAdvancedGlassBackdropRegistrationEnabled
 import moe.ouom.neriplayer.ui.effect.glass.LocalAdvancedGlassController
 import moe.ouom.neriplayer.ui.effect.glass.isolatedAdvancedGlassHorizontalTransition
 import moe.ouom.neriplayer.ui.util.currentWindowWidthDp
-import moe.ouom.neriplayer.ui.util.shouldAllowCollapsingTopAppBar
 
 private val MiuixCardShape = RoundedCornerShape(16.dp)
 private val MiuixHighlightShape = RoundedCornerShape(18.dp)
@@ -107,44 +102,23 @@ internal fun MiuixSettingsHomeScaffold(
     modifier: Modifier = Modifier,
     content: LazyListScope.() -> Unit
 ) {
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
-        state = topAppBarState,
-        canScroll = {
-            shouldAllowCollapsingTopAppBar(
-                canScrollForward = listState.canScrollForward,
-                canScrollBackward = listState.canScrollBackward,
-                collapsedFraction = topAppBarState.collapsedFraction
-            )
-        }
-    )
-    val showExpandedTitleMask = scrollBehavior.state.collapsedFraction < 0.5f
     val miniPlayerHeight = LocalMiniPlayerHeight.current
     val isTabletLayout = currentWindowWidthDp() >= 720.dp
     val horizontalPadding = if (isTabletLayout) 28.dp else 18.dp
 
+    LaunchedEffect(topAppBarState) {
+        topAppBarState.heightOffset = 0f
+        topAppBarState.contentOffset = 0f
+    }
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Transparent)
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+            .background(Color.Transparent),
         containerColor = Color.Transparent,
         topBar = {
-            LargeTopAppBar(
-                title = {
-                    // large top app bars compose both title slots, but only one is visible
-                    val isExpandedTitleSlot = LocalTextStyle.current.fontSize.value > 24f
-                    CompositionLocalProvider(
-                        LocalAdvancedGlassBackdropRegistrationEnabled provides
-                            if (isExpandedTitleSlot) {
-                                showExpandedTitleMask
-                            } else {
-                                !showExpandedTitleMask
-                            }
-                    ) {
-                        title()
-                    }
-                },
-                scrollBehavior = scrollBehavior,
+            TopAppBar(
+                title = title,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = Color.Transparent
@@ -376,28 +350,22 @@ internal fun MiuixSettingsDetailScaffold(
     showBackButton: Boolean = true,
     content: LazyListScope.() -> Unit
 ) {
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
-        state = topAppBarState,
-        canScroll = {
-            shouldAllowCollapsingTopAppBar(
-                canScrollForward = listState.canScrollForward,
-                canScrollBackward = listState.canScrollBackward,
-                collapsedFraction = topAppBarState.collapsedFraction
-            )
-        }
-    )
     val miniPlayerHeight = LocalMiniPlayerHeight.current
     val isTabletLayout = currentWindowWidthDp() >= 720.dp
     val horizontalPadding = if (isTabletLayout) 28.dp else 18.dp
 
+    LaunchedEffect(topAppBarState) {
+        topAppBarState.heightOffset = 0f
+        topAppBarState.contentOffset = 0f
+    }
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Transparent)
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+            .background(Color.Transparent),
         containerColor = Color.Transparent,
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
                     if (showBackButton) {
@@ -409,7 +377,6 @@ internal fun MiuixSettingsDetailScaffold(
                         }
                     }
                 },
-                scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = Color.Transparent

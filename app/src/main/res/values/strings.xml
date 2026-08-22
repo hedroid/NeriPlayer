@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">音寻</string>
+    <string name="app_name">音理音理!</string>
 
     <!-- Common Actions -->
     <string name="action_confirm">确定</string>
@@ -52,6 +52,14 @@
     <string name="common_version">版本</string>
     <string name="common_build_time">编译时间</string>
     <string name="common_update_now">立即更新</string>
+    <string name="settings_check_for_updates">检查更新</string>
+    <string name="settings_check_for_updates_summary">从 hedroid/NeriPlayer 检查最新版本</string>
+    <string name="settings_checking_for_updates">正在检查…</string>
+    <string name="settings_update_available">发现新版本：%1$s</string>
+    <string name="settings_update_up_to_date">当前已是最新版本</string>
+    <string name="settings_update_no_release">当前仓库还没有可用版本</string>
+    <string name="settings_update_check_failed">检查更新失败，请稍后重试</string>
+    <string name="settings_view_release">查看版本</string>
     <string name="common_coming_soon">敬请期待</string>
     <string name="common_not_implemented">暂未实现</string>
     <string name="common_other_modes">其他模式</string>
@@ -740,10 +748,9 @@
     <string name="explore_tag_link_recognition">链接识别</string>
     <string name="explore_tab_youtube">YouTube</string>
     <string name="explore_tab_links">链接</string>
-    <string name="explore_link_input_label">链接或分享文案</string>
-    <string name="explore_link_input_placeholder">粘贴网易云、B 站或 YouTube 链接</string>
+    <string name="explore_link_input_label">歌曲、视频、歌单、歌手链接或分享文案</string>
+    <string name="explore_link_input_focused_label">链接或分享文案</string>
     <string name="explore_link_input_hint">支持歌曲、视频、歌单和歌手链接，也可直接粘贴含标题和短链接的整段分享文案</string>
-    <string name="explore_link_recognition_placeholder">粘贴音乐链接即可识别</string>
     <string name="explore_link_invalid">无法识别这个链接</string>
     <string name="explore_link_unsupported_title">暂不支持的链接</string>
     <string name="explore_link_unsupported_message">%1$s 的 %2$s 链接暂不支持</string>
@@ -804,9 +811,9 @@
     <string name="home_favorite_playlist">收藏歌单</string>
     <string name="home_unfavorited">已取消收藏</string>
     <string name="continue_playing_remove">移除</string>
-    <string name="home_title_brand_loud">首页</string>
-    <string name="home_title_brand_wave">首页</string>
-    <string name="home_title_brand_call">首页</string>
+    <string name="home_title_brand_loud">音理音理!!</string>
+    <string name="home_title_brand_wave">音理音理~</string>
+    <string name="home_title_brand_call">NeriPlayer</string>
     <string name="home_all_cards_hidden">首页卡片已全部隐藏，可在设置中重新开启。</string>
     <string name="home_offline_no_continue">脱机模式下仅显示继续播放，暂无可显示内容。</string>
     <string name="offline_mode_title">脱机模式</string>

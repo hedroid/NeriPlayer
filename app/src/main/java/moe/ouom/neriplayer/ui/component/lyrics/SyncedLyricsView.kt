@@ -753,7 +753,8 @@ fun SyncedLyricsView(
     edgeFadeHeight: Dp = resolveLyricEdgeFadeHeight(isEmbedded = false),
     showEmbeddedTranslations: Boolean = true,
     playbackSessionKey: String? = null,
-    stableEmbeddedViewport: Boolean = false
+    stableEmbeddedViewport: Boolean = false,
+    userScrollEnabled: Boolean = true
 ) {
     val lyricScrollSessionKey = remember(playbackSessionKey, lyrics) {
         resolveLyricScrollSessionKey(playbackSessionKey, lyrics)
@@ -876,6 +877,7 @@ fun SyncedLyricsView(
 
         LazyColumn(
             state = listState,
+            userScrollEnabled = userScrollEnabled,
             contentPadding = PaddingValues(top = centerPad, bottom = centerPad),
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier

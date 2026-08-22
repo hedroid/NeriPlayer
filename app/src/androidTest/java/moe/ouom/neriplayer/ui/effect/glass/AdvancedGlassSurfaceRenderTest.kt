@@ -1272,7 +1272,7 @@ class AdvancedGlassSurfaceRenderTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
-    fun settingsTopAppBarRegistersOnlyOneThemeToggleMask() {
+    fun fixedSettingsTopAppBarRegistersOnlyOneThemeToggleMask() {
         lateinit var regionRegistry: AdvancedGlassRegionRegistry
         lateinit var topAppBarState: TopAppBarState
         composeRule.setContent {
@@ -1313,27 +1313,14 @@ class AdvancedGlassSurfaceRenderTest {
 
         composeRule.waitForIdle()
         composeRule.runOnIdle {
-            assertTrue(
-                "settings top app bar did not expose a collapsed state",
-                topAppBarState.heightOffsetLimit < 0f
+            assertEquals(0f, topAppBarState.heightOffset, 0f)
+            assertEquals(
+                "fixed settings top app bar registered duplicate theme toggle masks",
+                1,
+                regionRegistry.regions.count { region ->
+                    region.role == AdvancedGlassRole.ThemeModeToggle
+                }
             )
-        }
-        listOf(0f, 0.25f, 0.5f, 0.75f, 1f).forEach { collapsedFraction ->
-            composeRule.runOnIdle {
-                topAppBarState.heightOffset =
-                    topAppBarState.heightOffsetLimit * collapsedFraction
-            }
-            composeRule.waitForIdle()
-            composeRule.runOnIdle {
-                assertEquals(
-                    "settings top app bar registered duplicate theme toggle masks at " +
-                        "collapsed fraction $collapsedFraction",
-                    1,
-                    regionRegistry.regions.count { region ->
-                        region.role == AdvancedGlassRole.ThemeModeToggle
-                    }
-                )
-            }
         }
     }
 

@@ -45,4 +45,12 @@ class NeriMiniPlayerDefaultsTest {
         assertTrue(titleRange.maxFontSizeSp > artistRange.maxFontSizeSp)
         assertTrue(titleRange.minFontSizeSp <= titleRange.maxFontSizeSp)
     }
+
+    @Test
+    fun playbackProgressUsesPositionAndClampsToArcRange() {
+        assertEquals(0.25f, resolveMiniPlayerPlaybackProgress(15_000L, 60_000L), 0.001f)
+        assertEquals(0f, resolveMiniPlayerPlaybackProgress(-1_000L, 60_000L), 0.001f)
+        assertEquals(1f, resolveMiniPlayerPlaybackProgress(90_000L, 60_000L), 0.001f)
+        assertEquals(0f, resolveMiniPlayerPlaybackProgress(10_000L, 0L), 0.001f)
+    }
 }

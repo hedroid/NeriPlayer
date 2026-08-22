@@ -179,6 +179,7 @@ fun LyricsScreen(
     onExitNowPlaying: () -> Unit,
     onOpenCurrentArtist: () -> Unit = {},
     onOpenCurrentPlaybackSource: (() -> Unit)? = null,
+    onShowQueue: () -> Unit = {},
     onNavigateBack: () -> Unit,
     onSeekTo: (Long) -> Unit,
     progressSeekEnabled: Boolean = true,
@@ -206,13 +207,6 @@ fun LyricsScreen(
         .playbackControlLayoutPreferencesFlow
         .collectAsState(initial = PlaybackControlLayoutPreferences())
     val queue by PlayerManager.currentQueueFlow.collectAsState()
-    val queueDisplayRevision by PlayerManager.currentQueueDisplayRevisionFlow.collectAsState()
-    val queueDisplayState = remember(queue, currentSong, queueDisplayRevision) {
-        PlayerManager.currentQueueDisplaySnapshot()
-    }
-    val displayedQueueItems = queueDisplayState.items
-    val displayedQueue = remember(displayedQueueItems) { displayedQueueItems.map { it.song } }
-    val currentIndexInDisplay = queueDisplayState.currentDisplayIndex
     val isPlaying by PlayerManager.isPlayingFlow.collectAsState()
     val isPlaybackControlPlaying by PlayerManager.playbackControlPlayingFlow.collectAsState()
     val isAudioRouteMuted by PlayerManager.audioRouteMuteSuppressedFlow.collectAsState()
@@ -831,8 +825,7 @@ fun LyricsScreen(
                         Modifier
                     }
             // 播放队列按钮
-            var showQueueSheet by remember { mutableStateOf(false) }
-            HapticIconButton(onClick = { showQueueSheet = true },  modifier = toolbarActionModifier.then(
+            HapticIconButton(onClick = onShowQueue,  modifier = toolbarActionModifier.then(
                 if (sharedTransitionScope != null && animatedContentScope != null) {
                     with(sharedTransitionScope) {
                         Modifier.sharedBounds(
@@ -887,6 +880,13 @@ fun LyricsScreen(
                 }
             }
             var showVolumeSheet by remember { mutableStateOf(false) }
+            val volumeSheetState = androidx.compose.material3.rememberModalBottomSheetState()
+            fun dismissVolumeSheetAnimated() {
+                scope.launch {
+                    runCatching { volumeSheetState.hide() }
+                    showVolumeSheet = false
+                }
+            }
             HapticIconButton(onClick = { showVolumeSheet = true },
                 modifier = toolbarActionModifier.then(
                     if (sharedTransitionScope != null && animatedContentScope != null) {
@@ -943,6 +943,12 @@ fun LyricsScreen(
             val addSheetState = androidx.compose.material3.rememberModalBottomSheetState(
                 skipPartiallyExpanded = true
             )
+            fun dismissAddSheetAnimated() {
+                scope.launch {
+                    runCatching { addSheetState.hide() }
+                    showAddSheet = false
+                }
+            }
             HapticIconButton(onClick = { showAddSheet = true },
                 modifier = toolbarActionModifier.then(
                 if (sharedTransitionScope != null && animatedContentScope != null) {
@@ -973,23 +979,12 @@ fun LyricsScreen(
             // 音量控制弹窗
             if (showVolumeSheet) {
                 DensityScaledModalBottomSheet(
-                    onDismissRequest = { showVolumeSheet = false },
-                    sheetGesturesEnabled = false
+                    onDismissRequest = ::dismissVolumeSheetAnimated,
+                    sheetState = volumeSheetState,
+                    sheetGesturesEnabled = true
                 ) {
                     VolumeControlSheetContent()
                 }
-            }
-
-            // 播放队列弹窗
-            if (showQueueSheet) {
-                NowPlayingQueueSheet(
-                    displayedQueueItems = displayedQueueItems,
-                    currentIndexInDisplay = currentIndexInDisplay,
-                    offlineMode = offlineMode,
-                    allowQueueReorder = progressSeekEnabled,
-                    onDismissRequest = { showQueueSheet = false },
-                    onOpenCurrentPlaybackSource = onOpenCurrentPlaybackSource
-                )
             }
 
             // 添加到歌单弹窗
@@ -999,9 +994,9 @@ fun LyricsScreen(
                     playlists.filterNot { LocalFilesPlaylist.isSystemPlaylist(it, context) }
                 }
                 DensityScaledModalBottomSheet(
-                    onDismissRequest = { showAddSheet = false },
+                    onDismissRequest = ::dismissAddSheetAnimated,
                     sheetState = addSheetState,
-                    sheetGesturesEnabled = false
+                    sheetGesturesEnabled = true
                 ) {
                     androidx.compose.foundation.lazy.LazyColumn(
                         modifier = Modifier.bottomSheetScrollGuard()
@@ -1016,7 +1011,7 @@ fun LyricsScreen(
                                             actionLabel = playlistAddActionLabel
                                         ) {
                                             PlayerManager.addCurrentToPlaylist(pl.id)
-                                            showAddSheet = false
+                                            dismissAddSheetAnimated()
                                         }
                                     }
                                     .padding(horizontal = 24.dp, vertical = 16.dp),

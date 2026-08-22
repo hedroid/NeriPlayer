@@ -24,6 +24,7 @@ package moe.ouom.neriplayer.ui.screen.tab.settings.about
  */
 
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -34,12 +35,26 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material.icons.outlined.Verified
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.BuildConfig
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.core.update.AppUpdateCheckResult
+import moe.ouom.neriplayer.core.update.AppUpdateChecker
+import moe.ouom.neriplayer.ui.feedback.AppFeedback
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.settingsItemClickable
 import moe.ouom.neriplayer.util.format.convertTimestampToDate
 
@@ -66,6 +81,11 @@ internal fun SettingsAboutContent(
     onCopyValue: (String) -> Unit,
     onOpenGitHubRepo: () -> Unit
 ) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val scope = rememberCoroutineScope()
+    var checkingForUpdates by remember { mutableStateOf(false) }
+
     SettingsAboutIntroItem()
     SettingsBuildUuidItem(onCopyValue)
     SettingsVersionItem(
@@ -74,7 +94,75 @@ internal fun SettingsAboutContent(
         onCopyValue = onCopyValue
     )
     SettingsBuildTimeItem(onCopyValue)
+    SettingsUpdateCheckItem(
+        checking = checkingForUpdates,
+        onClick = {
+            if (checkingForUpdates) return@SettingsUpdateCheckItem
+            checkingForUpdates = true
+            scope.launch {
+                when (val result = AppUpdateChecker.check(BuildConfig.VERSION_NAME)) {
+                    is AppUpdateCheckResult.UpdateAvailable -> AppFeedback.showWithAction(
+                        context = context,
+                        message = context.getString(
+                            R.string.settings_update_available,
+                            result.tagName
+                        ),
+                        actionLabel = context.getString(R.string.settings_view_release),
+                        onActionPerformed = { uriHandler.openUri(result.releaseUrl) }
+                    )
+                    is AppUpdateCheckResult.UpToDate -> AppFeedback.show(
+                        context = context,
+                        message = context.getString(R.string.settings_update_up_to_date)
+                    )
+                    AppUpdateCheckResult.NoRelease -> AppFeedback.show(
+                        context = context,
+                        message = context.getString(R.string.settings_update_no_release)
+                    )
+                    AppUpdateCheckResult.Failed -> AppFeedback.show(
+                        context = context,
+                        message = context.getString(R.string.settings_update_check_failed)
+                    )
+                }
+                checkingForUpdates = false
+            }
+        }
+    )
     SettingsGitHubItem(onOpenGitHubRepo = onOpenGitHubRepo)
+}
+
+@Composable
+private fun SettingsUpdateCheckItem(
+    checking: Boolean,
+    onClick: () -> Unit
+) {
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Outlined.Update,
+                contentDescription = stringResource(R.string.settings_check_for_updates),
+                tint = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        headlineContent = { Text(stringResource(R.string.settings_check_for_updates)) },
+        supportingContent = {
+            Text(
+                stringResource(
+                    if (checking) {
+                        R.string.settings_checking_for_updates
+                    } else {
+                        R.string.settings_check_for_updates_summary
+                    }
+                )
+            )
+        },
+        trailingContent = {
+            if (checking) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+        },
+        modifier = Modifier.settingsItemClickable(onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
 }
 
 @Composable

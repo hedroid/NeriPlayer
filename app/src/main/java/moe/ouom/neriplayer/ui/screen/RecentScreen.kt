@@ -624,7 +624,6 @@ private fun RecentRowRich(
                     ?.let(::add)
             }
             song.displayArtist().takeIf { it.isNotBlank() }?.let(::add)
-            add(formatDuration(song.durationMs))
         }.joinToString(" · ")
     }
     val rowScale by animateFloatAsState(
@@ -718,8 +717,16 @@ private fun RecentRowRich(
             )
         }
 
-        // 右侧更多
-        moreMenu()
+        if (!selectionMode) {
+            Text(
+                text = formatDuration(song.durationMs),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+            // 右侧更多
+            moreMenu()
+        }
     }
 }
 

@@ -4308,7 +4308,6 @@ private fun SettingsLoginExpandedContent(
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
 
-        /*
         ListItem(
             leadingContent = {
                 Icon(
@@ -4323,6 +4322,5 @@ private fun SettingsLoginExpandedContent(
             modifier = Modifier.settingsItemClickable { },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
-        */
     }
 }

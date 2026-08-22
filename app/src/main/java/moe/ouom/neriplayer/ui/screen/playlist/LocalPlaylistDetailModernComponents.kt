@@ -23,10 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -61,7 +58,6 @@ import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -85,6 +81,8 @@ import moe.ouom.neriplayer.ui.effect.glass.LocalAdvancedGlassOverscrollBackdrop
 import moe.ouom.neriplayer.ui.effect.glass.drawAdvancedGlassOverscrollBackdrop
 import moe.ouom.neriplayer.ui.haptic.HapticFilledIconButton
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeGlyph
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeIcon
 import moe.ouom.neriplayer.util.format.formatPlayCount
 import moe.ouom.neriplayer.util.media.CoverArtColorCache
 import moe.ouom.neriplayer.util.media.normalizeCoverArtColorCacheKey
@@ -1466,7 +1464,6 @@ internal fun PlaylistModernPlaybackActions(
             verticalAlignment = Alignment.CenterVertically
         ) {
             PlaylistCompactIconButton(
-                imageVector = Icons.Outlined.Shuffle,
                 contentDescription = if (shuffleEnabled) {
                     stringResource(R.string.playlist_mode_shuffle)
                 } else {
@@ -1475,34 +1472,53 @@ internal fun PlaylistModernPlaybackActions(
                 enabled = canUseSongs,
                 active = shuffleEnabled,
                 onClick = onToggleShuffle
-            )
+            ) { tint, description ->
+                RetroPlaybackModeIcon(
+                    icon = RetroPlaybackModeGlyph.Shuffle,
+                    contentDescription = description,
+                    tint = tint,
+                    size = 20.dp
+                )
+            }
             PlaylistCompactIconButton(
-                imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) {
-                    Icons.Filled.RepeatOne
-                } else {
-                    Icons.Outlined.Repeat
-                },
                 contentDescription = stringResource(playlistRepeatModeLabelRes(repeatMode)),
                 active = repeatMode != Player.REPEAT_MODE_OFF,
                 onClick = onCycleRepeatMode
-            )
+            ) { tint, description ->
+                RetroPlaybackModeIcon(
+                    icon = if (repeatMode == Player.REPEAT_MODE_ONE) {
+                        RetroPlaybackModeGlyph.RepeatOne
+                    } else {
+                        RetroPlaybackModeGlyph.Repeat
+                    },
+                    contentDescription = description,
+                    tint = tint,
+                    size = 20.dp
+                )
+            }
             PlaylistCompactIconButton(
-                imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
                 contentDescription = stringResource(R.string.playlist_export_to_local),
                 enabled = canUseSongs && exportEnabled,
                 onClick = onExportToLocalPlaylist,
-            )
+            ) { tint, description ->
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                    contentDescription = description,
+                    tint = tint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun PlaylistCompactIconButton(
-    imageVector: ImageVector,
     contentDescription: String,
     enabled: Boolean = true,
     active: Boolean = false,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    icon: @Composable (Color, String) -> Unit
 ) {
     val visualColors = LocalPlaylistHeroVisualColors.current
     val containerColor = when {
@@ -1527,12 +1543,7 @@ private fun PlaylistCompactIconButton(
             .clip(RoundedCornerShape(22.dp))
             .background(containerColor)
     ) {
-        Icon(
-            imageVector = imageVector,
-            contentDescription = contentDescription,
-            tint = contentColor,
-            modifier = Modifier.size(20.dp)
-        )
+        icon(contentColor, contentDescription)
     }
 }
 

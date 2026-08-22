@@ -58,7 +58,6 @@ import moe.ouom.neriplayer.R
 import moe.ouom.neriplayer.activity.auth.BiliQrLoginActivity
 import moe.ouom.neriplayer.activity.auth.YouTubeWebLoginActivity
 import moe.ouom.neriplayer.core.di.AppContainer
-import moe.ouom.neriplayer.ui.component.sheet.bottomSheetDragBlocker
 import moe.ouom.neriplayer.ui.screen.tab.settings.component.InlineMessage
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsButton
 import moe.ouom.neriplayer.ui.screen.tab.settings.miuix.MiuixSettingsDialog
@@ -268,13 +267,12 @@ internal fun SettingsCookieLoginSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        sheetGesturesEnabled = false,
+        sheetGesturesEnabled = true,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         tonalElevation = 0.dp
     ) {
         Box(
             modifier = Modifier
-                .bottomSheetDragBlocker()
                 .padding(start = 20.dp, end = 20.dp, bottom = 48.dp, top = 8.dp)
         ) {
             Column(

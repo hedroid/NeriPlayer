@@ -43,9 +43,12 @@ import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -95,6 +98,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -1450,6 +1454,14 @@ private fun NeriAppContent(
     )
     var showNowPlaying by rememberSaveable { mutableStateOf(false) }
     var showNowPlayingLyrics by rememberSaveable { mutableStateOf(false) }
+    var nowPlayingOverlayMounted by remember { mutableStateOf(showNowPlaying) }
+    var nowPlayingDragActive by remember { mutableStateOf(false) }
+    var nowPlayingDragStartFraction by remember { mutableFloatStateOf(1f) }
+    var nowPlayingDragDistancePx by remember { mutableFloatStateOf(0f) }
+    var nowPlayingDragJob by remember { mutableStateOf<Job?>(null) }
+    val nowPlayingOffsetFraction = remember {
+        Animatable(if (showNowPlaying) 0f else 1f)
+    }
     var currentPlaybackSourceRoute by rememberSaveable { mutableStateOf<String?>(null) }
     var restoreLyricsAfterAlbumBack by rememberSaveable { mutableStateOf(false) }
     var lyricsAlbumRouteObserved by rememberSaveable { mutableStateOf(false) }
@@ -1717,6 +1729,28 @@ private fun NeriAppContent(
         currentSongKey = currentSongKey
     )
     val scope = rememberCoroutineScope()
+    LaunchedEffect(showNowPlaying, nowPlayingDragActive) {
+        if (!nowPlayingDragActive) {
+            if (showNowPlaying) nowPlayingOverlayMounted = true
+            nowPlayingOffsetFraction.animateTo(
+                targetValue = if (showNowPlaying) 0f else 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
+            if (!showNowPlaying) nowPlayingOverlayMounted = false
+        }
+    }
+    LaunchedEffect(currentSong) {
+        if (currentSong == null) {
+            showNowPlaying = false
+            showNowPlayingLyrics = false
+            nowPlayingDragActive = false
+            nowPlayingOverlayMounted = false
+            nowPlayingOffsetFraction.snapTo(1f)
+        }
+    }
     var pendingTrafficRiskDownloadRequest by remember {
         mutableStateOf<GlobalDownloadManager.TrafficRiskDownloadRequest?>(null)
     }
@@ -4241,13 +4275,33 @@ private fun NeriAppContent(
                                     }
                                 }
 
+                                val miniPlayerRevealProgress =
+                                    (1f - nowPlayingOffsetFraction.value).coerceIn(0f, 1f)
+                                val miniPlayerFadeProgress =
+                                    (miniPlayerRevealProgress / 0.34f).coerceIn(0f, 1f)
+                                val miniPlayerTransitionAlpha = 1f -
+                                    miniPlayerFadeProgress * miniPlayerFadeProgress *
+                                    (3f - 2f * miniPlayerFadeProgress)
+
                                 AnimatedVisibility(
-                                    visible = currentSong != null && !showNowPlaying,
+                                    visible = currentSong != null &&
+                                        (nowPlayingOffsetFraction.value > 0.001f ||
+                                            nowPlayingDragActive),
                                     modifier = Modifier
                                         .align(Alignment.BottomStart)
                                         .padding(
                                             bottom = bottomBarLayoutInsets.miniPlayerBottomPadding
                                         )
+                                        .offset {
+                                            IntOffset(
+                                                x = 0,
+                                                y = (-miniPlayerRevealProgress *
+                                                    rootView.height.toFloat() / 3f).roundToInt()
+                                            )
+                                        }
+                                        .graphicsLayer {
+                                            alpha = miniPlayerTransitionAlpha
+                                        }
                                         .zIndex(MINI_PLAYER_OVERLAY_Z_INDEX),
                                 enter = slideInVertically(
                                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
@@ -4269,7 +4323,52 @@ private fun NeriAppContent(
                                     onPlayPause = { PlayerManager.togglePlayPause() },
                                     onPrevious = { PlayerManager.previous() },
                                     onNext = { PlayerManager.next() },
-                                    onExpand = { showNowPlaying = true },
+                                    onExpand = {
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragJob = null
+                                        nowPlayingDragActive = false
+                                        nowPlayingDragDistancePx = 0f
+                                        nowPlayingOverlayMounted = true
+                                        showNowPlaying = true
+                                    },
+                                    onExpandDragStart = {
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingOverlayMounted = true
+                                        nowPlayingDragActive = true
+                                        nowPlayingDragStartFraction = 1f
+                                        nowPlayingDragDistancePx = 0f
+                                        nowPlayingDragJob = scope.launch {
+                                            nowPlayingOffsetFraction.snapTo(1f)
+                                        }
+                                    },
+                                    onExpandDrag = { dragAmountY ->
+                                        nowPlayingDragDistancePx += dragAmountY
+                                        val heightPx = rootView.height.toFloat().coerceAtLeast(1f)
+                                        val target = (
+                                            nowPlayingDragStartFraction +
+                                                nowPlayingDragDistancePx / heightPx
+                                            ).coerceIn(0f, 1f)
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragJob = scope.launch {
+                                            nowPlayingOffsetFraction.snapTo(target)
+                                        }
+                                    },
+                                    onExpandDragEnd = {
+                                        val heightPx = rootView.height.toFloat().coerceAtLeast(1f)
+                                        val shouldOpen = nowPlayingDragDistancePx < -heightPx * 0.18f
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragJob = null
+                                        nowPlayingDragActive = false
+                                        showNowPlaying = shouldOpen
+                                    },
+                                    onExpandDragCancel = {
+                                        if (nowPlayingDragActive) {
+                                            nowPlayingDragJob?.cancel()
+                                            nowPlayingDragJob = null
+                                            nowPlayingDragActive = false
+                                            showNowPlaying = false
+                                        }
+                                    },
                                     enableBlur = effectiveAdvancedBlurEnabled,
                                     offlineMode = offlineMode,
                                     isPlaybackWaiting = isPlaybackWaiting,
@@ -4281,21 +4380,30 @@ private fun NeriAppContent(
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = showNowPlaying,
-                    enter = slideInVertically(
-                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
-                        initialOffsetY = { fullHeight -> fullHeight }
-                    ) + fadeIn(animationSpec = tween(durationMillis = 150)),
-                    exit = slideOutVertically(
-                        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
-                        targetOffsetY = { fullHeight -> fullHeight }
-                    ) + fadeOut(animationSpec = tween(durationMillis = 150))
-                ) {
-                    DisposableEffect(Unit) {
-                        latestOnNowPlayingVisibilityChanged(true)
+                if (currentSong != null && (showNowPlaying || nowPlayingOverlayMounted)) {
+                    val nowPlayingOverlayCornerRadius = 36.dp
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(MINI_PLAYER_OVERLAY_Z_INDEX + 1f)
+                            .offset {
+                                IntOffset(
+                                    x = 0,
+                                    y = (rootView.height * nowPlayingOffsetFraction.value)
+                                        .roundToInt()
+                                )
+                            }
+                            .clip(
+                                RoundedCornerShape(
+                                    topStart = nowPlayingOverlayCornerRadius,
+                                    topEnd = nowPlayingOverlayCornerRadius
+                                )
+                            )
+                    ) {
+                    DisposableEffect(showNowPlaying) {
+                        latestOnNowPlayingVisibilityChanged(showNowPlaying)
                         onDispose {
-                            latestOnNowPlayingVisibilityChanged(false)
+                            if (showNowPlaying) latestOnNowPlayingVisibilityChanged(false)
                         }
                     }
                     val currentCoverUrl = playbackVisualCoverUrl
@@ -4315,7 +4423,7 @@ private fun NeriAppContent(
                         paletteStyle = themePaletteStyle,
                         colorSpec = themeColorSpec
                     ) {
-                        BackHandler { showNowPlaying = false }
+                        BackHandler(enabled = showNowPlaying) { showNowPlaying = false }
 
                         val nowPlayingQueue by PlayerManager.currentQueueFlow.collectAsStateWithLifecycle()
                         val nowPlayingCoverUrl = currentCoverUrl
@@ -4323,6 +4431,7 @@ private fun NeriAppContent(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .clipToBounds()
                                 .blockUnderlyingTouches()
                         ) {
                             val coverBlurAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -4548,6 +4657,43 @@ private fun NeriAppContent(
                                 val currentSourceRoute = currentPlaybackSourceRoute
                                 NowPlayingScreen(
                                     onNavigateUp = { showNowPlaying = false },
+                                    onDismissDragStart = {
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragActive = true
+                                        nowPlayingDragStartFraction = nowPlayingOffsetFraction.value
+                                        nowPlayingDragDistancePx = 0f
+                                        nowPlayingDragJob = scope.launch {
+                                            nowPlayingOffsetFraction.stop()
+                                        }
+                                    },
+                                    onDismissDrag = { dragAmountY ->
+                                        nowPlayingDragDistancePx += dragAmountY
+                                        val heightPx = rootView.height.toFloat().coerceAtLeast(1f)
+                                        val target = (
+                                            nowPlayingDragStartFraction +
+                                                nowPlayingDragDistancePx / heightPx
+                                            ).coerceIn(0f, 1f)
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragJob = scope.launch {
+                                            nowPlayingOffsetFraction.snapTo(target)
+                                        }
+                                    },
+                                    onDismissDragEnd = {
+                                        val heightPx = rootView.height.toFloat().coerceAtLeast(1f)
+                                        val shouldClose = nowPlayingDragDistancePx > heightPx * 0.16f
+                                        nowPlayingDragJob?.cancel()
+                                        nowPlayingDragJob = null
+                                        nowPlayingDragActive = false
+                                        showNowPlaying = !shouldClose
+                                    },
+                                    onDismissDragCancel = {
+                                        if (nowPlayingDragActive) {
+                                            nowPlayingDragJob?.cancel()
+                                            nowPlayingDragJob = null
+                                            nowPlayingDragActive = false
+                                            showNowPlaying = true
+                                        }
+                                    },
                                     onOpenCurrentPlaybackSource = currentSourceRoute?.let { route ->
                                         {
                                             navigateToPlaybackSourceRoute(route)
@@ -4584,6 +4730,7 @@ private fun NeriAppContent(
                             }
                         }
                     }
+                }
                 }
 
                 val revealOrigin = themeRevealOriginWindow

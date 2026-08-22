@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Neri Player</string>
+    <string name="app_name">NeriPlayer</string>
 
     <!-- Common Actions -->
     <string name="action_confirm">Confirm</string>
@@ -52,6 +52,14 @@
     <string name="common_version">Version</string>
     <string name="common_build_time">Build Time</string>
     <string name="common_update_now">Update Now</string>
+    <string name="settings_check_for_updates">Check for updates</string>
+    <string name="settings_check_for_updates_summary">Check hedroid/NeriPlayer for the latest release</string>
+    <string name="settings_checking_for_updates">Checking…</string>
+    <string name="settings_update_available">New version available: %1$s</string>
+    <string name="settings_update_up_to_date">You already have the latest version</string>
+    <string name="settings_update_no_release">This repository has no available release yet</string>
+    <string name="settings_update_check_failed">Could not check for updates. Try again later.</string>
+    <string name="settings_view_release">View release</string>
     <string name="common_coming_soon">Coming Soon</string>
     <string name="common_not_implemented">Not Implemented</string>
     <string name="common_other_modes">Other Modes</string>
@@ -740,10 +748,9 @@
     <string name="explore_tag_link_recognition">Link Recognition</string>
     <string name="explore_tab_youtube">YouTube</string>
     <string name="explore_tab_links">Links</string>
-    <string name="explore_link_input_label">Link or share text</string>
-    <string name="explore_link_input_placeholder">Paste a NetEase, Bilibili, or YouTube link</string>
+    <string name="explore_link_input_label">Song, video, playlist, artist link or share text</string>
+    <string name="explore_link_input_focused_label">Link or share text</string>
     <string name="explore_link_input_hint">Supports song, video, playlist, and artist links, including full share text containing a title and short link</string>
-    <string name="explore_link_recognition_placeholder">Paste a music link to recognize it</string>
     <string name="explore_link_invalid">This link could not be recognized</string>
     <string name="explore_link_unsupported_title">Unsupported link</string>
     <string name="explore_link_unsupported_message">%1$s %2$s links are not supported yet</string>
@@ -804,9 +811,9 @@
     <string name="home_favorite_playlist">Favorite Playlist</string>
     <string name="home_unfavorited">Unfavorited</string>
     <string name="continue_playing_remove">Remove</string>
-    <string name="home_title_brand_loud">Home</string>
-    <string name="home_title_brand_wave">Home</string>
-    <string name="home_title_brand_call">Home</string>
+    <string name="home_title_brand_loud">NeriPlayer!</string>
+    <string name="home_title_brand_wave">NeriPlayer~</string>
+    <string name="home_title_brand_call">Hey, NeriPlayer</string>
     <string name="home_all_cards_hidden">All home cards are hidden. Re-enable them in Settings.</string>
     <string name="home_offline_no_continue">Offline mode only shows Continue Playing. Nothing is available yet.</string>
     <string name="offline_mode_title">Offline Mode</string>

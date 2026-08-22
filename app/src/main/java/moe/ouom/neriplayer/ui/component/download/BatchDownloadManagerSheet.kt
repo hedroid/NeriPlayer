@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
@@ -40,6 +41,7 @@ import moe.ouom.neriplayer.core.download.GlobalDownloadManager
 import moe.ouom.neriplayer.core.player.download.AudioDownloadManager
 import moe.ouom.neriplayer.ui.haptic.HapticIconButton
 import moe.ouom.neriplayer.ui.haptic.HapticTextButton
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,10 +68,18 @@ fun BatchDownloadManagerSheet(
         )
     }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+
+    fun dismissAnimated() {
+        scope.launch {
+            runCatching { sheetState.hide() }
+            onDismiss()
+        }
+    }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetGesturesEnabled = false,
+        onDismissRequest = ::dismissAnimated,
+        sheetGesturesEnabled = true,
         sheetState = sheetState
     ) {
         Column(
@@ -88,7 +98,7 @@ fun BatchDownloadManagerSheet(
                     stringResource(R.string.download_manager),
                     style = MaterialTheme.typography.titleLarge
                 )
-                HapticIconButton(onClick = onDismiss) {
+                HapticIconButton(onClick = ::dismissAnimated) {
                     Icon(
                         Icons.Filled.Close,
                         contentDescription = stringResource(R.string.cd_close)

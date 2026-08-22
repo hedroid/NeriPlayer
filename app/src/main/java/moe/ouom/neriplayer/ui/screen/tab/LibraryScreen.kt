@@ -26,6 +26,7 @@ package moe.ouom.neriplayer.ui.screen.tab
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -59,7 +60,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.History
 import moe.ouom.neriplayer.ui.component.overlay.DensityScaledAlertDialog as AlertDialog
@@ -71,7 +71,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -86,6 +86,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -99,7 +100,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -140,7 +140,6 @@ import moe.ouom.neriplayer.data.model.displayName
 import moe.ouom.neriplayer.ui.LocalMiniPlayerHeight
 import moe.ouom.neriplayer.ui.feedback.AppFeedback
 import moe.ouom.neriplayer.ui.component.playlist.showPlaylistDeleteResultGlobally
-import moe.ouom.neriplayer.ui.util.shouldAllowCollapsingTopAppBar
 import moe.ouom.neriplayer.data.model.NeteaseArtistSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.AlbumSummary
 import moe.ouom.neriplayer.ui.viewmodel.tab.BiliPlaylist
@@ -178,6 +177,7 @@ enum class LibraryTab(val labelResId: Int) {
 }
 
 private const val NETEASE_CATEGORY_PLAYLIST = 0
+private const val LIBRARY_TAB_DOUBLE_TAP_TIMEOUT_MS = 350L
 private const val NETEASE_CATEGORY_ALBUM = 1
 private const val FAVORITE_CATEGORY_PLAYLIST = 0
 private const val FAVORITE_CATEGORY_ARTIST = 1
@@ -262,8 +262,8 @@ internal fun libraryTabDisplayOrder(
             LibraryTab.FAVORITE,
             LibraryTab.YTMUSIC,
             LibraryTab.NETEASE,
-            LibraryTab.BILI
-            // LibraryTab.QQMUSIC is temporarily hidden.
+            LibraryTab.BILI,
+            LibraryTab.QQMUSIC
         )
     } else {
         listOf(
@@ -271,8 +271,8 @@ internal fun libraryTabDisplayOrder(
             LibraryTab.FAVORITE,
             LibraryTab.NETEASE,
             LibraryTab.YTMUSIC,
-            LibraryTab.BILI
-            // LibraryTab.QQMUSIC is temporarily hidden.
+            LibraryTab.BILI,
+            LibraryTab.QQMUSIC
         )
     }
     return if (youtubeEnabled) orderedTabs else orderedTabs - LibraryTab.YTMUSIC
@@ -341,62 +341,15 @@ fun LibraryScreen(
     var selectedNeteaseCategory by rememberSaveable {
         mutableIntStateOf(NETEASE_CATEGORY_PLAYLIST)
     }
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
-        state = topAppBarState,
-        canScroll = {
-            when (orderedTabs.getOrNull(pagerState.currentPage)) {
-                LibraryTab.LOCAL -> shouldAllowCollapsingTopAppBar(
-                    localListState.canScrollForward,
-                    localListState.canScrollBackward,
-                    topAppBarState.collapsedFraction
-                )
-                LibraryTab.FAVORITE -> shouldAllowCollapsingTopAppBar(
-                    favoriteListState.canScrollForward,
-                    favoriteListState.canScrollBackward,
-                    topAppBarState.collapsedFraction
-                )
-                LibraryTab.NETEASE,
-                LibraryTab.NETEASEALBUM -> {
-                    val activeListState = if (
-                        selectedNeteaseCategory == NETEASE_CATEGORY_ALBUM
-                    ) {
-                        neteaseAlbumState
-                    } else {
-                        neteaseListState
-                    }
-                    shouldAllowCollapsingTopAppBar(
-                        activeListState.canScrollForward,
-                        activeListState.canScrollBackward,
-                        topAppBarState.collapsedFraction
-                    )
-                }
-                LibraryTab.YTMUSIC -> shouldAllowCollapsingTopAppBar(
-                    youtubeMusicListState.canScrollForward,
-                    youtubeMusicListState.canScrollBackward,
-                    topAppBarState.collapsedFraction
-                )
-                LibraryTab.BILI -> shouldAllowCollapsingTopAppBar(
-                    biliListState.canScrollForward,
-                    biliListState.canScrollBackward,
-                    topAppBarState.collapsedFraction
-                )
-                LibraryTab.QQMUSIC -> shouldAllowCollapsingTopAppBar(
-                    qqMusicListState.canScrollForward,
-                    qqMusicListState.canScrollBackward,
-                    topAppBarState.collapsedFraction
-                )
-                null -> shouldAllowCollapsingTopAppBar(
-                    canScrollForward = false,
-                    canScrollBackward = false,
-                    collapsedFraction = topAppBarState.collapsedFraction
-                )
-            }
-        }
-    )
     val scope = rememberCoroutineScope()
     val windowWidthDp = currentWindowWidthDp()
     val isTabletLayout = windowWidthDp >= 720.dp
     val pageHorizontalPadding = if (isTabletLayout) 28.dp else 0.dp
+
+    LaunchedEffect(topAppBarState) {
+        topAppBarState.heightOffset = 0f
+        topAppBarState.contentOffset = 0f
+    }
 
     LaunchedEffect(initialTab, orderedTabs) {
         val targetPage = orderedTabs.indexOf(initialTab.asVisibleLibraryTab()).takeIf { it >= 0 } ?: 0
@@ -413,14 +366,11 @@ fun LibraryScreen(
     }
 
     Column(
-        Modifier
-            .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        LargeTopAppBar(
+        TopAppBar(
             title = { Text(stringResource(R.string.library_title)) },
-            scrollBehavior = scrollBehavior,
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = Color.Transparent,
                 scrolledContainerColor = Color.Transparent
@@ -569,48 +519,66 @@ private fun LibraryMainTabs(
     onTabSelected: (Int) -> Unit,
     onRefresh: () -> Unit
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    var lastTappedTabIndex by remember { mutableIntStateOf(-1) }
+    var lastTabTapUptimeMs by remember { mutableLongStateOf(0L) }
+
+    AdvancedGlassSurface(
+        role = AdvancedGlassRole.ScreenTopTab,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
+            .clip(LibraryPrimaryTabShape),
+        shape = LibraryPrimaryTabShape
     ) {
-        AdvancedGlassSurface(
-            role = AdvancedGlassRole.ScreenTopTab,
-            modifier = Modifier
-                .weight(1f)
-                .clip(LibraryPrimaryTabShape),
-            shape = LibraryPrimaryTabShape
+        PrimaryScrollableTabRow(
+            selectedTabIndex = selectedTabIndex,
+            edgePadding = 8.dp,
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            PrimaryScrollableTabRow(
-                selectedTabIndex = selectedTabIndex,
-                edgePadding = 8.dp,
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                tabs.forEachIndexed { index, tab ->
-                    Tab(
-                        selected = selectedTabIndex == index,
-                        onClick = { onTabSelected(index) },
-                        selectedContentColor = MaterialTheme.colorScheme.primary,
-                        unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        text = { Text(stringResource(tab.labelResId)) }
-                    )
-                }
+            tabs.forEachIndexed { index, tab ->
+                Tab(
+                    selected = selectedTabIndex == index,
+                    onClick = {
+                        val now = SystemClock.uptimeMillis()
+                        val shouldRefresh = shouldRefreshLibraryTabOnTap(
+                            selectedTabIndex = selectedTabIndex,
+                            tappedTabIndex = index,
+                            refreshEnabled = refreshEnabled,
+                            previousTappedTabIndex = lastTappedTabIndex,
+                            elapsedSincePreviousTapMs = now - lastTabTapUptimeMs
+                        )
+                        if (shouldRefresh) {
+                            lastTappedTabIndex = -1
+                            lastTabTapUptimeMs = 0L
+                            onRefresh()
+                        } else {
+                            lastTappedTabIndex = index
+                            lastTabTapUptimeMs = now
+                            onTabSelected(index)
+                        }
+                    },
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = { Text(stringResource(tab.labelResId)) }
+                )
             }
         }
-
-        HapticIconButton(
-            onClick = onRefresh,
-            enabled = refreshEnabled
-        ) {
-            Icon(
-                Icons.Filled.Refresh,
-                contentDescription = stringResource(R.string.action_refresh)
-            )
-        }
     }
+}
+
+internal fun shouldRefreshLibraryTabOnTap(
+    selectedTabIndex: Int,
+    tappedTabIndex: Int,
+    refreshEnabled: Boolean,
+    previousTappedTabIndex: Int,
+    elapsedSincePreviousTapMs: Long
+): Boolean {
+    return refreshEnabled &&
+        selectedTabIndex == tappedTabIndex &&
+        previousTappedTabIndex == tappedTabIndex &&
+        elapsedSincePreviousTapMs in 1L..LIBRARY_TAB_DOUBLE_TAP_TIMEOUT_MS
 }
 
 @Composable

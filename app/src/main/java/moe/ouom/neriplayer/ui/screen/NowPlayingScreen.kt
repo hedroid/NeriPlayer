@@ -43,9 +43,16 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -60,7 +67,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -106,7 +112,6 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SpeakerGroup
 import androidx.compose.material.icons.outlined.Close
@@ -119,9 +124,7 @@ import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Save
-import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.outlined.Timer
@@ -133,7 +136,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -146,7 +148,6 @@ import moe.ouom.neriplayer.ui.component.overlay.DensityScaledModalBottomSheet as
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -202,6 +203,7 @@ import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -280,6 +282,10 @@ import moe.ouom.neriplayer.ui.component.playback.PlaybackSoundSheet
 import moe.ouom.neriplayer.ui.component.playback.SongMetadataSearchContent
 import moe.ouom.neriplayer.ui.component.playback.NowPlayingCoverPreviewDialog
 import moe.ouom.neriplayer.ui.component.playback.PlaybackControlIndicator
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeIcon
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeGlyph.Repeat
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeGlyph.RepeatOne
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeGlyph.Shuffle
 import moe.ouom.neriplayer.ui.component.playback.NowPlayingSongTitle
 import moe.ouom.neriplayer.ui.component.playback.scaleButtonSize
 import moe.ouom.neriplayer.ui.component.playback.scaleIconSize
@@ -289,7 +295,6 @@ import moe.ouom.neriplayer.ui.component.playback.rememberDelayedPlaybackWaiting
 import moe.ouom.neriplayer.ui.component.playback.SleepTimerDialog
 import moe.ouom.neriplayer.ui.component.playback.WaveformSlider
 import moe.ouom.neriplayer.ui.component.playback.resolvePlaybackWaiting
-import moe.ouom.neriplayer.ui.component.sheet.bottomSheetDragBlocker
 import moe.ouom.neriplayer.ui.component.sheet.bottomSheetScrollGuard
 import moe.ouom.neriplayer.ui.feedback.NeriOverlaySnackbarHost
 import moe.ouom.neriplayer.ui.feedback.showNeriSnackbar
@@ -340,7 +345,6 @@ private const val CoverSourceBadgeRevealBufferMs = 120
 private const val CoverSourceBadgeRevealDelayMs =
     LyricsPageTransitionDurationMs + CoverSourceBadgeRevealBufferMs
 private const val NowPlayingCoverImageCrossfadeMs = 220
-private const val QueueSheetMaxHeightFraction = 0.9f
 internal val NowPlayingQueueReorderAutoScrollMaxPerFrame = 2.dp
 private val QueueReorderDragCancelStiffness = Spring.StiffnessMediumLow
 private const val QueueReorderDraggedItemScale = 1.01f
@@ -351,6 +355,23 @@ private val PlaybackActionToolbarMinimumTouchTarget = 48.dp
 private val PlaybackActionToolbarSmallSlotThreshold = 40.dp
 private val NowPlayingMainControlsMinimumSpacing = 4.dp
 private val LyricOffsetStepMsFloat = LYRIC_DEFAULT_OFFSET_STEP_MS.toFloat()
+
+private enum class NowPlayingVerticalGestureMode {
+    QueuePage,
+    DismissPlayer
+}
+
+private fun rubberBandQueuePageProgress(progress: Float): Float = when {
+    progress < 0f -> {
+        val overshoot = -progress
+        -(overshoot * 0.9f) / (1f + overshoot * 0.9f)
+    }
+    progress > 1f -> {
+        val overshoot = progress - 1f
+        1f + (overshoot * 0.9f) / (1f + overshoot * 0.9f)
+    }
+    else -> progress
+}
 
 internal fun resolveDisplayedNowPlayingCoverUrl(
     requestedCoverUrl: String?,
@@ -741,6 +762,7 @@ private fun NowPlayingQueueRow(
     index: Int,
     song: SongItem,
     isCurrent: Boolean,
+    isPlaying: Boolean,
     isFavoriteSong: Boolean,
     offlineMode: Boolean,
     selectionMode: Boolean,
@@ -756,18 +778,22 @@ private fun NowPlayingQueueRow(
 ) {
     val context = LocalContext.current
     val coverUrl = remember(song, context) { song.displayCoverUrl(context) }
+    val secondaryText = remember(song) {
+        buildList {
+            song.displayArtist().takeIf { it.isNotBlank() }?.let(::add)
+        }.joinToString(" · ")
+    }
     var showMoreMenu by remember { mutableStateOf(false) }
     val containerColor = when {
-        selected -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.64f)
-        isCurrent -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)
+        selected -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+        else -> Color.Transparent
     }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 72.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(18.dp))
             .combinedClickable(
                 onClick = {
                     if (selectionMode) {
@@ -778,47 +804,48 @@ private fun NowPlayingQueueRow(
                 },
                 onLongClick = onLongPress
             ),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(18.dp),
         color = containerColor
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (selectionMode) {
-                Icon(
-                    imageVector = if (selected) {
-                        Icons.Filled.CheckBox
-                    } else {
-                        Icons.Filled.CheckBoxOutlineBlank
-                    },
-                    contentDescription = if (selected) {
-                        stringResource(R.string.common_selected)
-                    } else {
-                        stringResource(R.string.action_select)
-                    },
-                    tint = if (selected) {
-                        MaterialTheme.colorScheme.secondary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.padding(end = 10.dp)
-                )
-            }
             Box(
-                modifier = Modifier.width(34.dp),
-                contentAlignment = Alignment.CenterStart
+                modifier = Modifier.width(40.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = (index + 1).toString(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1
-                )
+                if (selectionMode) {
+                    Icon(
+                        imageVector = if (selected) {
+                            Icons.Filled.CheckBox
+                        } else {
+                            Icons.Filled.CheckBoxOutlineBlank
+                        },
+                        contentDescription = if (selected) {
+                            stringResource(R.string.common_selected)
+                        } else {
+                            stringResource(R.string.action_select)
+                        },
+                        tint = if (selected) {
+                            MaterialTheme.colorScheme.secondary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                } else if (isCurrent) {
+                    NowPlayingQueuePlayingIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        animate = isPlaying
+                    )
+                } else {
+                    Text(
+                        text = (index + 1).toString(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
             }
             if (!coverUrl.isNullOrBlank()) {
                 AsyncImage(
@@ -834,12 +861,12 @@ private fun NowPlayingQueueRow(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .size(52.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(10.dp))
                 )
             } else {
                 Surface(
                     modifier = Modifier.size(52.dp),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.64f)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -862,22 +889,20 @@ private fun NowPlayingQueueRow(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = song.displayArtist(),
+                    text = secondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (isCurrent && !selectionMode) {
-                Icon(
-                    imageVector = Icons.Outlined.PlayArrow,
-                    contentDescription = stringResource(R.string.player_now_playing),
-                    tint = MaterialTheme.colorScheme.primary,
+            if (!selectionMode) {
+                Text(
+                    text = formatDuration(song.durationMs),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp)
                 )
-            }
-            if (!selectionMode) {
                 Box {
                     IconButton(onClick = { showMoreMenu = true }) {
                         Icon(
@@ -967,119 +992,50 @@ private fun NowPlayingQueueRow(
 }
 
 @Composable
-private fun NowPlayingQueueQuickActionButton(
-    label: String,
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit
-) {
-    val context = LocalContext.current
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Surface(
-            shape = RoundedCornerShape(999.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            tonalElevation = 4.dp
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                maxLines = 1
+private fun NowPlayingQueuePlayingIndicator(color: Color, animate: Boolean) {
+    val transition = rememberInfiniteTransition(label = "queue_playing")
+    val transitionSpec: FiniteAnimationSpec<Float> =
+        if (animate) snap() else tween(durationMillis = 180, easing = FastOutSlowInEasing)
+    val animatedHeights = listOf(
+        transition.animateFloat(
+            6f, 18f,
+            infiniteRepeatable(
+                tween(520, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "queue_bar_1"
+        ).value,
+        transition.animateFloat(
+            10f, 22f,
+            infiniteRepeatable(
+                tween(680, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "queue_bar_2"
+        ).value,
+        transition.animateFloat(
+            8f, 16f,
+            infiniteRepeatable(
+                tween(600, delayMillis = 90, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "queue_bar_3"
+        ).value
+    )
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.width(24.dp)) {
+        animatedHeights.forEachIndexed { index, animatedHeight ->
+            val height by animateFloatAsState(
+                targetValue = if (animate) animatedHeight else 8f,
+                animationSpec = transitionSpec,
+                label = "queue_bar_hold_$index"
             )
-        }
-        SmallFloatingActionButton(
-            onClick = {
-                context.performHapticFeedback(HapticFeedbackEffect.Click)
-                onClick()
-            },
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            elevation = FloatingActionButtonDefaults.elevation()
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription
-            )
-        }
-    }
-}
-
-@Composable
-private fun NowPlayingQueueQuickActionsFab(
-    queueSize: Int,
-    currentIndex: Int,
-    hasSourceRoute: Boolean,
-    onLocateCurrent: () -> Unit,
-    onOpenSource: () -> Unit,
-    onEnterSelection: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    if (!shouldShowNowPlayingQueueQuickActions(queueSize, currentIndex, hasSourceRoute)) return
-
-    val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.End,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn() + scaleIn(),
-            exit = fadeOut() + scaleOut()
-        ) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (hasSourceRoute) {
-                    NowPlayingQueueQuickActionButton(
-                        label = stringResource(R.string.cd_open_current_playback_source),
-                        icon = Icons.Outlined.LibraryMusic,
-                        contentDescription = stringResource(R.string.cd_open_current_playback_source),
-                        onClick = {
-                            expanded = false
-                            onOpenSource()
-                        }
-                    )
-                }
-
-                if (currentIndex >= 0) {
-                    NowPlayingQueueQuickActionButton(
-                        label = stringResource(R.string.cd_locate_playing),
-                        icon = Icons.AutoMirrored.Outlined.PlaylistPlay,
-                        contentDescription = stringResource(R.string.cd_locate_playing),
-                        onClick = {
-                            expanded = false
-                            onLocateCurrent()
-                        }
-                    )
-                }
-
-                NowPlayingQueueQuickActionButton(
-                    label = stringResource(R.string.action_enter_multi_select),
-                    icon = Icons.Filled.CheckBox,
-                    contentDescription = stringResource(R.string.action_enter_multi_select),
-                    onClick = {
-                        expanded = false
-                        onEnterSelection()
-                    }
-                )
-            }
-        }
-
-        HapticFloatingActionButton(
-            onClick = { expanded = !expanded },
-            hapticEffect = HapticFeedbackEffect.Click
-        ) {
-            Icon(
-                imageVector = if (expanded) Icons.Outlined.Close else Icons.Filled.MoreVert,
-                contentDescription = stringResource(R.string.cd_queue_quick_actions)
+            if (index > 0) Spacer(Modifier.width(3.dp))
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height(height.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(color)
             )
         }
     }
@@ -1152,36 +1108,30 @@ private fun NowPlayingQueueSelectionToolbar(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun NowPlayingQueueSheet(
+internal fun NowPlayingQueuePage(
     displayedQueueItems: List<PlayerQueueDisplayItem>,
     currentIndexInDisplay: Int,
     offlineMode: Boolean,
     allowQueueReorder: Boolean,
-    onDismissRequest: () -> Unit,
-    onOpenCurrentPlaybackSource: (() -> Unit)? = null
+    modifier: Modifier = Modifier,
+    headerGestureModifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val screenScope = rememberCoroutineScope()
     val localPlaylistRepo = remember(context) { LocalPlaylistRepository.getInstance(context) }
     val snackbarHostState = remember { SnackbarHostState() }
     val playerPlaylists by PlayerManager.playlistsFlow.collectAsStateWithLifecycle()
+    val isPlaying by PlayerManager.isPlayingFlow.collectAsStateWithLifecycle()
     val allLocalPlaylists by localPlaylistRepo.playlists.collectAsStateWithLifecycle(
         initialValue = playerPlaylists
     )
-    val displayedQueue = remember(displayedQueueItems) {
-        displayedQueueItems.map { it.song }
-    }
     val favoriteSongs = remember(allLocalPlaylists, context) {
         FavoritesPlaylist.firstOrNull(allLocalPlaylists, context)?.songs.orEmpty()
     }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectionMode by remember { mutableStateOf(false) }
     var selectedKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showExportSheet by remember { mutableStateOf(false) }
-    var showQueueIndexJumpDialog by remember { mutableStateOf(false) }
-    var queueIndexInput by remember { mutableStateOf("") }
     val sourceEntries = remember(displayedQueueItems) {
         buildNowPlayingQueueEntriesFromDisplayItems(displayedQueueItems)
     }
@@ -1277,20 +1227,6 @@ internal fun NowPlayingQueueSheet(
         selectedKeys = emptySet()
     }
 
-    var dismissingQueue by remember { mutableStateOf(false) }
-
-    fun dismissQueue() {
-        if (dismissingQueue) return
-        dismissingQueue = true
-        showExportSheet = false
-        showQueueIndexJumpDialog = false
-        exitSelection()
-        screenScope.launch {
-            runCatching { sheetState.hide() }
-            onDismissRequest()
-        }
-    }
-
     fun scrollToQueueIndex(index: Int) {
         val targetIndex = index.takeIf { it in queueEntries.indices } ?: return
         screenScope.launch {
@@ -1300,14 +1236,6 @@ internal fun NowPlayingQueueSheet(
 
     fun locateCurrentQueueItem() {
         scrollToQueueIndex(currentIndexInQueueEntries)
-    }
-
-    fun openQueueIndexJumpDialog() {
-        context.performHapticFeedback(HapticFeedbackEffect.Click)
-        queueIndexInput = (currentIndexInQueueEntries + 1)
-            .coerceIn(1, queueEntries.size.coerceAtLeast(1))
-            .toString()
-        showQueueIndexJumpDialog = true
     }
 
     fun toggleItem(key: String) {
@@ -1372,10 +1300,10 @@ internal fun NowPlayingQueueSheet(
         if (cleanedKeys != selectedKeys) selectedKeys = cleanedKeys
     }
 
-    ModalBottomSheet(
-        onDismissRequest = ::dismissQueue,
-        sheetState = sheetState,
-        sheetGesturesEnabled = false
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .then(headerGestureModifier)
     ) {
         BackHandler(enabled = selectionMode && !showExportSheet) {
             exitSelection()
@@ -1385,22 +1313,10 @@ internal fun NowPlayingQueueSheet(
             showExportSheet = false
         }
 
-        if (showQueueIndexJumpDialog) {
-            NowPlayingQueueIndexJumpDialog(
-                queueSize = queueEntries.size,
-                input = queueIndexInput,
-                onInputChange = { queueIndexInput = it },
-                onDismiss = { showQueueIndexJumpDialog = false },
-                onJump = { targetIndex ->
-                    scrollToQueueIndex(targetIndex)
-                    showQueueIndexJumpDialog = false
-                }
-            )
-        }
-
         Box(
             modifier = Modifier
-                .fillMaxHeight(QueueSheetMaxHeightFraction)
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
                 .windowInsetsPadding(WindowInsets.navigationBars)
         ) {
             Column(Modifier.fillMaxSize()) {
@@ -1435,61 +1351,27 @@ internal fun NowPlayingQueueSheet(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 24.dp, end = 18.dp, bottom = 12.dp),
+                            .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = stringResource(R.string.playlist_queue),
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = pluralStringResource(
-                                    R.plurals.nowplaying_queue_count_format,
-                                    displayedQueue.size,
-                                    displayedQueue.size
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (currentIndexInQueueEntries >= 0) {
-                            val queueIndexButtonShape = RoundedCornerShape(999.dp)
-                            Surface(
-                                modifier = Modifier
-                                    .clip(queueIndexButtonShape)
-                                    .clickable(onClick = ::openQueueIndexJumpDialog),
-                                shape = queueIndexButtonShape,
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.76f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.PlayArrow,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = stringResource(
-                                            R.string.nowplaying_queue_current_position,
-                                            currentIndexInQueueEntries + 1
-                                        ),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            text = stringResource(R.string.playlist_queue),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "${(currentIndexInQueueEntries + 1).coerceAtLeast(0)}/${queueEntries.size}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
                 LazyColumn(
                     state = reorderState.listState,
+                    userScrollEnabled = queueListState.canScrollBackward ||
+                        queueListState.canScrollForward,
                     modifier = Modifier
                         .weight(1f)
                         .then(
@@ -1499,14 +1381,14 @@ internal fun NowPlayingQueueSheet(
                                 Modifier
                             }
                         )
-                        .bottomSheetScrollGuard(),
+                        ,
                     contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
+                        start = 8.dp,
+                        end = 8.dp,
                         top = 4.dp,
                         bottom = 98.dp
                     ),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     itemsIndexed(
                         items = queueEntries,
@@ -1538,13 +1420,13 @@ internal fun NowPlayingQueueSheet(
                                 index = index,
                                 song = entry.song,
                                 isCurrent = entry.key == currentEntryKey,
+                                isPlaying = isPlaying,
                                 isFavoriteSong = isFavoriteSong,
                                 offlineMode = offlineMode,
                                 selectionMode = selectionMode,
                                 selected = entry.key in selectedKeys,
                                 onPlay = {
                                     PlayerManager.playFromQueue(index)
-                                    dismissQueue()
                                 },
                                 onLongPress = {
                                     selectionMode = true
@@ -1594,26 +1476,18 @@ internal fun NowPlayingQueueSheet(
                 }
             }
 
-            if (!selectionMode) {
-                NowPlayingQueueQuickActionsFab(
-                    queueSize = displayedQueue.size,
-                    currentIndex = currentIndexInQueueEntries,
-                    hasSourceRoute = onOpenCurrentPlaybackSource != null,
-                    onLocateCurrent = {
-                        locateCurrentQueueItem()
-                    },
-                    onOpenSource = {
-                        dismissQueue()
-                        onOpenCurrentPlaybackSource?.invoke()
-                    },
-                    onEnterSelection = {
-                        selectionMode = true
-                        selectedKeys = emptySet()
-                    },
+            if (!selectionMode && currentIndexInQueueEntries >= 0) {
+                HapticFloatingActionButton(
+                    onClick = ::locateCurrentQueueItem,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 20.dp, bottom = 20.dp)
-                )
+                        .padding(end = 16.dp, bottom = 16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                        contentDescription = stringResource(R.string.cd_locate_playing)
+                    )
+                }
             }
 
             NeriOverlaySnackbarHost(
@@ -1647,7 +1521,7 @@ internal fun NowPlayingQueueSheet(
                     localPlaylistRepo.createPlaylistWithSongs(name, songs)
                 }
                 showExportSheet = false
-                dismissQueue()
+                exitSelection()
             },
             onExportToPlaylist = { playlist ->
                 val songs = selectedSongs
@@ -1667,7 +1541,7 @@ internal fun NowPlayingQueueSheet(
                     localPlaylistRepo.addSongsToPlaylistWithResult(playlist.id, songs)
                 }
                 showExportSheet = false
-                dismissQueue()
+                exitSelection()
             }
         )
     }
@@ -1820,6 +1694,10 @@ internal fun shouldBypassCollapsedStoredLyric(rawLyric: String?): Boolean {
 @Suppress("AssignedValueIsNeverRead")
 fun NowPlayingScreen(
     onNavigateUp: () -> Unit,
+    onDismissDragStart: () -> Unit,
+    onDismissDrag: (Float) -> Unit,
+    onDismissDragEnd: () -> Unit,
+    onDismissDragCancel: () -> Unit,
     onOpenCurrentPlaybackSource: (() -> Unit)? = null,
     showLyricsScreen: Boolean,
     onShowLyricsScreenChange: (Boolean) -> Unit,
@@ -1947,7 +1825,6 @@ fun NowPlayingScreen(
     val actualCoverUrl = resolvedCoverUrl ?: visualCoverUrl
     val currentCoverUrl = visualCoverUrl ?: actualCoverUrl
     val coverSongKey = playbackSongKey ?: currentSong?.stableKey()
-    val coverPreviewOnTapEnabled = shouldOpenNowPlayingCoverPreviewOnTap(currentSong)
     val coverPreviewOnLongPressEnabled =
         shouldOpenNowPlayingCoverPreviewOnLongPress(currentSong)
 
@@ -1977,7 +1854,8 @@ fun NowPlayingScreen(
     val currentIndexInDisplay = queueDisplayState.currentDisplayIndex
 
     var showAddSheet by remember { mutableStateOf(false) }
-    var showQueueSheet by remember { mutableStateOf(false) }
+    var queuePageProgress by remember { mutableFloatStateOf(0f) }
+    var queuePageAnimationJob by remember { mutableStateOf<Job?>(null) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
     var showCoverPageSourceBadge by remember { mutableStateOf(false) }
     var animateCoverPageSourceBadge by remember { mutableStateOf(false) }
@@ -1997,6 +1875,26 @@ fun NowPlayingScreen(
 
     val clipboard = LocalClipboard.current
     val screenScope = rememberCoroutineScope()
+
+    fun settleQueuePage(showQueue: Boolean) {
+        queuePageAnimationJob?.cancel()
+        queuePageAnimationJob = screenScope.launch {
+            animate(
+                initialValue = queuePageProgress,
+                targetValue = if (showQueue) 1f else 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            ) { value, _ ->
+                queuePageProgress = value
+            }
+        }
+    }
+
+    BackHandler(enabled = queuePageProgress > 0.5f) {
+        settleQueuePage(false)
+    }
 
     val downloadCurrentCover: () -> Unit = {
         val song = currentSong
@@ -2063,6 +1961,20 @@ fun NowPlayingScreen(
     // 控制音量弹窗的显示
     var showVolumeSheet by remember { mutableStateOf(false) }
     val volumeSheetState = rememberModalBottomSheetState()
+
+    fun dismissVolumeSheetAnimated() {
+        screenScope.launch {
+            runCatching { volumeSheetState.hide() }
+            showVolumeSheet = false
+        }
+    }
+
+    fun dismissAddSheetAnimated() {
+        screenScope.launch {
+            runCatching { addSheetState.hide() }
+            showAddSheet = false
+        }
+    }
 
     val currentLyricSourceKey = Triple(
         currentSong?.id,
@@ -2650,8 +2562,79 @@ fun NowPlayingScreen(
 
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
         SharedTransitionLayout {
-            Box(modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val queuePageHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+                val displayedQueuePageProgress = rubberBandQueuePageProgress(queuePageProgress)
+                val queuePageGestureModifier = Modifier.pointerInput(queuePageHeightPx) {
+                    var dragStartedFromQueue = false
+                    var gestureMode: NowPlayingVerticalGestureMode? = null
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            dragStartedFromQueue = queuePageProgress >= 0.5f
+                            gestureMode = null
+                            queuePageAnimationJob?.cancel()
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val activeMode = gestureMode ?: (
+                                if (!dragStartedFromQueue && dragAmount > 0f) {
+                                    onDismissDragStart()
+                                    NowPlayingVerticalGestureMode.DismissPlayer
+                                } else {
+                                    NowPlayingVerticalGestureMode.QueuePage
+                                }
+                                ).also { gestureMode = it }
+
+                            when (activeMode) {
+                                NowPlayingVerticalGestureMode.QueuePage -> {
+                                    queuePageProgress -= dragAmount / queuePageHeightPx
+                                }
+                                NowPlayingVerticalGestureMode.DismissPlayer -> {
+                                    onDismissDrag(dragAmount)
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            when (gestureMode) {
+                                NowPlayingVerticalGestureMode.DismissPlayer -> onDismissDragEnd()
+                                NowPlayingVerticalGestureMode.QueuePage, null -> {
+                                    val showQueue = if (dragStartedFromQueue) {
+                                        queuePageProgress > 0.82f
+                                    } else {
+                                        queuePageProgress > 0.18f
+                                    }
+                                    settleQueuePage(showQueue)
+                                }
+                            }
+                        },
+                        onDragCancel = {
+                            when (gestureMode) {
+                                NowPlayingVerticalGestureMode.DismissPlayer -> onDismissDragCancel()
+                                NowPlayingVerticalGestureMode.QueuePage, null -> {
+                                    settleQueuePage(dragStartedFromQueue)
+                                }
+                            }
+                        }
+                    )
+                }
+
+                NowPlayingQueuePage(
+                    displayedQueueItems = displayedQueueItems,
+                    currentIndexInDisplay = currentIndexInDisplay,
+                    offlineMode = offlineMode,
+                    allowQueueReorder = playbackProgressSeekEnabled,
+                    modifier = Modifier.graphicsLayer {
+                        translationY = (1f - displayedQueuePageProgress) * queuePageHeightPx
+                    },
+                    headerGestureModifier = queuePageGestureModifier
+                )
+
                 AnimatedContent(
+                    modifier = Modifier
+                        .zIndex(1f)
+                        .graphicsLayer {
+                            translationY = -displayedQueuePageProgress * queuePageHeightPx
+                        },
                     targetState = showLyricsScreen,
                     transitionSpec = {
                         fadeIn(
@@ -2680,6 +2663,10 @@ fun NowPlayingScreen(
                             onEnterAlbum = onEnterAlbum,
                             onOpenCurrentArtist = openCurrentArtist,
                             onOpenCurrentPlaybackSource = onOpenCurrentPlaybackSource,
+                            onShowQueue = {
+                                onShowLyricsScreenChange(false)
+                                settleQueuePage(true)
+                            },
                             onLyricFontScaleChange = onLyricFontScaleChange,
                             onExitNowPlaying = onNavigateUp,
                             onNavigateBack = { onShowLyricsScreenChange(false) },
@@ -2710,18 +2697,7 @@ fun NowPlayingScreen(
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(horizontal = horizontalPadding, vertical = verticalPadding)
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures { _, dragAmount -> if (dragAmount > 60) onNavigateUp() }
-                    }
-
-                // 手机或竖屏下, 左滑进入歌词页
-                if (!useWideLandscapeLayout && lyrics.isNotEmpty()) {
-                    contentModifier = contentModifier.pointerInput(lyrics) {
-                        detectHorizontalDragGestures { _, dragAmount ->
-                            if (dragAmount < -20) onShowLyricsScreenChange(true)
-                        }
-                    }
-                }
+                    .then(queuePageGestureModifier)
 
                 val mainPlaybackControls: @Composable () -> Unit = {
                     BoxWithConstraints(
@@ -2752,14 +2728,14 @@ fun NowPlayingScreen(
                                 onClick = { PlayerManager.setShuffle(!shuffleEnabled) },
                                 modifier = Modifier.size(controlsLayout.secondaryButtonSize)
                             ) {
-                                Icon(
-                                    Icons.Outlined.Shuffle,
+                                RetroPlaybackModeIcon(
+                                    icon = Shuffle,
                                     contentDescription = stringResource(R.string.player_shuffle),
-                                    modifier = Modifier.size(secondaryIconSize),
+                                    size = secondaryIconSize,
                                     tint = if (shuffleEnabled) {
                                         nowPlayingActiveIconColor
                                     } else {
-                                        LocalContentColor.current
+                                        LocalContentColor.current.copy(alpha = 0.52f)
                                     }
                                 )
                             }
@@ -2829,18 +2805,14 @@ fun NowPlayingScreen(
                                 onClick = { PlayerManager.cycleRepeatMode() },
                                 modifier = Modifier.size(controlsLayout.secondaryButtonSize)
                             ) {
-                                Icon(
-                                    imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) {
-                                        Icons.Filled.RepeatOne
-                                    } else {
-                                        Icons.Outlined.Repeat
-                                    },
+                                RetroPlaybackModeIcon(
+                                    icon = if (repeatMode == Player.REPEAT_MODE_ONE) RepeatOne else Repeat,
                                     contentDescription = stringResource(R.string.player_repeat),
-                                    modifier = Modifier.size(secondaryIconSize),
+                                    size = secondaryIconSize,
                                     tint = if (repeatMode != Player.REPEAT_MODE_OFF) {
                                         nowPlayingActiveIconColor
                                     } else {
-                                        LocalContentColor.current
+                                        LocalContentColor.current.copy(alpha = 0.52f)
                                     }
                                 )
                             }
@@ -3036,24 +3008,11 @@ fun NowPlayingScreen(
                                         }
                                     )
                                     .then(
-                                        if (
-                                            coverPreviewOnTapEnabled ||
-                                                coverPreviewOnLongPressEnabled
-                                        ) {
+                                        if (lyrics.isNotEmpty() || coverPreviewOnLongPressEnabled) {
                                             Modifier.combinedClickable(
                                                 onClick = {
-                                                    if (coverPreviewOnTapEnabled) {
-                                                        if (actualCoverUrl.isNullOrBlank()) {
-                                                            screenScope.launch {
-                                                                snackbarHostState.showNeriSnackbar(
-                                                                    composeResources.getString(
-                                                                        R.string.cover_preview_unavailable
-                                                                    )
-                                                                )
-                                                            }
-                                                        } else {
-                                                            showCoverPreview = true
-                                                        }
+                                                    if (lyrics.isNotEmpty()) {
+                                                        onShowLyricsScreenChange(true)
                                                     }
                                                 },
                                                 onLongClick = {
@@ -3240,13 +3199,7 @@ fun NowPlayingScreen(
                             lyricBlurAmount = lyricBlurAmount,
                             isPlaying = isPlaying && previewPositionOverrideMs == null,
                             playbackSpeed = playbackSoundState.speed,
-                            onLyricClick = { entry ->
-                                seekToLyricSafely(
-                                    positionMs = entry.startTimeMs,
-                                    playbackDurationMs = durationMs,
-                                    songDurationMs = currentSong?.durationMs ?: 0L
-                                )
-                            },
+                            onOpenLyrics = { onShowLyricsScreenChange(true) },
                             onLyricLongClick = { entry -> lyricShareInitialLine = entry },
                             showEmbeddedTranslations = showLyricTranslation &&
                                 !usePhoneticTranslation,
@@ -3329,7 +3282,7 @@ fun NowPlayingScreen(
                                             Modifier
                                         }
                                 // 播放队列
-                                HapticIconButton(onClick = { showQueueSheet = true },
+                                HapticIconButton(onClick = { settleQueuePage(true) },
                                     modifier = toolbarActionModifier
                                         .sharedBounds(
                                         rememberSharedContentState(key = "btn_queue"),
@@ -3485,7 +3438,9 @@ fun NowPlayingScreen(
                                     AdvancedLyricsView(
                                         lyrics = lyrics,
                                         currentTimeMs = effectiveLyricTimeMs,
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clickable { onShowLyricsScreenChange(true) },
                                         textColor = MaterialTheme.colorScheme.onBackground,
                                         lyricFontScale = coverLyricFontScale,
                                         translationFontScale = coverTranslationFontScale,
@@ -3506,6 +3461,7 @@ fun NowPlayingScreen(
                                         lyricBlurAmount = lyricBlurAmount,
                                         isPlaying = isPlaying,
                                         animateViewportScroll = previewPositionOverrideMs != null,
+                                        userScrollEnabled = false,
                                         offset = 72.dp,
                                         keepAliveZone = 128.dp,
                                         playedLyricViewportFraction = 0.36f,
@@ -3515,13 +3471,7 @@ fun NowPlayingScreen(
                                         onLyricLongClick = { line ->
                                             lyricShareInitialLine = line
                                         },
-                                        onSeekTo = { position ->
-                                            seekToLyricSafely(
-                                                positionMs = position,
-                                                playbackDurationMs = durationMs,
-                                                songDurationMs = currentSong?.durationMs ?: 0L
-                                            )
-                                        }
+                                        onSeekTo = { onShowLyricsScreenChange(true) }
                                     )
                                 }
 
@@ -3540,13 +3490,7 @@ fun NowPlayingScreen(
                                         lyricBlurAmount = lyricBlurAmount,
                                         isPlaying = isPlaying && previewPositionOverrideMs == null,
                                         playbackSpeed = playbackSoundState.speed,
-                                        onLyricClick = { entry ->
-                                            seekToLyricSafely(
-                                                positionMs = entry.startTimeMs,
-                                                playbackDurationMs = durationMs,
-                                                songDurationMs = currentSong?.durationMs ?: 0L
-                                            )
-                                        },
+                                        onOpenLyrics = { onShowLyricsScreenChange(true) },
                                         onLyricLongClick = { entry ->
                                             lyricShareInitialLine = entry
                                         },
@@ -3598,9 +3542,9 @@ fun NowPlayingScreen(
             // 音量控制弹窗
             if (showVolumeSheet) {
                 ModalBottomSheet(
-                    onDismissRequest = { showVolumeSheet = false },
+                    onDismissRequest = ::dismissVolumeSheetAnimated,
                     sheetState = volumeSheetState,
-                    sheetGesturesEnabled = false
+                    sheetGesturesEnabled = true
                 ) {
                     VolumeControlSheetContent()
                 }
@@ -3628,18 +3572,6 @@ fun NowPlayingScreen(
                 )
             }
 
-            // 播放队列弹窗
-            if (showQueueSheet) {
-                NowPlayingQueueSheet(
-                    displayedQueueItems = displayedQueueItems,
-                    currentIndexInDisplay = currentIndexInDisplay,
-                    offlineMode = offlineMode,
-                    allowQueueReorder = playbackProgressSeekEnabled,
-                    onDismissRequest = { showQueueSheet = false },
-                    onOpenCurrentPlaybackSource = onOpenCurrentPlaybackSource
-                )
-            }
-
             if (showQualitySwitchDialog && currentPlaybackAudioInfo != null) {
                 NowPlayingQualityOptionsDialog(
                     title = stringResource(R.string.nowplaying_quality_switch_title),
@@ -3661,9 +3593,9 @@ fun NowPlayingScreen(
                     playlists.filterNot { LocalFilesPlaylist.isSystemPlaylist(it, context) }
                 }
                 ModalBottomSheet(
-                    onDismissRequest = { showAddSheet = false },
+                    onDismissRequest = ::dismissAddSheetAnimated,
                     sheetState = addSheetState,
-                    sheetGesturesEnabled = false
+                    sheetGesturesEnabled = true
                 ) {
                     LazyColumn(modifier = Modifier.bottomSheetScrollGuard()) {
                         itemsIndexed(
@@ -3680,7 +3612,7 @@ fun NowPlayingScreen(
                                             actionLabel = composeResources.getString(R.string.playlist_add_to)
                                         ) {
                                             PlayerManager.addCurrentToPlaylist(pl.id)
-                                            showAddSheet = false
+                                            dismissAddSheetAnimated()
                                         }
                                     }
                                     .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -3967,7 +3899,7 @@ fun MoreOptionsSheet(
     ModalBottomSheet(
         onDismissRequest = { dismissSheet() },
         sheetState = sheetState,
-        sheetGesturesEnabled = page != MoreOptionsPage.LISTEN_TOGETHER,
+        sheetGesturesEnabled = true,
         containerColor = MaterialTheme.colorScheme.surface
     ) {
         BackHandler(
@@ -4291,7 +4223,6 @@ fun VolumeControlSheetContent() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .bottomSheetDragBlocker()
             .padding(horizontal = 24.dp, vertical = 16.dp)
             .windowInsetsPadding(WindowInsets.navigationBars),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -4349,7 +4280,6 @@ fun LyricBehaviorSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .bottomSheetDragBlocker()
             .padding(horizontal = 24.dp, vertical = 16.dp)
             .windowInsetsPadding(WindowInsets.navigationBars),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -4471,7 +4401,6 @@ fun LyricFontSizeSheet(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .bottomSheetDragBlocker()
             .padding(horizontal = 24.dp, vertical = 16.dp)
             .windowInsetsPadding(WindowInsets.navigationBars),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -4589,6 +4518,7 @@ fun EditSongInfoSheet(
     var songName by remember { mutableStateOf(actualSong.customName ?: actualSong.name) }
     var artistName by remember { mutableStateOf(actualSong.customArtist ?: actualSong.artist) }
     var showSearchResults by remember { mutableStateOf(false) }
+    val searchResultsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedSongForFill by remember { mutableStateOf<SongSearchInfo?>(null) }
     var lyricsEditorSeed by remember { mutableStateOf<LyricsEditorSeed?>(null) }
     var shouldClearLyrics by remember { mutableStateOf(false) }  // 标记是否应该清除歌词(B站)
@@ -4602,6 +4532,15 @@ fun EditSongInfoSheet(
     var showLocalMetadataWriteBackConfirm by remember { mutableStateOf(false) }
     var showLocalCoverSyncConfirm by remember { mutableStateOf(false) }
     var pendingCoverReplacementSong by remember { mutableStateOf<SongItem?>(null) }
+
+    fun dismissSearchResultsAnimated(afterHidden: () -> Unit = {}) {
+        coroutineScope.launch {
+            runCatching { searchResultsSheetState.hide() }
+            clearEditSongInfoFocus()
+            showSearchResults = false
+            afterHidden()
+        }
+    }
 
     // 标记用户是否手动编辑过, 避免自动重置
     var userHasEdited by remember { mutableStateOf(false) }
@@ -5280,12 +5219,9 @@ fun EditSongInfoSheet(
     // 搜索结果Sheet
     if (showSearchResults) {
         ModalBottomSheet(
-            onDismissRequest = {
-                clearEditSongInfoFocus()
-                showSearchResults = false
-            },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            sheetGesturesEnabled = false
+            onDismissRequest = { dismissSearchResultsAnimated() },
+            sheetState = searchResultsSheetState,
+            sheetGesturesEnabled = true
         ) {
             Column(
                 modifier = Modifier
@@ -5307,10 +5243,7 @@ fun EditSongInfoSheet(
                     )
 
                     HapticTextButton(
-                        onClick = {
-                            clearEditSongInfoFocus()
-                            showSearchResults = false
-                        }
+                        onClick = { dismissSearchResultsAnimated() }
                     ) {
                         Text(stringResource(R.string.action_cancel))
                     }
@@ -5429,9 +5362,9 @@ fun EditSongInfoSheet(
                                             )
                                         },
                                         modifier = Modifier.clickable {
-                                            clearEditSongInfoFocus()
-                                            selectedSongForFill = songResult
-                                            showSearchResults = false
+                                            dismissSearchResultsAnimated {
+                                                selectedSongForFill = songResult
+                                            }
                                         }
                                     )
                                 }
@@ -5655,37 +5588,40 @@ private fun NowPlayingLyricsPane(
     lyricBlurAmount: Float,
     isPlaying: Boolean,
     playbackSpeed: Float,
-    onLyricClick: (LyricEntry) -> Unit,
+    onOpenLyrics: () -> Unit,
     onLyricLongClick: (LyricEntry) -> Unit,
     translatedLyrics: List<LyricEntry>? = null,
     showEmbeddedTranslations: Boolean = translatedLyrics != null
 ) {
     val currentPosition by PlayerManager.playbackPositionFlow.collectAsStateWithLifecycle()
     val effectivePositionMs = previewPositionOverrideMs ?: currentPosition
-    SyncedLyricsView(
-        lyrics = lyrics,
-        currentTimeMs = effectivePositionMs,
-        modifier = modifier,
-        textColor = textColor,
-        fontSize = fontSize,
-        translationFontSize = translationFontSize,
-        visualSpec = visualSpec,
-        lyricOffsetMs = lyricOffsetMs,
-        lyricBlurEnabled = lyricBlurEnabled,
-        lyricBlurAmount = lyricBlurAmount,
-        onLyricClick = onLyricClick,
-        onLyricLongClick = onLyricLongClick,
-        translatedLyrics = translatedLyrics,
-        isPlaying = isPlaying,
-        playbackSpeed = playbackSpeed,
-        interpolatePlaybackPosition = true,
-        visualEffectsEnabled = false,
-        smoothActiveLineProgress = false,
-        edgeFadeHeight = resolveLyricEdgeFadeHeight(isEmbedded = true),
-        showEmbeddedTranslations = showEmbeddedTranslations,
-        playbackSessionKey = playbackSessionKey,
-        stableEmbeddedViewport = true
-    )
+    Box(modifier = modifier.clickable(onClick = onOpenLyrics)) {
+        SyncedLyricsView(
+            lyrics = lyrics,
+            currentTimeMs = effectivePositionMs,
+            modifier = Modifier.fillMaxSize(),
+            textColor = textColor,
+            fontSize = fontSize,
+            translationFontSize = translationFontSize,
+            visualSpec = visualSpec,
+            lyricOffsetMs = lyricOffsetMs,
+            lyricBlurEnabled = lyricBlurEnabled,
+            lyricBlurAmount = lyricBlurAmount,
+            onLyricClick = { onOpenLyrics() },
+            onLyricLongClick = onLyricLongClick,
+            translatedLyrics = translatedLyrics,
+            isPlaying = isPlaying,
+            playbackSpeed = playbackSpeed,
+            interpolatePlaybackPosition = true,
+            visualEffectsEnabled = false,
+            smoothActiveLineProgress = false,
+            edgeFadeHeight = resolveLyricEdgeFadeHeight(isEmbedded = true),
+            showEmbeddedTranslations = showEmbeddedTranslations,
+            playbackSessionKey = playbackSessionKey,
+            stableEmbeddedViewport = true,
+            userScrollEnabled = false
+        )
+    }
 }
 
 @Composable
@@ -6095,10 +6031,20 @@ private fun LyricMatchResultsSheet(
     onApply: (RankedEditableLyricMatch) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+
+    fun dismissAnimated(afterHidden: () -> Unit = onDismiss) {
+        scope.launch {
+            runCatching { sheetState.hide() }
+            afterHidden()
+        }
+    }
+
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        sheetGesturesEnabled = false
+        onDismissRequest = { dismissAnimated() },
+        sheetState = sheetState,
+        sheetGesturesEnabled = true
     ) {
         Column(
             modifier = Modifier
@@ -6117,7 +6063,7 @@ private fun LyricMatchResultsSheet(
                     text = stringResource(R.string.lyrics_match_title),
                     style = MaterialTheme.typography.titleMedium
                 )
-                HapticTextButton(onClick = onDismiss) {
+                HapticTextButton(onClick = { dismissAnimated() }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -6213,7 +6159,7 @@ private fun LyricMatchResultsSheet(
                 ) { result ->
                     LyricMatchResultCard(
                         result = result,
-                        onClick = { onApply(result) }
+                        onClick = { dismissAnimated { onApply(result) } }
                     )
                 }
             }

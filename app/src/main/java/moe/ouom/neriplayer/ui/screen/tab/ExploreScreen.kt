@@ -101,7 +101,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ripple
@@ -130,6 +129,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -138,7 +138,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -157,7 +156,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
-import moe.ouom.neriplayer.ui.util.shouldAllowCollapsingTopAppBar
 import androidx.lifecycle.viewmodel.viewModelFactory
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -363,7 +361,13 @@ fun ExploreScreen(
         }
     )
     val ui by vm.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(topAppBarState) {
+        topAppBarState.heightOffset = 0f
+        topAppBarState.contentOffset = 0f
+    }
     val focusManager = LocalFocusManager.current
+    var isSearchFieldFocused by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val searchHistoryRepository = remember(context) {
         ExploreSearchHistoryRepository(context)
@@ -452,11 +456,9 @@ fun ExploreScreen(
         searchListState,
         gridState,
         youtubeGridState,
-        topAppBarState
     ) {
         derivedStateOf {
             when {
-                topAppBarState.collapsedFraction > 0f -> true
                 searchQuery.isNotBlank() -> searchListState.canScrollBackward
                 ui.selectedSearchSource == SearchSource.NETEASE -> gridState.canScrollBackward
                 ui.selectedSearchSource == SearchSource.YOUTUBE_MUSIC -> {
@@ -672,40 +674,8 @@ fun ExploreScreen(
         queueExploreSearchRecord(normalizedQuery)
     }
 
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
-        state = topAppBarState,
-        canScroll = {
-            when {
-                searchQuery.isNotEmpty() -> shouldAllowCollapsingTopAppBar(
-                    canScrollForward = searchListState.canScrollForward,
-                    canScrollBackward = searchListState.canScrollBackward,
-                    collapsedFraction = topAppBarState.collapsedFraction
-                )
-                ui.selectedSearchSource == SearchSource.NETEASE ->
-                    shouldAllowCollapsingTopAppBar(
-                        canScrollForward = gridState.canScrollForward,
-                        canScrollBackward = gridState.canScrollBackward,
-                        collapsedFraction = topAppBarState.collapsedFraction
-                    )
-                ui.selectedSearchSource == SearchSource.YOUTUBE_MUSIC ->
-                    shouldAllowCollapsingTopAppBar(
-                        canScrollForward = youtubeGridState.canScrollForward,
-                        canScrollBackward = youtubeGridState.canScrollBackward,
-                        collapsedFraction = topAppBarState.collapsedFraction
-                    )
-                else -> shouldAllowCollapsingTopAppBar(
-                    canScrollForward = false,
-                    canScrollBackward = false,
-                    collapsedFraction = topAppBarState.collapsedFraction
-                )
-            }
-        }
-    )
-
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         containerColor = Color.Transparent,
         snackbarHost = {
             NeriSnackbarHost(
@@ -714,9 +684,8 @@ fun ExploreScreen(
             )
         },
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(stringResource(R.string.nav_explore)) },
-                scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = Color.Transparent
@@ -742,25 +711,36 @@ fun ExploreScreen(
                             onSearchQueryChange(it)
                         },
                         label = {
+                            val isLinkRecognition =
+                                ui.selectedSearchSource == SearchSource.LINK_RECOGNITION
                             Text(
-                                stringResource(
-                                    if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
-                                        R.string.explore_link_input_label
-                                    } else {
-                                        R.string.search_keyword
+                                text = stringResource(
+                                    when {
+                                        isLinkRecognition && isSearchFieldFocused ->
+                                            R.string.explore_link_input_focused_label
+                                        isLinkRecognition -> R.string.explore_link_input_label
+                                        else -> R.string.search_keyword
                                     }
-                                )
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         },
-                        placeholder = {
-                            when {
-                                ui.selectedSearchSource == SearchSource.LINK_RECOGNITION -> {
-                                    Text(stringResource(R.string.explore_link_input_placeholder))
-                                }
-                                ui.selectedSearchSource == SearchSource.NETEASE && !ui.isNeteaseLoggedIn -> {
-                                    Text(stringResource(R.string.netease_login_required_search_placeholder))
-                                }
+                        placeholder = if (
+                            ui.selectedSearchSource == SearchSource.NETEASE &&
+                            !ui.isNeteaseLoggedIn
+                        ) {
+                            {
+                                Text(
+                                    stringResource(
+                                        R.string.netease_login_required_search_placeholder
+                                    )
+                                )
                             }
+                        } else {
+                            null
                         },
                         leadingIcon = { Icon(Icons.Default.Search, "Search") },
                         trailingIcon = {
@@ -777,7 +757,9 @@ fun ExploreScreen(
                         }),
                         singleLine = true,
                         shape = ExploreSearchFieldShape,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { isSearchFieldFocused = it.isFocused }
                     )
                     ExploreSearchHistoryRow(
                         history = visibleSearchHistory,
@@ -797,14 +779,6 @@ fun ExploreScreen(
                         Text(
                             text = stringResource(R.string.netease_login_required_search),
                             color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    if (ui.selectedSearchSource == SearchSource.LINK_RECOGNITION) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = stringResource(R.string.explore_link_input_hint),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -1057,12 +1031,7 @@ fun ExploreScreen(
                             )
                         }
                         SearchSource.LINK_RECOGNITION -> {
-                            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                                Text(
-                                    text = stringResource(R.string.explore_link_recognition_placeholder),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                            }
+                            Box(Modifier.fillMaxSize())
                         }
                     }
                 }
@@ -1079,7 +1048,7 @@ fun ExploreScreen(
                 exitPartsSelection()
             },
             sheetState = partsSheetState,
-            sheetGesturesEnabled = false
+            sheetGesturesEnabled = true
         ) {
             Column(
                 Modifier
@@ -1264,26 +1233,17 @@ fun ExploreScreen(
 @Composable
 private fun ExploreOfflineContent(topAppBarState: TopAppBarState) {
     val miniPlayerHeight = LocalMiniPlayerHeight.current
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
-        state = topAppBarState,
-        canScroll = {
-            shouldAllowCollapsingTopAppBar(
-                canScrollForward = false,
-                canScrollBackward = false,
-                collapsedFraction = topAppBarState.collapsedFraction
-            )
-        }
-    )
+    LaunchedEffect(topAppBarState) {
+        topAppBarState.heightOffset = 0f
+        topAppBarState.contentOffset = 0f
+    }
 
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         containerColor = Color.Transparent,
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(stringResource(R.string.nav_explore)) },
-                scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = Color.Transparent

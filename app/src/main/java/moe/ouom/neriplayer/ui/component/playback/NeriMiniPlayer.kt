@@ -28,7 +28,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -59,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -72,10 +74,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import moe.ouom.neriplayer.R
+import moe.ouom.neriplayer.core.player.PlayerManager
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassRole
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassSurface
 import moe.ouom.neriplayer.util.media.fastScrollableImageRequest
@@ -279,12 +283,16 @@ fun NeriMiniPlayer(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onExpand: () -> Unit,
+    onExpandDragStart: () -> Unit = {},
+    onExpandDrag: (Float) -> Unit = {},
+    onExpandDragEnd: () -> Unit = {},
+    onExpandDragCancel: () -> Unit = {},
     enableBlur: Boolean = true,
     offlineMode: Boolean = false,
     isPlaybackWaiting: Boolean = false,
     isAudioRouteMuted: Boolean = false
 ) {
-    val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    val shape = RoundedCornerShape(20.dp)
     val context = LocalContext.current
     val requestedCoverUrl = coverUrl?.trim()?.takeIf { it.isNotEmpty() }
     var displayedCoverUrl by remember { mutableStateOf(requestedCoverUrl) }
@@ -297,6 +305,7 @@ fun NeriMiniPlayer(
     val swipeThresholdPx = with(density) { 72.dp.toPx() }
     val reboundPeakPx = with(density) { 52.dp.toPx() }
     var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var dragAxis by remember { mutableStateOf<MiniPlayerDragAxis?>(null) }
     var swipeJob by remember { mutableStateOf<Job?>(null) }
     fun resistedOffset(distancePx: Float): Float {
         if (distancePx == 0f) return 0f
@@ -340,32 +349,57 @@ fun NeriMiniPlayer(
             .padding(horizontal = 8.dp)
             .clip(shape)
             .pointerInput(Unit) {
-                detectHorizontalDragGestures(
+                detectDragGestures(
                     onDragStart = {
                         swipeJob?.cancel()
                         dragDistancePx = 0f
+                        dragAxis = null
                     },
-                    onHorizontalDrag = { change, dragAmount ->
+                    onDrag = { change, dragAmount ->
+                        val activeAxis = dragAxis ?: (
+                            if (abs(dragAmount.y) > abs(dragAmount.x)) {
+                                MiniPlayerDragAxis.Vertical.also { onExpandDragStart() }
+                            } else {
+                                MiniPlayerDragAxis.Horizontal
+                            }
+                            ).also { dragAxis = it }
                         change.consume()
-                        dragDistancePx += dragAmount
-                        swipeJob?.cancel()
-                        swipeJob = coroutineScope.launch {
-                            swipeOffset.snapTo(resistedOffset(dragDistancePx))
+                        when (activeAxis) {
+                            MiniPlayerDragAxis.Horizontal -> {
+                                dragDistancePx += dragAmount.x
+                                swipeJob?.cancel()
+                                swipeJob = coroutineScope.launch {
+                                    swipeOffset.snapTo(resistedOffset(dragDistancePx))
+                                }
+                            }
+
+                            MiniPlayerDragAxis.Vertical -> onExpandDrag(dragAmount.y)
                         }
                     },
                     onDragCancel = {
-                        dragDistancePx = 0f
-                        swipeJob?.cancel()
-                        swipeJob = coroutineScope.launch {
-                            swipeOffset.animateTo(
-                                targetValue = 0f,
-                                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)
-                            )
+                        if (dragAxis == MiniPlayerDragAxis.Vertical) {
+                            onExpandDragCancel()
+                        } else {
+                            dragDistancePx = 0f
+                            swipeJob?.cancel()
+                            swipeJob = coroutineScope.launch {
+                                swipeOffset.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)
+                                )
+                            }
                         }
+                        dragAxis = null
                     },
                     onDragEnd = {
+                        if (dragAxis == MiniPlayerDragAxis.Vertical) {
+                            onExpandDragEnd()
+                            dragAxis = null
+                            return@detectDragGestures
+                        }
                         val finalDistancePx = dragDistancePx
                         dragDistancePx = 0f
+                        dragAxis = null
                         when {
                             finalDistancePx <= -swipeThresholdPx -> animateSwipeRelease(
                                 targetDirection = -1f,
@@ -503,24 +537,73 @@ fun NeriMiniPlayer(
                     )
                 }
 
-                HapticIconButton(
-                    onClick = { onPlayPause() },
-                    enabled = playPauseEnabled
-                ) {
-                    PlaybackControlIndicator(
-                        isPlaying = isPlaying,
-                        isPlaybackWaiting = isPlaybackWaiting,
-                        isAudioRouteMuted = isAudioRouteMuted,
-                        playContentDescription = stringResource(R.string.lyrics_play),
-                        pauseContentDescription = stringResource(R.string.lyrics_pause),
-                        restoreVolumeContentDescription = stringResource(R.string.player_restore_volume),
-                        waitingContentDescription = stringResource(R.string.player_waiting),
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        progressIndicatorSize = 22.dp,
-                        progressStrokeWidth = 2.dp
-                    )
-                }
+                MiniPlayerPlaybackButton(
+                    isPlaying = isPlaying,
+                    isPlaybackWaiting = isPlaybackWaiting,
+                    isAudioRouteMuted = isAudioRouteMuted,
+                    enabled = playPauseEnabled,
+                    onClick = onPlayPause
+                )
             }
         }
     }
+}
+
+internal fun resolveMiniPlayerPlaybackProgress(positionMs: Long, durationMs: Long): Float {
+    if (durationMs <= 0L) return 0f
+    return (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
+}
+
+@Composable
+private fun MiniPlayerPlaybackButton(
+    isPlaying: Boolean,
+    isPlaybackWaiting: Boolean,
+    isAudioRouteMuted: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val playbackPositionMs by PlayerManager.playbackPositionFlow.collectAsStateWithLifecycle()
+    val playbackDurationMs by PlayerManager.playbackDurationFlow.collectAsStateWithLifecycle()
+    val playbackProgress = resolveMiniPlayerPlaybackProgress(
+        positionMs = playbackPositionMs,
+        durationMs = playbackDurationMs
+    )
+    val contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+
+    Box(
+        modifier = Modifier.size(48.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            progress = { playbackProgress },
+            modifier = Modifier.size(40.dp),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = contentColor.copy(alpha = 0.20f),
+            strokeWidth = 2.25.dp,
+            strokeCap = StrokeCap.Round
+        )
+        HapticIconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.size(48.dp)
+        ) {
+            PlaybackControlIndicator(
+                isPlaying = isPlaying,
+                isPlaybackWaiting = isPlaybackWaiting,
+                isAudioRouteMuted = isAudioRouteMuted,
+                playContentDescription = stringResource(R.string.lyrics_play),
+                pauseContentDescription = stringResource(R.string.lyrics_pause),
+                restoreVolumeContentDescription = stringResource(R.string.player_restore_volume),
+                waitingContentDescription = stringResource(R.string.player_waiting),
+                color = contentColor,
+                progressIndicatorSize = 22.dp,
+                progressStrokeWidth = 2.dp
+            )
+        }
+    }
+}
+
+private enum class MiniPlayerDragAxis {
+    Horizontal,
+    Vertical
 }

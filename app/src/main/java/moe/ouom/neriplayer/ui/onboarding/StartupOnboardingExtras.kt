@@ -28,8 +28,6 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.outlined.Timer
@@ -83,6 +81,8 @@ import moe.ouom.neriplayer.data.settings.scaledLyricFontSize
 import moe.ouom.neriplayer.ui.component.lyrics.AdvancedLyricsView
 import moe.ouom.neriplayer.ui.component.lyrics.LyricEntry
 import moe.ouom.neriplayer.ui.component.playback.WaveformSlider
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeGlyph
+import moe.ouom.neriplayer.ui.component.playback.RetroPlaybackModeIcon
 import moe.ouom.neriplayer.ui.component.playback.scaleButtonSize
 import moe.ouom.neriplayer.ui.component.playback.scaleIconSize
 import moe.ouom.neriplayer.ui.effect.glass.AdvancedGlassRole
@@ -1181,7 +1181,11 @@ private fun PlaybackPreviewControls(
         horizontalArrangement = Arrangement.spacedBy(controlsLayout.spacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        PreviewControl(Icons.Outlined.Shuffle, controlsLayout.secondaryButtonSize, secondaryIconSize)
+        PreviewPlaybackModeControl(
+            icon = RetroPlaybackModeGlyph.Shuffle,
+            buttonSize = controlsLayout.secondaryButtonSize,
+            iconSize = secondaryIconSize
+        )
         PreviewControl(Icons.Outlined.SkipPrevious, controlsLayout.secondaryButtonSize, secondaryIconSize)
         Surface(
             modifier = Modifier.size(controlsLayout.primaryButtonSize),
@@ -1198,7 +1202,11 @@ private fun PlaybackPreviewControls(
             }
         }
         PreviewControl(Icons.Outlined.SkipNext, controlsLayout.secondaryButtonSize, secondaryIconSize)
-        PreviewControl(Icons.Outlined.Repeat, controlsLayout.secondaryButtonSize, secondaryIconSize)
+        PreviewPlaybackModeControl(
+            icon = RetroPlaybackModeGlyph.Repeat,
+            buttonSize = controlsLayout.secondaryButtonSize,
+            iconSize = secondaryIconSize
+        )
     }
 }
 
@@ -1484,6 +1492,25 @@ private fun PreviewControl(icon: ImageVector, buttonSize: Dp, iconSize: Dp) {
             contentDescription = null,
             tint = colors.onSurface,
             modifier = Modifier.size(iconSize)
+        )
+    }
+}
+
+@Composable
+private fun PreviewPlaybackModeControl(
+    icon: RetroPlaybackModeGlyph,
+    buttonSize: Dp,
+    iconSize: Dp
+) {
+    Box(
+        modifier = Modifier.size(buttonSize),
+        contentAlignment = Alignment.Center
+    ) {
+        RetroPlaybackModeIcon(
+            icon = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            size = iconSize
         )
     }
 }
